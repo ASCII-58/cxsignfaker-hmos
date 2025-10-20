@@ -38,6 +38,7 @@ import org.aquamarine5.brainspark.chaoxingsignfaker.UMengHelper
 import org.aquamarine5.brainspark.chaoxingsignfaker.api.ChaoxingCourseHelper
 import org.aquamarine5.brainspark.chaoxingsignfaker.api.ChaoxingHttpClient
 import org.aquamarine5.brainspark.chaoxingsignfaker.api.ChaoxingOtherUserHelper
+import org.aquamarine5.brainspark.chaoxingsignfaker.api.ChaoxingRecommendHelper
 import org.aquamarine5.brainspark.chaoxingsignfaker.api.ChaoxingSignHelper
 import org.aquamarine5.brainspark.chaoxingsignfaker.components.AlreadySignedNotice
 import org.aquamarine5.brainspark.chaoxingsignfaker.components.CaptchaHandlerDialog
@@ -97,7 +98,7 @@ fun LocationSignScreen(
     var isAlreadySigned by remember { mutableStateOf<Boolean?>(null) }
     var isSignForOther by remember { mutableStateOf(false) }
     var signInfo by remember { mutableStateOf<ChaoxingLocationDetailEntity?>(null) }
-    val signer = ChaoxingLocationSigner(ChaoxingHttpClient.instance!!, destination)
+    val signer = remember { ChaoxingLocationSigner(ChaoxingHttpClient.instance!!, destination) }
     var isSponsor by remember { mutableStateOf(false) }
     if (isSponsor) {
         SponsorPopupDialog()
@@ -144,7 +145,8 @@ fun LocationSignScreen(
                     SignPotentialWarningTips(
                         destination.startTime,
                         destination.endTime,
-                        destination.isLate
+                        destination.isLate,
+                        isPadding = true
                     )
                     AlreadySignedNotice(onSignForOtherUser = {
                         isAlreadySigned = false
@@ -233,6 +235,14 @@ fun LocationSignScreen(
                                                             signStatus[0].success()
                                                         if (otherUserSessionForSignList.isEmpty()) {
                                                             isSigning = false
+                                                            coroutineScope.launch {
+                                                                ChaoxingRecommendHelper.recordRecommendEvent(
+                                                                    context,
+                                                                    destination.classId,
+                                                                    destination.courseId,
+                                                                    ChaoxingHttpClient.instance!!
+                                                                )
+                                                            }
                                                             delay(ChaoxingSignHelper.TIMEOUT_SHOW_SPONSOR_AFTER_ALL_SIGNED)
                                                             isSponsor = true
                                                         }
@@ -263,6 +273,14 @@ fun LocationSignScreen(
                                             signStatus[0].success()
                                         if (otherUserSessionForSignList.isEmpty()) {
                                             isSigning = false
+                                            coroutineScope.launch {
+                                                ChaoxingRecommendHelper.recordRecommendEvent(
+                                                    context,
+                                                    destination.classId,
+                                                    destination.courseId,
+                                                    ChaoxingHttpClient.instance!!
+                                                )
+                                            }
                                             delay(ChaoxingSignHelper.TIMEOUT_SHOW_SPONSOR_AFTER_ALL_SIGNED)
                                             isSponsor = true
                                         }
@@ -277,6 +295,13 @@ fun LocationSignScreen(
                                 signStatus[0].failed(it)
                                 it.ifAlreadySigned {
                                     userSelections[0] = false
+                                    if (otherUserSessionForSignList.isEmpty() && userSelections.all { !it }) {
+                                        isSigning = false
+                                        coroutineScope.launch {
+                                            delay(ChaoxingSignHelper.TIMEOUT_SHOW_SPONSOR_AFTER_ALL_SIGNED)
+                                            isSponsor = true
+                                        }
+                                    }
                                 }
                                 it.snackbarReport(
                                     snackbarHost,
@@ -321,6 +346,14 @@ fun LocationSignScreen(
                                                                         false
                                                                     if (index == otherUserSessionForSignList.size - 1) {
                                                                         isSigning = false
+                                                                        coroutineScope.launch {
+                                                                            ChaoxingRecommendHelper.recordRecommendEvent(
+                                                                                context,
+                                                                                destination.classId,
+                                                                                destination.courseId,
+                                                                                client
+                                                                            )
+                                                                        }
                                                                         delay(ChaoxingSignHelper.TIMEOUT_SHOW_SPONSOR_AFTER_ALL_SIGNED)
                                                                         isSponsor = true
                                                                     }
@@ -354,6 +387,14 @@ fun LocationSignScreen(
                                                         signStatus[1 + index].success()
                                                     if (index == otherUserSessionForSignList.size - 1) {
                                                         isSigning = false
+                                                        coroutineScope.launch {
+                                                            ChaoxingRecommendHelper.recordRecommendEvent(
+                                                                context,
+                                                                destination.classId,
+                                                                destination.courseId,
+                                                                client
+                                                            )
+                                                        }
                                                         delay(ChaoxingSignHelper.TIMEOUT_SHOW_SPONSOR_AFTER_ALL_SIGNED)
                                                         isSponsor = true
                                                     }
@@ -377,6 +418,14 @@ fun LocationSignScreen(
                                     )
                                     err.ifAlreadySigned {
                                         userSelections[index + 1] = false
+                                        if (index == otherUserSessionForSignList.size - 1 && userSelections.all { !it }) {
+                                            isSigning = false
+                                            coroutineScope.launch {
+                                                delay(ChaoxingSignHelper.TIMEOUT_SHOW_SPONSOR_AFTER_ALL_SIGNED)
+                                                isSponsor =
+                                                    true
+                                            }
+                                        }
                                     }
                                     signStatus[index + 1].failed(
                                         err
