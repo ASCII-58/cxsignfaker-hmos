@@ -15,7 +15,6 @@ import { uniformTypeDescriptor as utd } from '@kit.ArkData';
 import { common, Want } from '@kit.AbilityKit';
 import { AnimButton } from '../Component/AnimButton';
 import { SettingsComponent } from '../Component/SettingsComponent';
-import { hdsEffect } from '@kit.UIDesignKit';
 
 const TAG = 'IndexPage';
 const DOMAIN = 0x0004;
@@ -145,12 +144,6 @@ struct UI {
   @State clickTime: number = 0
   @State otherUserList: UserDataAndId[] = []
   @State shareButtonScale: number = 1
-  @State settingsButtonScale: number = 1
-  @State baiduButtonScale: number = 1
-  @State logoutButtonScale: number = 1
-  @State settingsBtnLight: hdsEffect.PointLightSourceType = hdsEffect.PointLightSourceType.NONE;
-  @State shareBtnLight: hdsEffect.PointLightSourceType = hdsEffect.PointLightSourceType.NONE;
-  @State logoutBtnLight: hdsEffect.PointLightSourceType = hdsEffect.PointLightSourceType.NONE;
   @State userHeaderOpacity: number = 0
   @State userHeaderTranslateY: number = -20
   @State buttonRowOpacity: number = 0
@@ -318,48 +311,29 @@ struct UI {
       Tabs({ controller: this.controller }) {
         TabContent() {
           Column() {
-
-            List({ space: 12, initialIndex: 0 }) {
-              ListItemGroup() {
-                ListItem() {
-                  Column().height(56)
+            // 固定的搜索框
+            Search({ placeholder: '搜索课程...' })
+              .height(44)
+              .width('100%')
+              .borderRadius(20)
+              .backgroundColor($r('sys.color.ohos_id_color_component_normal'))
+              .placeholderColor($r('sys.color.ohos_id_color_text_secondary'))
+              .geometryTransition('SEARCH_ONE_SHOT_DEMO_TRANSITION_ID', { follow: true })
+              .shadow({
+                radius: 6,
+                color: '#00000020',
+                offsetX: 0,
+                offsetY: 2
+              })
+              .onTouch((event: TouchEvent) => {
+                if (event.type === TouchType.Up) {
+                  this.showSearchPage();
                 }
+              })
+              .margin({ left: '5%', right: '5%', top: 56, bottom: 12 })
 
-                ListItem() {
-                  Column({ space: 20 }) {
-                    // [Start Search_start]
-                    Search({ placeholder: '搜索课程...' })
-                      .height(40)
-                      .width('100%')
-                      .borderRadius(20)
-                      .backgroundColor($r('sys.color.ohos_id_color_component_normal'))
-                      .placeholderColor($r('sys.color.ohos_id_color_text_secondary'))
-                      // set geometry transition
-                      .geometryTransition('SEARCH_ONE_SHOT_DEMO_TRANSITION_ID', { follow: true })
-                      .defaultFocus(false)
-                      .focusOnTouch(false)
-                      .focusable(false)
-                      .shadow({
-                        radius: 6,
-                        color: '#00000020',
-                        offsetX: 0,
-                        offsetY: 2
-                      })
-                      // [End Search_start]
-                      .onTouch((event: TouchEvent) => {
-                        if (event.type === TouchType.Up) {
-                          // set search animation
-                          this.showSearchPage();
-                        }
-                      })
-                  }
-                  .size({
-                    width: '100%',
-                    height: 40
-                  })
-                }
-              }
-
+            // 课程列表（可滚动）
+            List({ space: 12 }) {
               ForEach(this.classList, (classInfo: ClassInfo, index: number) => {
                 ListItem() {
                   ClassListItem({ classInfo: classInfo, index: index })
@@ -370,16 +344,15 @@ struct UI {
                 })
               }, (classInfo: ClassInfo) => classInfo.id)
             }
-            .height('100%')
+            .layoutWeight(1)  // 撑满剩余空间
             .width('100%')
-          }.height('100%')
+          }
+          .height('100%')
           .width('100%')
-
-        }.tabBar($r('app.string.class_list'))
+        }
+        .tabBar($r('app.string.class_list'))
         .onAppear(async () => {
-          // 加载课程列表
-          const dbManager = DatabaseManager.getInstance()
-          const cookies = (await dbManager.getUserByPosition(1, true) as UserDataAndId).cookies
+          const cookies = (await this.getHostUser()).cookies
           hilog.debug(DOMAIN, TAG, 'Loading class list');
           this.classList = (await CourseAndActivity.getClassList(cookies)).classList
         })
@@ -419,148 +392,51 @@ struct UI {
 
                 Blank().layoutWeight(1)
 
-                Button() {
-                  Column() {
-                    Image($r('app.media.settings'))
-                      .height(30).width(30).fillColor($r('app.color.icon'))
-                  }
-                  .height(45)
-                  .width(45)
-                  .justifyContent(FlexAlign.Center)
-                  .alignItems(HorizontalAlign.Center)
-                }
-                .margin({ right: 10 })
-                .onClick(() => {
-                  this.isSettingsOpen = !this.isSettingsOpen
-                })
-                .bindSheet($$this.isSettingsOpen, this.SettingsBuilder(), {
-                  height: 'auto',
-                  detents: [SheetSize.MEDIUM, SheetSize.LARGE],
-                  backgroundColor: $r('sys.color.ohos_id_color_sub_background'),
-                  onWillDismiss: () => {
-                    this.isSettingsOpen = false
+                AnimButton({
+                  content: () => {
+                    this.HeaderBtnContent($r('app.media.settings'), $r('app.color.icon'))
+                  },
+                  onClickAction: () => {
+                    this.isSettingsOpen = !this.isSettingsOpen
                   }
                 })
-                .borderRadius(30)
-                .backgroundColor($r('sys.color.ohos_id_color_button_normal'))
-                .shadow({
-                  radius: 8,
-                  color: '#00000020',
-                  offsetX: 0,
-                  offsetY: 3
-                })
-                .scale({ x: this.settingsButtonScale, y: this.settingsButtonScale })
-                .animation({ duration: 200, curve: Curve.EaseInOut })
-                .visualEffect(new hdsEffect.HdsEffectBuilder()
-                  .pointLight({
-                    sourceType: this.settingsBtnLight,
-                    illuminatedType: hdsEffect.PointLightIlluminatedType.BORDER_CONTENT
+                  .margin({ right: 10 })
+                  .bindSheet($$this.isSettingsOpen, this.SettingsBuilder(), {
+                    height: 'auto',
+                    detents: [SheetSize.MEDIUM, SheetSize.LARGE],
+                    backgroundColor: $r('sys.color.ohos_id_color_sub_background'),
+                    onWillDismiss: () => {
+                      this.isSettingsOpen = false
+                    }
                   })
-                  .buildEffect())
-                .onTouch((event: TouchEvent) => {
-                  if (event.type === TouchType.Down) {
-                    this.settingsButtonScale = 0.92
-                    animateTo({ duration: 200, curve: Curve.EaseInOut }, () => {
-                      this.settingsBtnLight = hdsEffect.PointLightSourceType.BRIGHT;
-                    })
-                  } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-                    this.settingsButtonScale = 1
-                    animateTo({ duration: 200, curve: Curve.EaseInOut }, () => {
-                      this.settingsBtnLight = hdsEffect.PointLightSourceType.NONE;
-                    })
-                  }
-                })
 
-                Button() {
-                  Column() {
-                    Image($r('app.media.share'))
-                      .height(30).width(30).fillColor($r('app.color.icon'))
-                  }
-                  .height(45)
-                  .width(45)
-                  .justifyContent(FlexAlign.Center)
-                  .alignItems(HorizontalAlign.Center)
-                }
-                .margin({ right: 10 })
-                .onClick(() => {
-                  this.QRCodeDialogIsShow = !this.QRCodeDialogIsShow
-                })
-                .bindSheet($$this.QRCodeDialogIsShow, this.QRCodeDialog, {
-                  height: 'auto',
-                  detents: [SheetSize.MEDIUM, SheetSize.LARGE],
-                  backgroundColor: $r('sys.color.ohos_id_color_sub_background'),
-                  onWillDismiss: () => {
-                    this.QRCodeDialogIsShow = false
+                AnimButton({
+                  content: () => {
+                    this.HeaderBtnContent($r('app.media.share'), $r('app.color.icon'))
+                  },
+                  onClickAction: () => {
+                    this.QRCodeDialogIsShow = !this.QRCodeDialogIsShow
                   }
                 })
-                .borderRadius(30)
-                .backgroundColor($r('sys.color.ohos_id_color_button_normal'))
-                .shadow({
-                  radius: 8,
-                  color: '#00000020',
-                  offsetX: 0,
-                  offsetY: 3
-                })
-                .scale({ x: this.shareButtonScale, y: this.shareButtonScale })
-                .animation({ duration: 200, curve: Curve.EaseInOut })
-                .visualEffect(new hdsEffect.HdsEffectBuilder()
-                  .pointLight({
-                    sourceType: this.shareBtnLight,
-                    illuminatedType: hdsEffect.PointLightIlluminatedType.BORDER_CONTENT
+                  .margin({ right: 10 })
+                  .bindSheet($$this.QRCodeDialogIsShow, this.QRCodeDialog, {
+                    height: 'auto',
+                    detents: [SheetSize.MEDIUM, SheetSize.LARGE],
+                    backgroundColor: $r('sys.color.ohos_id_color_sub_background'),
+                    onWillDismiss: () => {
+                      this.QRCodeDialogIsShow = false
+                    }
                   })
-                  .buildEffect())
-                .onTouch((event: TouchEvent) => {
-                  if (event.type === TouchType.Down) {
-                    this.shareButtonScale = 0.92
-                    animateTo({ duration: 200, curve: Curve.EaseInOut }, () => {
-                      this.shareBtnLight = hdsEffect.PointLightSourceType.BRIGHT;
-                    })
-                  } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-                    this.shareButtonScale = 1
-                    animateTo({ duration: 200, curve: Curve.EaseInOut }, () => {
-                      this.shareBtnLight = hdsEffect.PointLightSourceType.NONE;
-                    })
-                  }
-                })
 
-                Button() {
-                  Column() {
-                    Image($r('app.media.ic_public_quit')).height(30).width(30).fillColor(Color.Red)
-                  }.height(45).width(45).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
-                }
-                .onClick(() => {
-                  this.showLogoutDialog()
-                })
-                .margin({ right: 10 })
-                .borderRadius(30)
-                .backgroundColor($r('sys.color.ohos_id_color_button_normal'))
-                .shadow({
-                  radius: 8,
-                  color: '#00000020',
-                  offsetX: 0,
-                  offsetY: 3
-                })
-                .scale({ x: this.logoutButtonScale, y: this.logoutButtonScale })
-                .animation({ duration: 200, curve: Curve.EaseInOut })
-                .visualEffect(new hdsEffect.HdsEffectBuilder()
-                  .pointLight({
-                    sourceType: this.logoutBtnLight,
-                    illuminatedType: hdsEffect.PointLightIlluminatedType.BORDER_CONTENT
-                  })
-                  .buildEffect())
-                .onTouch((event: TouchEvent) => {
-                  if (event.type === TouchType.Down) {
-                    this.logoutButtonScale = 0.92
-                    animateTo({ duration: 200, curve: Curve.EaseInOut }, () => {
-                      this.logoutBtnLight = hdsEffect.PointLightSourceType.BRIGHT;
-                    })
-                  } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-                    this.logoutButtonScale = 1
-                    animateTo({ duration: 200, curve: Curve.EaseInOut }, () => {
-                      this.logoutBtnLight = hdsEffect.PointLightSourceType.NONE;
-                    })
+                AnimButton({
+                  content: () => {
+                    this.HeaderBtnContent($r('app.media.ic_public_quit'), Color.Red)
+                  },
+                  onClickAction: () => {
+                    this.showLogoutDialog()
                   }
                 })
+                  .margin({ right: 10 })
               }
               .width('97%')
               .height(70)
@@ -585,7 +461,7 @@ struct UI {
 
                 AnimButton({
                   content: () => {
-                    this.ScanButtonContent()
+                    this.IconBtnContent($r('app.media.qrcode'))
                   },
                   onClickAction: () => {
                     let options: scanBarcode.ScanOptions = {
@@ -622,7 +498,7 @@ struct UI {
 
                 AnimButton({
                   content: () => {
-                    this.SelectorButtonContent()
+                    this.IconBtnContent($r('app.media.selector'))
                   },
                   onClickAction: () => {
                     this.LoginCommonIsShow = !this.LoginCommonIsShow
@@ -639,7 +515,7 @@ struct UI {
 
                 AnimButton({
                   content: () => {
-                    this.UrlButtonContent()
+                    this.IconBtnContent($r('app.media.paperclip'))
                   },
                   onClickAction: () => {
                     this.LoginURLIsSHow = true
@@ -712,7 +588,7 @@ struct UI {
 
                   AnimButton({
                     content: () => {
-                      this.EmailButtonContent()
+                      this.IconBtnContent($r('app.media.envelope'))
                     },
                     onClickAction: () => {
                       let want: Want = {
@@ -760,31 +636,19 @@ struct UI {
         }.tabBar($r('app.string.user'))
         .onAppear(() => {
           // Animate user center elements with staggered timing
-          animateTo({
-            duration: 500,
-            curve: curves.springMotion(0.6, 0.9),
-            delay: 100
-          }, () => {
+          this.playStaggeredEntrance(100, () => {
             this.userHeaderOpacity = 1
             this.userHeaderTranslateY = 0
             this.userHeaderScale = 1
           })
 
-          animateTo({
-            duration: 500,
-            curve: curves.springMotion(0.6, 0.9),
-            delay: 200
-          }, () => {
+          this.playStaggeredEntrance(200, () => {
             this.buttonRowOpacity = 1
             this.buttonRowTranslateY = 0
             this.buttonRowScale = 1
           })
 
-          animateTo({
-            duration: 500,
-            curve: curves.springMotion(0.6, 0.9),
-            delay: 300
-          }, () => {
+          this.playStaggeredEntrance(300, () => {
             this.userListOpacity = 1
             this.userListTranslateY = 0
             this.userListScale = 1
@@ -829,8 +693,9 @@ struct UI {
     .onAppear(async () => {
       try {
         const dbManager = DatabaseManager.getInstance()
+        const hostUser = await this.getHostUser()
         const HostUser =
-          await loginFunction.getUserInfo((await dbManager.getUserByPosition(1, true) as UserDataAndId).cookies)
+          await loginFunction.getUserInfo(hostUser.cookies)
         if (HostUser.msg !== 'successful') {
           hilog.error(DOMAIN, TAG, `Failed to fetch host user info: ${HostUser.msg}`);
           this.uiContext.getRouter().replaceUrl({ url: 'pages/Login' });
@@ -841,10 +706,9 @@ struct UI {
         let url = HostUser.pic
         this.HostImageData = await loginFunction.GetPic(url) as image.PixelMap
         this.hostName = HostUser.uname
-        this.hostPhone = (await dbManager.getUserByPosition(1, true) as UserDataAndId).phone
+        this.hostPhone = hostUser.phone
         this.QRvalue =
-          `http://cdn.aquamarine5.fun/?phone=${this.hostPhone}&pwd=${encodeURIComponent((await dbManager.getUserByPosition(1,
-            true) as UserDataAndId).pwd)}&name=${decodeURIComponent(this.hostName)}`
+          `http://cdn.aquamarine5.fun/?phone=${this.hostPhone}&pwd=${encodeURIComponent(hostUser.pwd)}&name=${decodeURIComponent(this.hostName)}`
         if (this.hostName.toString() === $r('app.string.defaultUname').toString()) {
           this.uiContext.getRouter().pushUrl({ url: 'pages/Login' });
         }
@@ -856,28 +720,21 @@ struct UI {
   }
 
   @Builder
-  ScanButtonContent() {
-    Image($r('app.media.qrcode'))
-      .height(30)
-      .width(30)
-      .fillColor($r('app.color.icon'))
-      .margin(15)
+  HeaderBtnContent(img: Resource, fill: ResourceColor) {
+    Column() {
+      Image(img)
+        .height(30).width(30)
+        .fillColor(fill)
+    }
+    .height(45).width(45)
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
   }
 
   @Builder
-  SelectorButtonContent() {
-    Image($r('app.media.selector'))
-      .height(30)
-      .width(30)
-      .fillColor($r('app.color.icon'))
-      .margin(15)
-  }
-
-  @Builder
-  UrlButtonContent() {
-    Image($r('app.media.paperclip'))
-      .height(30)
-      .width(30)
+  IconBtnContent(img: Resource) {
+    Image(img)
+      .height(30).width(30)
       .fillColor($r('app.color.icon'))
       .margin(15)
   }
@@ -885,8 +742,7 @@ struct UI {
   @Builder
   ArrowButtonContent() {
     Image($r('sys.media.ohos_ic_public_arrow_down'))
-      .height(30)
-      .width(30)
+      .height(30).width(30)
       .fillColor($r('app.color.icon'))
       .margin(15)
       .rotate({ angle: this.arrowAngle })
@@ -896,19 +752,9 @@ struct UI {
   @Builder
   GithubButtonContent() {
     Image($r('app.media.github'))
-      .height(40)
-      .width(40)
+      .height(40).width(40)
       .fillColor($r('app.color.icon'))
       .margin(10)
-  }
-
-  @Builder
-  EmailButtonContent() {
-    Image($r('app.media.envelope'))
-      .height(30)
-      .width(30)
-      .fillColor($r('app.color.icon'))
-      .margin(15)
   }
 
   private async share(ShareUri: string, ShareStr: string) {
@@ -956,6 +802,18 @@ struct UI {
     }).catch((error: BusinessError) => {
       console.error(`ShareController show error. code: ${error?.code}, message: ${error?.message}`);
     });
+  }
+
+  private async getHostUser(): Promise<UserDataAndId> {
+    return await DatabaseManager.getInstance().getUserByPosition(1, true) as UserDataAndId
+  }
+
+  private playStaggeredEntrance(delay: number, callback: () => void) {
+    animateTo({
+      duration: 500,
+      curve: curves.springMotion(0.6, 0.9),
+      delay: delay
+    }, callback)
   }
 
   private async showLogoutDialog() {
