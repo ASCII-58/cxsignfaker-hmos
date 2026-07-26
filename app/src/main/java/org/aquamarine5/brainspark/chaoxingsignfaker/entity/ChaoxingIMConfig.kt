@@ -8,6 +8,7 @@ package org.aquamarine5.brainspark.chaoxingsignfaker.entity
 
 import androidx.compose.runtime.Immutable
 
+@Deprecated("`im.chaoxing.com` is deprecated", replaceWith = ReplaceWith("ChaoxingEasemobIMConfig"))
 @Immutable
 data class ChaoxingIMConfig(
     val imImgUrl: String,
