@@ -375,7 +375,8 @@ export default struct HomePage {
     }]
   };
   // 沉浸光感悬浮页签（官方 Spatialization 示例同款）：材质类型跟随系统策略（ADAPTIVE，随壁纸/深浅色自适应光感），
-  // adaptToHandedness 让胶囊按持机手自动左右换位。barBottomMargin 取实测手势条高度：胶囊落在手势条区域内
+  // 等级用示例默认 GENTLE（轻柔），与标题栏材质强弱保持一致；adaptToHandedness 让胶囊按持机手自动左右换位。
+  // barBottomMargin 取实测手势条高度：胶囊落在手势条区域内
   // 而非其上方，不额外避让；无实测值时退回系统级 8vp 内边距（示例同款兜底）。
   // 注意 gradientMask 必须显式置透明：默认值自带黑色渐变遮罩，会在胶囊下方糊出一条黑边
   private readonly floatingBarStyle: HdsTabsFloatingStyle = {
@@ -385,7 +386,7 @@ export default struct HomePage {
     adaptToHandedness: true,
     systemMaterialEffect: {
       materialType: hdsMaterial.MaterialType.ADAPTIVE,
-      materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
+      materialLevel: hdsMaterial.MaterialLevel.GENTLE
     }
   };
   private openLinkContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
