@@ -4,7 +4,11 @@ import image from '@ohos.multimedia.image';
 import { ClassInfo, CourseAndActivity } from '../utils/classFun';
 import { scanBarcode, scanCore } from '@kit.ScanKit';
 import { curves, LengthMetrics, UIContext } from '@kit.ArkUI';
-import { hdsEffect, hdsMaterial, HideMode, HdsNavDestination, HdsNavigationMenuContentOptions, HdsTabs, HdsTabsController, HdsTabsBackgroundStyle, HdsTabsFloatingStyle, ScrollEffectType } from '@kit.UIDesignKit';
+import { hdsEffect, HideMode, HdsNavDestination, HdsNavigationMenuContentOptions, HdsTabs, HdsTabsController, HdsTabsBackgroundStyle, HdsTabsFloatingStyle, ScrollEffectType } from '@kit.UIDesignKit';
+// hdsMaterial 是 6.1(23) 新 API：API22 及以下系统的 @hms:hds.hdsMaterial 模块没有该导出，
+// 静态 import 会在页面加载期直接 SyntaxError 崩溃（6.0 模拟器实测）。因此只做类型导入（编译期擦除、
+// 运行时不产生 import），枚举值以常量书写，运行时只是普通数字，由系统按版本决定是否生效
+import type { hdsMaterial } from '@kit.UIDesignKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BusinessError, deviceInfo } from '@kit.BasicServicesKit';
 import promptAction from '@ohos.promptAction';
@@ -20,6 +24,10 @@ import { LocationFavoritesComponent } from '../Component/LocationFavoritesCompon
 
 const TAG = 'IndexPage';
 const DOMAIN = 0x0004;
+// 沉浸光感枚举值别名（与 SDK 6.1 d.ts 一致）：MaterialType.ADAPTIVE=100（跟随系统材质策略）、
+// MaterialLevel.GENTLE=1（轻柔，官方 Spatialization 示例默认档位）
+const HDS_MATERIAL_TYPE_ADAPTIVE = 100;
+const HDS_MATERIAL_LEVEL_GENTLE = 1;
 
 AppStorage.setOrCreate('userHostName', $r('app.string.defaultUname'))
 AppStorage.setOrCreate('userHostPhone', $r('app.string.defaultPhone'))
@@ -385,8 +393,8 @@ export default struct HomePage {
     gradientMask: { maskColor: Color.Transparent },
     adaptToHandedness: true,
     systemMaterialEffect: {
-      materialType: hdsMaterial.MaterialType.ADAPTIVE,
-      materialLevel: hdsMaterial.MaterialLevel.GENTLE
+      materialType: HDS_MATERIAL_TYPE_ADAPTIVE as hdsMaterial.MaterialType,
+      materialLevel: HDS_MATERIAL_LEVEL_GENTLE as hdsMaterial.MaterialLevel
     }
   };
   private openLinkContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -577,10 +585,14 @@ export default struct HomePage {
         },
         systemMaterialEffect: this.supportFloatingBar ? { // 沉浸光感材质（示例同款）。等级取示例默认 GENTLE（轻柔）：
           // ADAPTIVE 跟随系统策略，真机常解析为强材质，静止时材质面板压在纯色页面背景上就不是透明的了
-          materialType: hdsMaterial.MaterialType.ADAPTIVE,
-          materialLevel: hdsMaterial.MaterialLevel.GENTLE
+          materialType: HDS_MATERIAL_TYPE_ADAPTIVE as hdsMaterial.MaterialType,
+          materialLevel: HDS_MATERIAL_LEVEL_GENTLE as hdsMaterial.MaterialLevel
         } : undefined
-      }
+      },
+      // 官方示例同款显式声明（沉浸一体化的关键）：关闭内容对标题栏的组件级避让，
+      // 否则内容被整体下移到栏底、永远无法穿透到栏下（模拟器实测表现为栏区一块不透明色块）
+      avoidLayoutSafeArea: false,
+      enableComponentSafeArea: false
     })
     // 上滑隐没标题区与状态栏文字、下滑回顶恢复（官方沉浸光感场景同款，内容获得全屏沉浸）；
     // 仅响应 bindToScrollable 绑定的课程列表，用户中心 Tab 不受影响。6.0(20) 起支持
@@ -631,6 +643,11 @@ export default struct HomePage {
     TabContent() {
       Refresh({ refreshing: $$this.isClassListRefreshing }) {
         List({ space: 0, scroller: this.listScroller }) {
+          // 让位标题栏的空白必须做成列表首项（随内容滚动收起）：List 的 .padding 是固定视口内缩，
+          // 内容会被永远裁剪在标题栏底边之下，无法产生示例那种内容穿透标题栏的渐变模糊（模拟器实测）
+          ListItem() {
+            Column().height(this.statusBarHeight + 56)
+          }.width('100%')
           if (this.cloneSessionCookies !== '') {
             ListItem() {
               CloneSessionBanner({ onExit: () => { this.exitCloneSession() } })
@@ -644,9 +661,6 @@ export default struct HomePage {
         }
         .divider({ strokeWidth: 0.5, color: $r('sys.color.comp_divider'), startMargin: 72, endMargin: 16 })
         .width('100%').height('100%').scrollBar(BarState.Off) // 高度占满:课程未加载/数量过少时列表不收缩居中
-        // 静止时首行让出「状态栏+标题栏」高度避免被遮挡（状态栏+56，官方示例同款，与渐变模糊终止线对齐）；
-        // 滚动时内容穿透到屏幕最顶端，由 scrollEffect 无级渐变模糊
-        .padding({ top: this.statusBarHeight + 56 })
       }
       .width('100%').height('100%')
       .onRefreshing(async () => { await this.loadClassList(); }) // 仅下滑刷新：下拉触发课程列表重新拉取
