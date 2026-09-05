@@ -360,11 +360,12 @@ export default struct HomePage {
   // 注意：不能用 canIUse('apis: 23')——实测 6.1(API 24) 真机返回 false，与文档不符
   private readonly supportFloatingBar: boolean = deviceInfo.sdkApiVersion >= 23;
   private readonly tabBarMask: HdsTabsBackgroundStyle = { maskColor: $r('app.color.page_background') };
-  // 应用市场同款沉浸悬浮页签：系统沉浸材质（毛玻璃）+ 标准悬浮间距 + 响应式栏宽。
+  // 应用市场同款沉浸悬浮页签：系统沉浸材质（毛玻璃）+ 响应式栏宽。
+  // barBottomMargin 置 0：不避让系统底部手势横条，胶囊贴底；内容全穿透。
   // 注意 gradientMask 必须显式置透明：默认值自带黑色渐变遮罩，会在胶囊下方糊出一条黑边
   private readonly floatingBarStyle: HdsTabsFloatingStyle = {
     barWidth: { smallWidth: 280, mediumWidth: 400, largeWidth: 560 },
-    barBottomMargin: 28,
+    barBottomMargin: 0,
     gradientMask: { maskColor: Color.Transparent },
     systemMaterialEffect: {
       materialType: hdsMaterial.MaterialType.IMMERSIVE,
@@ -543,7 +544,7 @@ export default struct HomePage {
       }
     }
     .backgroundColor($r('app.color.page_background'))
-    .title(this.titleName, { barStyle: BarStyle.STACK }) // 标题栏背景交给 TitleGradientBlur 渐进模糊，勿再加硬边 backgroundBlurStyle
+    .title(this.HomeTitle, { barStyle: BarStyle.STACK }) // 标题+搜索框自定义标题栏；背景交给 TitleGradientBlur 渐进模糊
     .hideBackButton(true).backgroundImageSize({ width: '100%', height: '100%' })
     .borderRadius($r('sys.float.corner_radius_level8')).height('100%').width('100%')
     .onReady((ctx: NavDestinationContext) => { this.pageInfos = ctx.pathStack; })
@@ -572,6 +573,26 @@ export default struct HomePage {
     })
   }
 
+  // 自定义标题栏：标题 + 搜索框。搜索框移入标题栏后，课程列表可全屏贯穿到状态栏之下（不避让）
+  @Builder
+  HomeTitle() {
+    Row() {
+      Text(this.titleName)
+        .fontSize(24)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.primary_text'))
+      Search({ placeholder: '搜索课程...' })
+        .layoutWeight(1).height(40).margin({ left: 16 }).borderRadius(20)
+        .backgroundColor($r('sys.color.ohos_id_color_component_normal'))
+        .placeholderColor($r('sys.color.ohos_id_color_text_secondary'))
+        .geometryTransition('SEARCH_ONE_SHOT_DEMO_TRANSITION_ID', { follow: true })
+        .shadow({ radius: 6, color: '#00000020', offsetX: 0, offsetY: 2 })
+        .onTouch((event: TouchEvent) => { if (event.type === TouchType.Up) this.showSearchPage(); })
+    }
+    .width('100%').height('100%')
+    .padding({ left: 16, right: 16 })
+  }
+
   // 顶部渐变模糊：5 段横条模糊半径自上而下递减，叠出渐进模糊（应用市场顶栏同款观感），
   // 替代 STACK 标题栏原生的硬边模糊横带；HitTestMode.None 让触摸穿透到下方列表
   @Builder
@@ -597,16 +618,6 @@ export default struct HomePage {
     TabContent() {
       Refresh({ refreshing: $$this.isClassListRefreshing }) {
         List({ space: 0 }) {
-          ListItem() {
-            Search({ placeholder: '搜索课程...' })
-              .height(44).borderRadius(20)
-              .backgroundColor($r('sys.color.ohos_id_color_component_normal'))
-              .placeholderColor($r('sys.color.ohos_id_color_text_secondary'))
-              .geometryTransition('SEARCH_ONE_SHOT_DEMO_TRANSITION_ID', { follow: true })
-              .shadow({ radius: 6, color: '#00000020', offsetX: 0, offsetY: 2 })
-              .onTouch((event: TouchEvent) => { if (event.type === TouchType.Up) this.showSearchPage(); })
-          }.width('100%').padding({ left: 16, right: 16, top: 56, bottom: 12 }) // STACK 标题栏为悬浮式，56 为其让位
-
           if (this.cloneSessionCookies !== '') {
             ListItem() {
               CloneSessionBanner({ onExit: () => { this.exitCloneSession() } })
@@ -639,7 +650,7 @@ export default struct HomePage {
           QRvalue: this.userQRValue,
           onLogout: () => { this.showLogoutDialog() }
         })
-          .margin({ top: 56 }) // STACK 标题栏为悬浮式，56 为其让位
+          .margin({ top: 56 }) // 用户卡片含可点按钮，保留标题让位；课程列表已全屏贯穿到状态栏之下
 
         Row().height(10).width('100%').backgroundColor($r('app.color.page_background'))
 
