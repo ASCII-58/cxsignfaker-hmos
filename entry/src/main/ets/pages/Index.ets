@@ -581,31 +581,34 @@ export default struct HomePage {
         .fontSize(24)
         .fontWeight(FontWeight.Bold)
         .fontColor($r('app.color.primary_text'))
-      Search({ placeholder: '搜索课程...' })
-        .layoutWeight(1).height(40).margin({ left: 16 }).borderRadius(20)
-        .backgroundColor($r('sys.color.ohos_id_color_component_normal'))
-        .placeholderColor($r('sys.color.ohos_id_color_text_secondary'))
-        .geometryTransition('SEARCH_ONE_SHOT_DEMO_TRANSITION_ID', { follow: true })
-        .shadow({ radius: 6, color: '#00000020', offsetX: 0, offsetY: 2 })
-        .onTouch((event: TouchEvent) => { if (event.type === TouchType.Up) this.showSearchPage(); })
+      if (this.currentIndex === 0) { // 搜索框仅课程 Tab 需要，用户中心不显示
+        Search({ placeholder: '搜索课程...' })
+          .layoutWeight(1).height(40).margin({ left: 16 }).borderRadius(20)
+          .backgroundColor($r('sys.color.ohos_id_color_component_normal'))
+          .placeholderColor($r('sys.color.ohos_id_color_text_secondary'))
+          .geometryTransition('SEARCH_ONE_SHOT_DEMO_TRANSITION_ID', { follow: true })
+          .shadow({ radius: 6, color: '#00000020', offsetX: 0, offsetY: 2 })
+          .onTouch((event: TouchEvent) => { if (event.type === TouchType.Up) this.showSearchPage(); })
+      }
     }
     .width('100%').height('100%')
     .padding({ left: 16, right: 16 })
   }
 
-  // 顶部渐变模糊：5 段横条模糊半径自上而下递减，叠出渐进模糊（应用市场顶栏同款观感），
+  // 渐进模糊半径序列（等差递减），段数越多过渡越接近无级
+  private readonly titleBlurRadii: number[] = [24, 22, 20, 18, 16, 14, 12, 10, 8, 6, 4, 2];
+
+  // 顶部无级渐变模糊：12 段 8vp 细横条按半径等差递减叠出近似连续的渐进模糊，
   // 替代 STACK 标题栏原生的硬边模糊横带；HitTestMode.None 让触摸穿透到下方列表
   @Builder
   TitleGradientBlur() {
     Stack() {
       Column() {
-        Column().width('100%').height(16).backgroundEffect({ radius: 30, color: Color.Transparent })
-        Column().width('100%').height(16).backgroundEffect({ radius: 20, color: Color.Transparent })
-        Column().width('100%').height(16).backgroundEffect({ radius: 12, color: Color.Transparent })
-        Column().width('100%').height(16).backgroundEffect({ radius: 6, color: Color.Transparent })
-        Column().width('100%').height(16).backgroundEffect({ radius: 2, color: Color.Transparent })
+        ForEach(this.titleBlurRadii, (radius: number) => {
+          Column().width('100%').height(8).backgroundEffect({ radius: radius, color: Color.Transparent })
+        }, (radius: number) => `blurStrip${radius}`)
       }.width('100%')
-      Column().width('100%').height(80)
+      Column().width('100%').height(96)
         .linearGradient({ angle: 180, colors: [['#2E000000', 0], ['#0F000000', 0.55], ['#00000000', 1]] })
     }
     .width('100%')
@@ -631,8 +634,10 @@ export default struct HomePage {
         }
         .divider({ strokeWidth: 0.5, color: $r('sys.color.comp_divider'), startMargin: 72, endMargin: 16 })
         .width('100%').height('100%').scrollBar(BarState.Off) // 高度占满:课程未加载/数量过少时列表不收缩居中,搜索框保持在悬浮标题栏下方
+        .padding({ top: 56 }) // 首行须让出标题栏：标题栏图层会吞掉其覆盖区的触摸，压在底下会难点；滚动时内容仍穿透到状态栏之下
       }
       .width('100%').height('100%')
+      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM]) // 滚动视口延伸进底部手势条区域：行内容渲染到屏幕物理底边
       .onRefreshing(async () => { await this.loadClassList(); }) // 仅下滑刷新：下拉触发课程列表重新拉取
     }
     .height('100%').width('100%')
