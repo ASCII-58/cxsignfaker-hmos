@@ -646,8 +646,11 @@ export default struct HomePage {
           .onTouch((event: TouchEvent) => { if (event.type === TouchType.Up) this.showSearchPage(); })
       }
     }
-    .width('100%').height('100%')
-    .padding({ top: this.statusBarHeight, left: 16, right: 16 }) // stackBuilder 从屏幕 y=0 起绘，需自行下沉到状态栏之下
+    // stackBuilder 内容被系统锚定在状态栏下方（真机实测 37vp 起），不要再加 statusBarHeight
+    // 的 padding——双重偏移会让标题和搜索框溢出标题栏、压住列表首行（真机实测遮挡约 10vp）
+    .width('100%').height(56)
+    .alignItems(VerticalAlign.Center)
+    .padding({ left: 16, right: 16 })
   }
 
   // 一镜到底跳搜索页：关闭系统默认转场（pushPath 第二参 false），由 geometryTransition 弹簧动画接管
