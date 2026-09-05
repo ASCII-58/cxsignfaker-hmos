@@ -97,6 +97,7 @@ export default struct SearchLongTakeTransitionPageTwo {
   @State allCourses: ClassInfo[] = []
   @State filteredCourses: ClassInfo[] = []
   @State isLoading: boolean = false
+  @StorageProp('cloneSessionCookies') cloneSessionCookies: string = ''
 
   async aboutToAppear() {
     await this.loadCourses()
@@ -106,10 +107,13 @@ export default struct SearchLongTakeTransitionPageTwo {
     this.isLoading = true
     try {
       const dbManager = DatabaseManager.getInstance()
-      const userData = await dbManager.getUserByPosition(1, true)
+      // 克隆登录时搜索的是克隆用户的课程，课程列表请求走克隆会话
+      const cookies = this.cloneSessionCookies !== ''
+        ? this.cloneSessionCookies
+        : (await dbManager.getUserByPosition(1, true))?.cookies
 
-      if (userData) {
-        const result = await CourseAndActivity.getClassList(userData.cookies)
+      if (cookies) {
+        const result = await CourseAndActivity.getClassList(cookies)
         if (result.msg) {
           this.allCourses = result.classList
           this.filteredCourses = result.classList
