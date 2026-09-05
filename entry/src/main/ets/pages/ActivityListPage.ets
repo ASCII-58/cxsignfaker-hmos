@@ -2,6 +2,7 @@ import { ActivityItem, ClassInfo, CourseAndActivity } from '../utils/classFun';
 import { ChaoxingUtils } from '../utils/utils';
 import { promptAction } from '@kit.ArkUI';
 import { DatabaseManager } from '../utils/DataBase';
+import { CloneSessionBanner } from '../Component/CloneSessionBanner';
 import { JSON } from '@kit.ArkTS';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
