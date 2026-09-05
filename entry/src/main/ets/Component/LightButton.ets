@@ -1,7 +1,7 @@
-import { hdsEffect } from '@kit.UIDesignKit';
-
 /**
- * 带按压光效的按钮：统一收敛 visualEffect/onTouch 样板
+ * 带按压光效的按钮：统一收敛按压反馈样板
+ * 光效用 shadow 实现而不用 hdsEffect 点光源：点光源亮度跟随指针、由 HDS 内部管理生命周期，
+ * 按住静止时会自行衰减，无法维持长按光效；shadow/scale 完全由按压状态驱动，状态不丢光效就不丢
  */
 @Component
 export struct LightButton {
@@ -11,9 +11,16 @@ export struct LightButton {
   @Prop btnFontSize: number = 14;
   @Prop btnHeight: number = 40;
   onButton: () => void = () => {};
-  @State btnLight: hdsEffect.PointLightSourceType = hdsEffect.PointLightSourceType.NONE;
-  /** 按压时轻微缩小，与点光一起构成按下手感 */
-  @State pressScale: number = 1;
+  @State pressed: boolean = false;
+
+  private setPressed(on: boolean) {
+    if (this.pressed === on) {
+      return
+    }
+    animateTo({ duration: on ? 120 : 200, curve: on ? Curve.EaseOut : Curve.EaseInOut }, () => {
+      this.pressed = on
+    })
+  }
 
   build() {
     Button(this.label)
@@ -23,31 +30,15 @@ export struct LightButton {
       .fontColor($r('app.color.text_on_primary'))
       .backgroundColor(this.bgColor)
       .enabled(this.btnEnabled)
-      .scale({ x: this.pressScale, y: this.pressScale })
-      .visualEffect(new hdsEffect.HdsEffectBuilder()
-        .pointLight({
-          sourceType: this.btnLight,
-          illuminatedType: hdsEffect.PointLightIlluminatedType.BORDER_CONTENT,
-          options: {
-            color: $r('app.color.light_glow'),
-            intensity: 0.9,
-            bloom: 0.5
-          }
-        })
-        .pressShadow(hdsEffect.PressShadowType.BLEND_WHITE)
-        .buildEffect())
+      .scale({ x: this.pressed ? 0.96 : 1, y: this.pressed ? 0.96 : 1 })
+      .shadow({
+        radius: this.pressed ? 16 : 0,
+        color: this.pressed ? $r('app.color.press_halo') : Color.Transparent,
+        offsetY: 0
+      })
       .onTouch((event: TouchEvent) => {
-        if (event.type === TouchType.Down) {
-          animateTo({ duration: 120, curve: Curve.EaseOut }, () => {
-            this.btnLight = hdsEffect.PointLightSourceType.BRIGHT;
-            this.pressScale = 0.96;
-          })
-        } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-          animateTo({ duration: 200, curve: Curve.EaseInOut }, () => {
-            this.btnLight = hdsEffect.PointLightSourceType.NONE;
-            this.pressScale = 1;
-          })
-        }
+        // Down/Move 都重申按压态（幂等）：手指微动产生 Move 时不会丢状态
+        this.setPressed(event.type === TouchType.Down || event.type === TouchType.Move)
       })
       .onClick(() => {
         this.onButton()
