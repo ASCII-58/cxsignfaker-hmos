@@ -483,6 +483,16 @@ export default struct HomePage {
         TabContent() {
           Refresh({ refreshing: $$this.isClassListRefreshing }) {
             List({ space: 0 }) {
+              ListItem() {
+                Search({ placeholder: '搜索课程...' })
+                  .height(44).borderRadius(20)
+                  .backgroundColor($r('sys.color.ohos_id_color_component_normal'))
+                  .placeholderColor($r('sys.color.ohos_id_color_text_secondary'))
+                  .geometryTransition('SEARCH_ONE_SHOT_DEMO_TRANSITION_ID', { follow: true })
+                  .shadow({ radius: 6, color: '#00000020', offsetX: 0, offsetY: 2 })
+                  .onTouch((event: TouchEvent) => { if (event.type === TouchType.Up) this.showSearchPage(); })
+              }.width('100%').padding({ left: 16, right: 16, top: 56, bottom: 12 }) // STACK 标题栏为悬浮式，56 为其让位
+
               if (this.cloneSessionCookies !== '') {
                 ListItem() {
                   Row() {
@@ -509,19 +519,9 @@ export default struct HomePage {
                   .width('100%').padding({ left: 16, right: 12, top: 10, bottom: 10 })
                   .backgroundColor($r('app.color.card_background'))
                   .border({ width: { left: 3 }, color: { left: $r('app.color.selected') } })
-                  .borderRadius(8).margin({ top: 8 })
-                }.width('100%').padding({ left: 16, right: 16 })
+                  .borderRadius(8).margin({ bottom: 8 })
+                }.width('100%').padding({ left: 16, right: 16, bottom: 8 })
               }
-
-              ListItem() {
-                Search({ placeholder: '搜索课程...' })
-                  .height(44).borderRadius(20)
-                  .backgroundColor($r('sys.color.ohos_id_color_component_normal'))
-                  .placeholderColor($r('sys.color.ohos_id_color_text_secondary'))
-                  .geometryTransition('SEARCH_ONE_SHOT_DEMO_TRANSITION_ID', { follow: true })
-                  .shadow({ radius: 6, color: '#00000020', offsetX: 0, offsetY: 2 })
-                  .onTouch((event: TouchEvent) => { if (event.type === TouchType.Up) this.showSearchPage(); })
-              }.width('100%').padding({ left: 16, right: 16, top: 56, bottom: 12 }) // STACK 标题栏为悬浮式，56 为其让位
 
               ForEach(this.classList, (classInfo: ClassInfo, index: number) => {
                 ListItem() { ClassListItem({ classInfo: classInfo }) }.width('100%')
