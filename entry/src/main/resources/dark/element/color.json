@@ -91,6 +91,18 @@
     {
       "name": "captcha_status_text",
       "value": "#99FFFFFF"
+    },
+    {
+      "name": "clone_banner_bg",
+      "value": "#16253D"
+    },
+    {
+      "name": "clone_banner_icon_bg",
+      "value": "#1F3A5F"
+    },
+    {
+      "name": "clone_banner_border",
+      "value": "#2C4A77"
     }
   ]
 }
