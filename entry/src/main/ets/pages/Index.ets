@@ -196,7 +196,7 @@ struct UserInfoComponent {
         }
       }
       .width('100%').height('100%')
-      .backgroundColor($r('sys.color.ohos_id_color_sub_background'))
+      .backgroundColor($r('app.color.page_background'))
       .borderRadius({ topLeft: 20, topRight: 20 })
     }
   }
@@ -315,7 +315,8 @@ struct UserInfoComponent {
     .translate({ y: this.isReady ? 0 : -16 })
     .bindSheet($$this.sheetVisible, this.UnifiedSheet, {
       height: 'auto', detents: [SheetSize.MEDIUM, SheetSize.LARGE],
-      backgroundColor: $r('sys.color.ohos_id_color_sub_background')
+      // 与 SettingsComponent 根容器同色：sheet 表面延伸进小白条避让区，双色会形成断层
+      backgroundColor: $r('app.color.page_background')
     })
   }
 
