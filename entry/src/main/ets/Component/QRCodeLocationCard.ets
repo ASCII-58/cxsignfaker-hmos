@@ -38,7 +38,7 @@ export struct QRCodeLocation {
           .fontColor($r('sys.color.ohos_id_color_text_primary'))
           .maxLines(3)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .copyOption(CopyOptions.LocalDevice)
+        // 不设置 copyOption：一旦可选中，Text 会吞掉点击手势导致复制失效/误触文字选择
       }
       .width('100%')
       .padding(12)

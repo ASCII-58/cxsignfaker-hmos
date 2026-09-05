@@ -15,6 +15,7 @@ import { systemShare } from '@kit.ShareKit';
 import { preferences, uniformTypeDescriptor as utd } from '@kit.ArkData';
 import { common, Want } from '@kit.AbilityKit';
 import { SettingsComponent } from '../Component/SettingsComponent';
+import { LocationFavoritesComponent } from '../Component/LocationFavoritesComponent';
 
 const TAG = 'IndexPage';
 const DOMAIN = 0x0004;
@@ -335,6 +336,7 @@ export default struct HomePage {
   @State expandedSection: number = -1;
   @State loginSheetVisible: boolean = false;
   @State loginSheetType: number = -1;
+  @State locationsSheetVisible: boolean = false;
   @State btnAddPressed: boolean = false;
   @State actionPressed: string = '';
   @State installInfo: string = '';
@@ -372,6 +374,11 @@ export default struct HomePage {
     } else if (this.loginSheetType === 1) {
       loginByURL({ isShow: $loginSheetVisible, otherUserList: $otherUserList })
     }
+  }
+
+  // 收藏位置管理 sheet（独立于 UnifiedSheet/设置 sheet）
+  @Builder LocationsSheetBuilder() {
+    LocationFavoritesComponent()
   }
 
   @Builder AddUserMenu() {
@@ -534,6 +541,9 @@ export default struct HomePage {
 
             Row().height(10).width('100%').backgroundColor($r('app.color.page_background'))
             Column() {
+              this.ActionItem($r('app.media.map_badge_local'), '管理收藏的位置', () => {
+                this.locationsSheetVisible = true
+              })
               this.ActionItem($r('app.media.github'), '反馈问题', () => {
                 this.openLinkContext.openLink('https://github.com/ASCII-58/chaoxingsignfaker-for-harmony-OS-NEXT/issues/new')
                   .catch((e: BusinessError<void>) => { hilog.error(0x0000, 'Link', `${e.code}`); });
@@ -545,6 +555,10 @@ export default struct HomePage {
               })
             }
             .backgroundColor($r('app.color.card_background'))
+            .bindSheet($$this.locationsSheetVisible, this.LocationsSheetBuilder, {
+              height: 'auto', detents: [SheetSize.MEDIUM, SheetSize.LARGE],
+              backgroundColor: $r('sys.color.ohos_id_color_sub_background')
+            })
 
             Row().height(10).width('100%').backgroundColor($r('app.color.page_background'))
 

@@ -2,7 +2,7 @@ import { ActivityInfo, SignType } from './ActivityListPage';
 import { CommonSignParams, parseSignResult, Sign, SignDetailResult, SignOutcome, UserQueryObject } from '../utils/sign';
 import { FaceApi } from '../utils/faceApi';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { DatabaseManager, UserDataAndId } from '../utils/DataBase';
+import { DatabaseManager, SavedLocation, UserDataAndId } from '../utils/DataBase';
 import { loginFunction } from '../utils/Login';
 import { ChaoxingUtils } from '../utils/utils';
 import { FunctionalButton, functionalButtonComponentManager } from '@kit.ScenarioFusionKit';
@@ -17,6 +17,8 @@ import { facePicker } from '../Component/FacePicker';
 import { LightButton } from '../Component/LightButton';
 import { scanBarcode, scanCore } from '@kit.ScanKit';
 import UrlTools from '../utils/urlTools';
+import { geoLocationManager } from '@kit.LocationKit';
+import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
 import { CaptchaComponent, CaptchaUserParam } from '../Component/Captcha';
 
 const TAG = 'SignerPage';
@@ -56,6 +58,11 @@ export struct SignPage {
   @State qrPosition: QRCodePosition | null = null
   @State captchaSheetShow: boolean = false
   @State captchaUser: CaptchaUserParam | null = null
+  /** 验证码弹层会话号：每次 requestCaptcha 自增；弹层已开时原地换内容，不关闭重开 */
+  @State captchaSession: number = 0
+  @State locationPickerShow: boolean = false
+  @State savedLocations: SavedLocation[] = []
+  @State gpsLocating: boolean = false
   private captchaResolver: ((validate: string | null) => void) | null = null
   // 手势/签到码组件校验通过后回传的码
   @State pendingSignCode: string = ''
@@ -106,6 +113,138 @@ export struct SignPage {
     .width('100%')
     .height('100%')
     .padding(16)
+  }
+
+  @Builder
+  SavedLocationPickerBuilder() {
+    Column() {
+      if (this.savedLocations.length === 0) {
+        Column() {
+          Text('暂无收藏位置')
+            .fontSize(16).fontColor($r('sys.color.ohos_id_color_text_secondary'))
+          Text('可在「用户中心 → 管理收藏的位置」中添加')
+            .fontSize(13).fontColor($r('sys.color.ohos_id_color_text_tertiary'))
+            .margin({ top: 8 })
+        }
+        .width('100%')
+        .margin({ top: 60, bottom: 60 })
+      } else {
+        List({ space: 8 }) {
+          ForEach(this.savedLocations, (loc: SavedLocation) => {
+            ListItem() {
+              Column() {
+                Text(loc.note !== '' ? loc.note : loc.address)
+                  .fontSize(16).fontWeight(FontWeight.Medium)
+                  .fontColor($r('sys.color.ohos_id_color_text_primary'))
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                Text(loc.address)
+                  .fontSize(12).fontColor($r('sys.color.ohos_id_color_text_secondary'))
+                  .maxLines(2)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .margin({ top: 3 })
+                Text(`经度 ${loc.longitude.substring(0, 10)}  纬度 ${loc.latitude.substring(0, 10)}`)
+                  .fontSize(11).fontColor($r('sys.color.ohos_id_color_text_tertiary'))
+                  .margin({ top: 3 })
+              }
+              .alignItems(HorizontalAlign.Start)
+              .width('100%')
+              .padding(12)
+              .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
+              .borderRadius(12)
+            }
+            .onClick(() => {
+              this.applySavedLocation(loc)
+            })
+          }, (loc: SavedLocation) => loc.id.toString())
+        }
+        .width('100%')
+        .height('100%')
+        .scrollBar(BarState.Off)
+      }
+    }
+    .width('100%')
+    .padding(16)
+  }
+
+  /** 打开收藏位置选择 sheet（每次打开前重新加载，保证数据最新） */
+  private async openSavedLocationPicker() {
+    try {
+      this.savedLocations = await DatabaseManager.getInstance().getAllSavedLocations()
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, `Failed to load saved locations: ${e.message}`);
+    }
+    this.locationPickerShow = true
+  }
+
+  /** 应用收藏位置：库里存的是提交用终值，直接赋给签到参数即可 */
+  private applySavedLocation(loc: SavedLocation) {
+    this.commonQueryParams.address = loc.address
+    this.commonQueryParams.longitude = loc.longitude
+    this.commonQueryParams.latitude = loc.latitude
+    this.locationPickerShow = false
+    promptAction.showToast({ message: `已选择：${loc.note !== '' ? loc.note : loc.address}`, duration: 1500 })
+  }
+
+  private getLocationContext(): common.UIAbilityContext {
+    return this.getUIContext().getHostContext() as common.UIAbilityContext
+  }
+
+  /** 请求前台定位权限（APPROXIMATELY_LOCATION 为 API 9+ 前台定位的必要权限） */
+  private async ensureLocationPermission(): Promise<boolean> {
+    try {
+      const atManager = abilityAccessCtrl.createAtManager()
+      const permissions: Array<Permissions> =
+        ['ohos.permission.APPROXIMATELY_LOCATION', 'ohos.permission.LOCATION']
+      const result = await atManager.requestPermissionsFromUser(this.getLocationContext(), permissions)
+      return result.authResults.every((r: number) => r === 0)
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, `Request location permission failed: ${e.message}`);
+      return false
+    }
+  }
+
+  /** 使用当前位置：WGS-84 → GCJ-02 → BD-09，与地图选点保持同一坐标系链路 */
+  private async useCurrentLocation() {
+    const granted = await this.ensureLocationPermission()
+    if (!granted) {
+      promptAction.showToast({ message: '未获得定位权限，请在系统设置中开启', duration: 1500 })
+      return
+    }
+    this.gpsLocating = true
+    try {
+      const location = await geoLocationManager.getCurrentLocation()
+      hilog.info(DOMAIN, TAG, `GPS raw(wgs84): lat=${location.latitude} lon=${location.longitude}`);
+      const gcj = ChaoxingUtils.wgs84_to_gcj02(location.latitude, location.longitude)
+      const bd = ChaoxingUtils.gcj02_to_bd09(gcj.lat, gcj.lon)
+      let address = '我的位置'
+      try {
+        const addresses = await geoLocationManager.getAddressesFromLocation({
+          latitude: location.latitude,
+          longitude: location.longitude,
+          maxItems: 1
+        })
+        if (addresses.length > 0) {
+          const geo = addresses[0]
+          if (geo.placeName) {
+            address = geo.placeName
+          } else if (geo.descriptions && geo.descriptions.length > 0) {
+            address = geo.descriptions[0]
+          }
+        }
+      } catch (e) {
+        hilog.error(DOMAIN, TAG, `Reverse geocode failed: ${e.message}`);
+      }
+      this.commonQueryParams.address = address
+      this.commonQueryParams.longitude = bd.lon.toString()
+      this.commonQueryParams.latitude = bd.lat.toString()
+      promptAction.showToast({ message: '已使用当前位置', duration: 1500 })
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, `GetCurrentLocation failed: ${e.message}`);
+      promptAction.showToast({ message: '定位失败，请重试或使用地图选点', duration: 1500 })
+    } finally {
+      this.gpsLocating = false
+    }
   }
 
   @Builder
@@ -196,7 +335,7 @@ export struct SignPage {
           .fontColor($r('sys.color.ohos_id_color_text_primary'))
           .maxLines(3)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .copyOption(CopyOptions.LocalDevice)
+        // 不设置 copyOption：一旦可选中，Text 会吞掉点击手势导致复制失效/误触文字选择
       }
       .width('100%')
       .padding(12)
@@ -264,6 +403,40 @@ export struct SignPage {
       }
       .width('100%')
       .margin({ top: 12 })
+
+      Row({ space: 12 }) {
+        // 签到未指定要求位置时，提供一键 GPS 定位
+        if (this.DestinationLocationName === '该签到无要求位置') {
+          Button(this.gpsLocating ? '定位中...' : '使用当前位置')
+            .layoutWeight(1)
+            .fontSize(13)
+            .height(36)
+            .borderRadius(18)
+            .backgroundColor($r('sys.color.ohos_id_color_button_normal'))
+            .fontColor($r('app.color.class_button'))
+            .enabled(!this.gpsLocating)
+            .onClick(() => {
+              this.useCurrentLocation()
+            })
+        }
+        Button('使用收藏位置')
+          .layoutWeight(1)
+          .fontSize(13)
+          .height(36)
+          .borderRadius(18)
+          .backgroundColor($r('sys.color.ohos_id_color_button_normal'))
+          .fontColor($r('sys.color.ohos_id_color_text_primary'))
+          .onClick(() => {
+            this.openSavedLocationPicker()
+          })
+          .bindSheet($$this.locationPickerShow, this.SavedLocationPickerBuilder, {
+            title: { title: '选择收藏位置' },
+            backgroundColor: $r('sys.color.ohos_id_color_dialog_bg'),
+            detents: [SheetSize.MEDIUM, SheetSize.LARGE]
+          })
+      }
+      .width('100%')
+      .margin({ top: 8 })
     }
     .padding(14)
     .width('100%')
@@ -329,13 +502,13 @@ export struct SignPage {
     if (this.captchaUser) {
       CaptchaComponent({
         captchaUser: this.captchaUser,
+        captchaSession: this.captchaSession,
         onValidated: (validate: string) => {
-          this.captchaSheetShow = false
+          // 弹层跨用户复用：不关闭，原地等待下一位需要验证码的用户刷新内容
           this.captchaResolver?.(validate)
           this.captchaResolver = null
         },
         onSkip: () => {
-          this.captchaSheetShow = false
           this.captchaResolver?.(null)
           this.captchaResolver = null
         }
@@ -819,6 +992,10 @@ export struct SignPage {
       }
     }
 
+    // 验证码弹层整轮复用：流程结束统一关闭（先关弹层再弹结果对话框）
+    this.captchaSheetShow = false
+    this.captchaResolver = null
+
     this.showSignResult(hashTable);
     await this.refreshUserPermissions()
     this.canSign = true
@@ -943,6 +1120,8 @@ export struct SignPage {
         uid: uid
       }
     }
+    // 弹层已打开时自增会话号即原地换内容；仅首次才真正拉起弹层
+    this.captchaSession++
     this.captchaSheetShow = true
     return new Promise<string | null>((resolve) => {
       this.captchaResolver = resolve
