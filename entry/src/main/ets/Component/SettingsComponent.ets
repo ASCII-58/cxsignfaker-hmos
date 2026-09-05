@@ -15,6 +15,13 @@ const MODEL_TEST_IDLE = 0;
 const MODEL_TEST_PASSED = 1;
 const MODEL_TEST_FAILED = 2;
 const COLOR_MODE_LABELS = ['自动', '浅色', '深色'];
+// 通用按压 Q 弹的按键标识(外观三档标签用 0/1/2，其余按钮用以下常量)
+const KEY_MODEL_TEST = 10;
+const KEY_CLEAR_CACHE = 11;
+const KEY_EXPORT_DB = 12;
+const KEY_IMPORT_DB = 13;
+const KEY_CHANGELOG = 14;
+const KEY_GITHUB = 15;
 
 // 应用内更新日志数据结构（来源：rawfile/changelog.json，更新日志只需编辑该文件）
 interface ChangelogSection {
@@ -46,6 +53,10 @@ export struct SettingsComponent {
   @State thumbX: number = 0;
   @State trackWidth: number = 0;
   @State thumbPressed: boolean = false;
+  // 拖拽跟手果冻量：0 无形变，>0 按横向速度拉伸(横向拉长、纵向压缩)
+  @State thumbStretch: number = 0;
+  // 通用按压 Q 弹：当前按下的按钮标识，-1 表示无
+  @State pressedKey: number = -1;
   private panActive: boolean = false;
   private dragStartThumbX: number = 0;
   private touchStartX: number = 0;
@@ -403,6 +414,38 @@ export struct SettingsComponent {
     });
   }
 
+  /** 拖拽跟手果冻：官方推荐跟手曲线 responsiveSpringMotion，横向按速度拉伸、纵向压缩；
+   *  响应式弹簧会在 overlapDuration 内衔接上一次动画，跟手不抖不跳 */
+  private applyDragJelly(velocityX: number) {
+    const stretch = Math.min(0.15, Math.abs(velocityX) / 9000);
+    this.getUIContext().animateTo({ curve: curves.responsiveSpringMotion(0.25, 0.6) }, () => {
+      this.thumbStretch = stretch;
+    });
+  }
+
+  /** 离手收尾：形变量归零，springMotion(低阻尼)从跟手动画继承初速度，Q 弹回正 */
+  private releaseDragJelly() {
+    this.getUIContext().animateTo({ curve: curves.springMotion(0.3, 0.55) }, () => {
+      this.thumbStretch = 0;
+    });
+  }
+
+  /** 通用按压 Q 弹触控：按下记 pressedKey，离手后稍作停顿再弹回，
+   *  回弹由 interpolatingSpring(0,1,328,28) 低阻尼过冲完成(与首页图钉按钮同参数) */
+  private pressTouchHandler(key: number): (event: TouchEvent) => void {
+    return (event: TouchEvent) => {
+      if (event.type === TouchType.Down) {
+        this.pressedKey = key;
+      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+        setTimeout(() => {
+          if (this.pressedKey === key) {
+            this.pressedKey = -1;
+          }
+        }, 150);
+      }
+    };
+  }
+
   /** 松手/点击提交：滑块弹性吸附到目标档位，必要时应用颜色模式 */
   private commitIndex(index: number) {
     this.previewIndex = index;
@@ -529,7 +572,10 @@ export struct SettingsComponent {
                   })
                   .margin({ left: 3 })
                   .translate({ x: this.thumbX })
-                  .scale({ x: this.thumbPressed ? 1.06 : 1, y: this.thumbPressed ? 0.92 : 1 })
+                  .scale({
+                    x: this.thumbPressed ? 1.06 : 1 + this.thumbStretch,
+                    y: this.thumbPressed ? 0.92 : 1 - this.thumbStretch * 0.7
+                  })
                 Row() {
                   ForEach([0, 1, 2], (idx: number) => {
                     Text(COLOR_MODE_LABELS[idx])
@@ -541,6 +587,12 @@ export struct SettingsComponent {
                       .textAlign(TextAlign.Center)
                       .layoutWeight(1)
                       .height('100%')
+                      .scale({
+                        x: this.pressedKey === idx ? 0.92 : 1,
+                        y: this.pressedKey === idx ? 0.92 : 1
+                      })
+                      .animation({ duration: 300, curve: curves.interpolatingSpring(0, 1, 328, 28) })
+                      .onTouch(this.pressTouchHandler(idx))
                       .onClick(() => {
                         this.commitIndex(idx);
                       })
@@ -566,17 +618,22 @@ export struct SettingsComponent {
                   .onActionStart(() => {
                     this.panActive = true;
                     this.dragStartThumbX = this.thumbX;
+                    this.applyDragJelly(0);
                   })
                   .onActionUpdate((event: GestureEvent) => {
                     this.thumbX = this.clampThumbX(this.dragStartThumbX + event.offsetX);
                     this.previewIndex = this.indexFromThumb();
+                    // 跟手果冻：按瞬时速度拉伸，快拖变长、慢拖收拢
+                    this.applyDragJelly(event.velocityX);
                   })
                   .onActionEnd(() => {
                     this.panActive = false;
+                    this.releaseDragJelly();
                     this.commitIndex(this.indexFromThumb());
                   })
                   .onActionCancel(() => {
                     this.panActive = false;
+                    this.releaseDragJelly();
                     this.commitIndex(this.indexFromThumb());
                   })
               )
@@ -626,6 +683,12 @@ export struct SettingsComponent {
                     .height(32)
                     .padding({ left: 16, right: 16 })
                     .enabled(!this.modelTestRunning)
+                    .scale({
+                      x: this.pressedKey === KEY_MODEL_TEST ? 0.95 : 1,
+                      y: this.pressedKey === KEY_MODEL_TEST ? 0.95 : 1
+                    })
+                    .animation({ duration: 300, curve: curves.interpolatingSpring(0, 1, 328, 28) })
+                    .onTouch(this.pressTouchHandler(KEY_MODEL_TEST))
                     .onClick(() => {
                       this.runModelTest()
                     })
@@ -667,6 +730,12 @@ export struct SettingsComponent {
                 this.Chevron()
               }
               .width('100%').padding({ left: 16, right: 16, top: 13, bottom: 13 })
+              .scale({
+                x: this.pressedKey === KEY_CLEAR_CACHE ? 0.97 : 1,
+                y: this.pressedKey === KEY_CLEAR_CACHE ? 0.97 : 1
+              })
+              .animation({ duration: 300, curve: curves.interpolatingSpring(0, 1, 328, 28) })
+              .onTouch(this.pressTouchHandler(KEY_CLEAR_CACHE))
               .onClick(() => {
                 this.confirmClearCache()
               })
@@ -678,6 +747,12 @@ export struct SettingsComponent {
                 this.Chevron()
               }
               .width('100%').padding({ left: 16, right: 16, top: 13, bottom: 13 })
+              .scale({
+                x: this.pressedKey === KEY_EXPORT_DB ? 0.97 : 1,
+                y: this.pressedKey === KEY_EXPORT_DB ? 0.97 : 1
+              })
+              .animation({ duration: 300, curve: curves.interpolatingSpring(0, 1, 328, 28) })
+              .onTouch(this.pressTouchHandler(KEY_EXPORT_DB))
               .onClick(() => {
                 this.exportDatabase()
               })
@@ -689,6 +764,12 @@ export struct SettingsComponent {
                 this.Chevron()
               }
               .width('100%').padding({ left: 16, right: 16, top: 13, bottom: 13 })
+              .scale({
+                x: this.pressedKey === KEY_IMPORT_DB ? 0.97 : 1,
+                y: this.pressedKey === KEY_IMPORT_DB ? 0.97 : 1
+              })
+              .animation({ duration: 300, curve: curves.interpolatingSpring(0, 1, 328, 28) })
+              .onTouch(this.pressTouchHandler(KEY_IMPORT_DB))
               .onClick(() => {
                 this.importDatabase()
               })
@@ -700,6 +781,12 @@ export struct SettingsComponent {
                 this.Chevron()
               }
               .width('100%').padding({ left: 16, right: 16, top: 13, bottom: 13 })
+              .scale({
+                x: this.pressedKey === KEY_CHANGELOG ? 0.97 : 1,
+                y: this.pressedKey === KEY_CHANGELOG ? 0.97 : 1
+              })
+              .animation({ duration: 300, curve: curves.interpolatingSpring(0, 1, 328, 28) })
+              .onTouch(this.pressTouchHandler(KEY_CHANGELOG))
               .onClick(() => {
                 this.showChangelog()
               })
@@ -714,6 +801,12 @@ export struct SettingsComponent {
                 this.Chevron()
               }
               .width('100%').padding({ left: 16, right: 16, top: 13, bottom: 13 })
+              .scale({
+                x: this.pressedKey === KEY_GITHUB ? 0.97 : 1,
+                y: this.pressedKey === KEY_GITHUB ? 0.97 : 1
+              })
+              .animation({ duration: 300, curve: curves.interpolatingSpring(0, 1, 328, 28) })
+              .onTouch(this.pressTouchHandler(KEY_GITHUB))
               .onClick(() => {
                 this.openUrl('https://github.com/ASCII-58/chaoxingsignfacker')
               })
