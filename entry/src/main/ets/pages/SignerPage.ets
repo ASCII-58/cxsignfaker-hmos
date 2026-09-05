@@ -275,6 +275,7 @@ export struct SignPage {
   QRCodeCard() {
     QRCodeLocation({
       ActivityId: this.activityInfo?.ActivityId.toString() || '',
+      positionRequired: this.signDetail?.ifopenAddress === 1,
       onPositionChange: (position: QRCodePosition) => {
         this.qrPosition = position
       }
@@ -358,9 +359,9 @@ export struct SignPage {
 
             this.UserSelectionCard()
 
-            if (this.faceRequired && (this.activityInfo?.signType === SignType.NORMAL ||
-              this.activityInfo?.signType === SignType.LOCATION ||
-              this.activityInfo?.signType === SignType.QRCODE)) {
+            // 人脸校验由服务端 openCheckFaceFlag 决定，与签到类型正交：
+            // 手势/签到码 + 人脸组合也必须在此准备，否则会被 prepareHint 的人脸检查永久阻断
+            if (this.faceRequired) {
               Column() {
                 facePicker({
                   signIdArray: this.signIdArray,
@@ -620,7 +621,8 @@ export struct SignPage {
       return '请先选择签到用户'
     }
     const selected = this.signIdArray.length
-    if (this.ifPhoto) {
+    // ifphoto 仅属于拍照/普通签到(otherId=0)，其它类型忽略该标记（对齐上游）
+    if (this.ifPhoto && this.activityInfo?.signType === SignType.NORMAL) {
       const uploaded = this.objectidArr.filter(id => id).length
       if (uploaded < selected) {
         return `等待签到图片上传 (${uploaded}/${selected})`
@@ -634,6 +636,11 @@ export struct SignPage {
     }
     if (this.activityInfo?.signType === SignType.LOCATION && !this.commonQueryParams.latitude) {
       return '请先选择签到位置'
+    }
+    // 对齐上游：二维码签到 ifopenAddress==1 时必须选点后才能扫码
+    if (this.activityInfo?.signType === SignType.QRCODE && this.signDetail?.ifopenAddress === 1 &&
+      !this.qrPosition) {
+      return '该签到要求位置，请先选点'
     }
     if (this.activityInfo?.signType === SignType.GESTURE && !this.pendingSignCode) {
       return '请先绘制并校验手势'
