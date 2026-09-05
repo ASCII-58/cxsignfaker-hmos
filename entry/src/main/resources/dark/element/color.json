@@ -107,6 +107,26 @@
     {
       "name": "clone_banner_border",
       "value": "#2C4A77"
+    },
+    {
+      "name": "glass_track_fill",
+      "value": "#14FFFFFF"
+    },
+    {
+      "name": "glass_thumb_fill",
+      "value": "#29FFFFFF"
+    },
+    {
+      "name": "glass_thumb_sheen",
+      "value": "#40FFFFFF"
+    },
+    {
+      "name": "glass_border",
+      "value": "#40FFFFFF"
+    },
+    {
+      "name": "glass_shadow",
+      "value": "#66000000"
     }
   ]
 }

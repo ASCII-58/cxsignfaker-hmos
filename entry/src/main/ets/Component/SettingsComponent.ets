@@ -41,6 +41,11 @@ const COLOR_MODE_ICONS: Resource[] = [
 export struct SettingsComponent {
   @State version: string = '';
   @State colorModeIndex: number = 0;
+  // 滑动条预览位置：拖动过程中先行移动/高亮，松手才提交 setColorMode
+  @State previewIndex: number = 0;
+  @State thumbX: number = 0;
+  @State trackWidth: number = 0;
+  private thumbInitialized: boolean = false;
   @State modelCaptchaEnabled: boolean = false;
   @State modelTestRunning: boolean = false;
   @State modelTestState: number = MODEL_TEST_IDLE;
@@ -50,6 +55,7 @@ export struct SettingsComponent {
   async aboutToAppear() {
     this.getVersion();
     await this.loadColorMode();
+    this.previewIndex = this.colorModeIndex;
     await this.loadModelCaptcha();
   }
 
@@ -365,6 +371,76 @@ export struct SettingsComponent {
       .fillColor($r('app.color.icon'))
   }
 
+  private getSegWidth(): number {
+    return this.trackWidth / 3;
+  }
+
+  private clampThumbX(x: number): number {
+    return Math.min(Math.max(x, 0), this.getSegWidth() * 2);
+  }
+
+  private indexFromThumb(): number {
+    return Math.min(2, Math.max(0, Math.round(this.thumbX / this.getSegWidth())));
+  }
+
+  private snapThumb(index: number) {
+    this.getUIContext().animateTo({ curve: curves.springMotion(0.35, 0.9) }, () => {
+      this.thumbX = index * this.getSegWidth();
+    });
+  }
+
+  /** 松手/点击提交：滑块弹性吸附到目标档位，必要时应用颜色模式 */
+  private commitIndex(index: number) {
+    this.previewIndex = index;
+    this.snapThumb(index);
+    if (index !== this.colorModeIndex) {
+      this.setColorMode(index);
+    }
+  }
+
+  /** 悬浮页签式交互：按下滑块即弹至按压位置，随手指拖动，松手提交 */
+  private onSliderTouch(event: TouchEvent) {
+    const segW = this.getSegWidth();
+    if (segW <= 0) {
+      return;
+    }
+    const touchX = event.touches[0].x - segW / 2;
+    if (event.type === TouchType.Down) {
+      this.snapThumb(this.indexFromX(touchX));
+    } else if (event.type === TouchType.Move) {
+      // 拖动中不施加动画，滑块实时跟手
+      this.thumbX = this.clampThumbX(touchX);
+      this.previewIndex = this.indexFromThumb();
+    } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+      this.commitIndex(this.previewIndex);
+    }
+  }
+
+  private indexFromX(x: number): number {
+    const clamped = this.clampThumbX(x);
+    this.thumbX = clamped;
+    return Math.min(2, Math.max(0, Math.round(clamped / this.getSegWidth())));
+  }
+
+  /** SVG 动画指示：非选中图标旋转±90°并缩放淡出，选中图标从对应方向旋入 */
+  @Builder
+  ThemeModeIcon(idx: number) {
+    Image(COLOR_MODE_ICONS[idx])
+      .width(24).height(24)
+      .fillColor(this.colorModeIndex === idx
+        ? $r('app.color.selected') : $r('app.color.secondary_text'))
+      .opacity(this.colorModeIndex === idx ? 1 : 0)
+      .scale({
+        x: this.colorModeIndex === idx ? 1 : 0.4,
+        y: this.colorModeIndex === idx ? 1 : 0.4
+      })
+      .rotate({
+        z: 1,
+        angle: this.colorModeIndex === idx ? 0 : (idx < this.colorModeIndex ? -90 : 90)
+      })
+      .animation({ duration: 400, curve: Curve.Friction })
+  }
+
   build() {
     Column() {
       // 半屏弹层拖拽指示条
@@ -379,45 +455,82 @@ export struct SettingsComponent {
         .padding({ left: 20, top: 12, bottom: 16 })
 
       List({ space: 16 }) {
-        // 外观：三张可点选的模式卡片(整卡可点,选中态高亮)
+        // 外观：SVG 动画指示器 + 三段滑动条(拖动或点击切换 自动/浅色/深色)
         ListItem() {
           Column() {
             this.SectionHeader('外观')
-            Row({ space: 10 }) {
-              ForEach([0, 1, 2], (idx: number) => {
-                Column({ space: 8 }) {
-                  Stack() {
-                    Row()
-                      .width(52).height(52)
-                      .borderRadius(14)
-                      .backgroundColor(this.colorModeIndex === idx
-                        ? $r('app.color.selected') : $r('app.color.icon'))
-                      .opacity(this.colorModeIndex === idx ? 0.16 : 0.32)
-                    Image(COLOR_MODE_ICONS[idx])
-                      .width(26).height(26)
-                  }
-                  Text(COLOR_MODE_LABELS[idx])
-                    .fontSize(13)
-                    .fontWeight(this.colorModeIndex === idx ? FontWeight.Medium : FontWeight.Normal)
-                    .fontColor(this.colorModeIndex === idx
-                      ? $r('app.color.selected') : $r('app.color.secondary_text'))
+            Row() {
+              Stack() {
+                Row()
+                  .width(46).height(46)
+                  .borderRadius(23)
+                  .backgroundColor($r('app.color.glass_track_fill'))
+                  .border({ width: 0.8, color: $r('app.color.glass_border') })
+                  .shadow({ radius: 8, color: $r('app.color.glass_shadow'), offsetY: 2 })
+                this.ThemeModeIcon(0)
+                this.ThemeModeIcon(1)
+                this.ThemeModeIcon(2)
+              }
+
+              Stack({ alignContent: Alignment.Start }) {
+                // 玻璃滑轨：胶囊形，半透明填充 + 发丝描边
+                Row()
+                  .width('100%').height(40)
+                  .borderRadius(20)
+                  .backgroundColor($r('app.color.glass_track_fill'))
+                  .border({ width: 0.8, color: $r('app.color.glass_border') })
+                // 吸附滑块：玻璃胶囊，顶部高光渐变 + 柔和投影
+                Row()
+                  .width(this.trackWidth > 0 ? this.getSegWidth() - 6 : 0)
+                  .height(34)
+                  .borderRadius(17)
+                  .backgroundColor($r('app.color.glass_thumb_fill'))
+                  .border({ width: 0.8, color: $r('app.color.glass_border') })
+                  .shadow({ radius: 10, color: $r('app.color.glass_shadow'), offsetY: 3 })
+                  .linearGradient({
+                    angle: 180,
+                    colors: [
+                      [$r('app.color.glass_thumb_sheen'), 0],
+                      [Color.Transparent, 0.45]
+                    ]
+                  })
+                  .margin({ left: 3 })
+                  .translate({ x: this.thumbX })
+                Row() {
+                  ForEach([0, 1, 2], (idx: number) => {
+                    Text(COLOR_MODE_LABELS[idx])
+                      .fontSize(14)
+                      .fontWeight(this.previewIndex === idx ? FontWeight.Medium : FontWeight.Normal)
+                      .fontColor(this.previewIndex === idx
+                        ? $r('app.color.selected') : $r('app.color.secondary_text'))
+                      .textAlign(TextAlign.Center)
+                      .layoutWeight(1)
+                      .height('100%')
+                      .onClick(() => {
+                        this.commitIndex(idx);
+                      })
+                  }, (idx: number) => idx.toString())
                 }
-                .layoutWeight(1)
-                .padding({ top: 14, bottom: 14 })
-                .borderRadius(14)
-                .backgroundColor($r('app.color.card_background'))
-                .border({
-                  width: 2,
-                  color: this.colorModeIndex === idx
-                    ? $r('app.color.selected') : Color.Transparent
-                })
-                .onClick(() => {
-                  this.setColorMode(idx)
-                })
-              }, (idx: number) => idx.toString())
+                .width('100%').height(40)
+              }
+              .layoutWeight(1)
+              .margin({ left: 12 })
+              .onAreaChange((_oldArea: Area, newArea: Area) => {
+                this.trackWidth = newArea.width as number;
+                if (!this.thumbInitialized && this.trackWidth > 0) {
+                  this.thumbInitialized = true;
+                  this.thumbX = this.previewIndex * this.getSegWidth();
+                }
+              })
+              .onTouch((event: TouchEvent) => {
+                this.onSliderTouch(event);
+              })
             }
             .width('100%')
-            .alignItems(VerticalAlign.Top)
+            .alignItems(VerticalAlign.Center)
+            .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+            .backgroundColor($r('app.color.card_background'))
+            .borderRadius(16)
           }
         }
 
@@ -556,7 +669,7 @@ export struct SettingsComponent {
         }
       }
       .width('100%').layoutWeight(1)
-      .padding({ left: 16, right: 16, bottom: 24 })
+      .padding({ left: 16, right: 16})
       .scrollBar(BarState.Off)
       .edgeEffect(EdgeEffect.Spring)
     }
