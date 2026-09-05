@@ -10,6 +10,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import promptAction from '@ohos.promptAction';
 import { loginByCommon, loginByURL } from '../Component/LoginCom';
 import { OtherUserItem } from '../Component/OtherUserCom';
+import { CloneSessionBanner } from '../Component/CloneSessionBanner';
 import ShareUtils from '../utils/shareUtils';
 import { systemShare } from '@kit.ShareKit';
 import { preferences, uniformTypeDescriptor as utd } from '@kit.ArkData';
@@ -351,7 +352,6 @@ export default struct HomePage {
   @StorageLink('userQRValue') userQRValue: string = ''
   @StorageLink('cloneSessionCookies') cloneSessionCookies: string = ''
   @StorageLink('cloneSessionName') cloneSessionName: string = ''
-  @StorageLink('cloneSessionPhone') cloneSessionPhone: string = ''
   private pageInfos: NavPathStack = new NavPathStack();
   private classListLoading: boolean = false;
   private controller: HdsTabsController = new HdsTabsController();
@@ -579,31 +579,7 @@ export default struct HomePage {
 
           if (this.cloneSessionCookies !== '') {
             ListItem() {
-              Row() {
-                Image($r('app.media.person_2'))
-                  .width(18).height(18)
-                  .fillColor($r('app.color.selected'))
-                Column() {
-                  Text(`当前克隆登录用户：${this.cloneSessionName}`)
-                    .fontSize(14).fontWeight(FontWeight.Medium)
-                    .fontColor($r('app.color.primary_text'))
-                    .maxLines(1)
-                    .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  Text(this.cloneSessionPhone)
-                    .fontSize(12)
-                    .fontColor($r('app.color.secondary_text'))
-                }
-                .layoutWeight(1).alignItems(HorizontalAlign.Start).margin({ left: 8 })
-                Text('退出克隆')
-                  .fontSize(14)
-                  .fontColor($r('app.color.selected'))
-                  .padding({ left: 12, right: 4, top: 10, bottom: 10 })
-                  .onClick(() => { this.exitCloneSession() })
-              }
-              .width('100%').padding({ left: 16, right: 12, top: 10, bottom: 10 })
-              .backgroundColor($r('app.color.card_background'))
-              .border({ width: { left: 3 }, color: { left: $r('app.color.selected') } })
-              .borderRadius(8).margin({ bottom: 8 })
+              CloneSessionBanner({ onExit: () => { this.exitCloneSession() } })
             }.width('100%').padding({ left: 16, right: 16, bottom: 8 })
           }
 
