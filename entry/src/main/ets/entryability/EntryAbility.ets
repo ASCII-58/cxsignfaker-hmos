@@ -51,11 +51,20 @@ export default class EntryAbility extends UIAbility {
       windowStage.loadContent('pages/initPage', (err) => {
         if (err) {
           const error = err as BusinessError;
-          hilog.error(DOMAIN, 'testTag', 'Failed to load main page: Code=%{public}d, Message=%{public}s', error.code,
+          hilog.error(DOMAIN, TAG, 'Failed to load main page: Code=%{public}d, Message=%{public}s', error.code,
             error.message);
           return;
         }
-        hilog.info(DOMAIN, 'testTag', '%{public}s', 'Succeeded in loading the main content.');
+        hilog.info(DOMAIN, TAG, '%{public}s', 'Succeeded in loading the main content.');
+        // 实测系统手势条高度，供首页悬浮胶囊贴底定位（AppStorage 由页面 @StorageLink 消费）
+        try {
+          const mainWindow = windowStage.getMainWindowSync();
+          const ui = mainWindow.getUIContext();
+          const indicator = mainWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR);
+          AppStorage.setOrCreate('naviIndicatorHeight', ui.px2vp(indicator?.bottomRect?.height ?? 0));
+        } catch (measureError) {
+          hilog.error(DOMAIN, TAG, 'Measure navi indicator failed: %{public}s', (measureError as Error).message);
+        }
       });
 
       // Refresh other users' cookies in background (non-blocking)
