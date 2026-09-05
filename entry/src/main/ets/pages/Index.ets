@@ -565,16 +565,19 @@ export default struct HomePage {
         menu: this.currentIndex === 0 ? this.searchMenu : undefined
       },
       style: {
-        scrollEffectOpts: { // 系统级无级渐变模糊：模糊量随列表滚动连续变化（6.0 起支持）
+        scrollEffectOpts: { // 系统级无级渐变模糊：模糊量随列表滚动连续变化（6.0 起支持）。
+          // 用示例同款 GRADIENT_BLUR：6.1 的 IMMERSIVE_GRADIENT_BLUR 模糊区域更大、默认背板更实，
+          // 沉浸光感材质下静止时显成一条色带，失去示例的透明观感
           enableScrollEffect: true,
-          scrollEffectType: this.supportFloatingBar ? ScrollEffectType.IMMERSIVE_GRADIENT_BLUR : ScrollEffectType.GRADIENT_BLUR,
+          scrollEffectType: ScrollEffectType.GRADIENT_BLUR,
           // 渐变模糊终止线对齐标题栏底边（状态栏+56，示例同款）：模糊量铺满整个标题区高度连续过渡，
           // 而非默认 vp(8) 就饱和；6.0(20) 起支持
           blurEffectiveEndOffset: LengthMetrics.vp(this.statusBarHeight + 56)
         },
-        systemMaterialEffect: this.supportFloatingBar ? { // 标题栏材质跟随系统策略（示例沉浸光感同款），6.0 走 GRADIENT_BLUR 默认样式
+        systemMaterialEffect: this.supportFloatingBar ? { // 沉浸光感材质（示例同款）。等级取示例默认 GENTLE（轻柔）：
+          // ADAPTIVE 跟随系统策略，真机常解析为强材质，静止时材质面板压在纯色页面背景上就不是透明的了
           materialType: hdsMaterial.MaterialType.ADAPTIVE,
-          materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
+          materialLevel: hdsMaterial.MaterialLevel.GENTLE
         } : undefined
       }
     })
