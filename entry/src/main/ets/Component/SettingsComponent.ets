@@ -406,7 +406,9 @@ export struct SettingsComponent {
     }
     const touchX = event.touches[0].x - segW / 2;
     if (event.type === TouchType.Down) {
-      this.snapThumb(this.indexFromX(touchX));
+      // 按下不硬切：弹簧动画滑到按压处所在档位，手指拖动时再转跟手
+      this.previewIndex = this.indexFromX(touchX);
+      this.snapThumb(this.previewIndex);
     } else if (event.type === TouchType.Move) {
       // 拖动中不施加动画，滑块实时跟手
       this.thumbX = this.clampThumbX(touchX);
@@ -418,7 +420,6 @@ export struct SettingsComponent {
 
   private indexFromX(x: number): number {
     const clamped = this.clampThumbX(x);
-    this.thumbX = clamped;
     return Math.min(2, Math.max(0, Math.round(clamped / this.getSegWidth())));
   }
 
@@ -503,6 +504,7 @@ export struct SettingsComponent {
                       .fontWeight(this.previewIndex === idx ? FontWeight.Medium : FontWeight.Normal)
                       .fontColor(this.previewIndex === idx
                         ? $r('app.color.selected') : $r('app.color.secondary_text'))
+                      .animation({ duration: 250, curve: Curve.EaseOut })
                       .textAlign(TextAlign.Center)
                       .layoutWeight(1)
                       .height('100%')
