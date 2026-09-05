@@ -26,7 +26,7 @@ struct CourseItem {
   build() {
     Row() {
       if (this.courseImage) {
-        Image(this.courseImage)
+        Image(this.courseImage) .draggable(false)
           .width(44)
           .height(44)
           .borderRadius(12)
@@ -155,7 +155,7 @@ export default struct SearchLongTakeTransitionPageTwo {
         // 搜索栏
         Row({ space: 12 }) {
           Column() {
-            Image($r('app.media.arrow_right'))
+            Image($r('app.media.arrow_right')) .draggable(false)
               .width(20).height(20)
               .fillColor($r('app.color.icon'))
               .rotate({ angle: 180 })
@@ -204,7 +204,7 @@ export default struct SearchLongTakeTransitionPageTwo {
           .justifyContent(FlexAlign.Center)
         } else if (this.filteredCourses.length === 0) {
           Column() {
-            Image($r('app.media.ic_public_quit'))
+            Image($r('app.media.ic_public_quit')) .draggable(false)
               .width(80)
               .height(80)
               .fillColor($r('sys.color.ohos_id_color_text_tertiary'))

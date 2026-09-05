@@ -270,7 +270,7 @@ export struct DebugPage {
                   .fontSize(16)
                   .fontColor($r('sys.color.ohos_id_color_text_primary'))
                 Blank()
-                Image($r('app.media.arrow_right'))
+                Image($r('app.media.arrow_right')) .draggable(false)
                   .width(16).height(16)
                   .fillColor($r('sys.color.ohos_id_color_text_tertiary'))
               }
@@ -286,7 +286,7 @@ export struct DebugPage {
                   .fontSize(14)
                   .fontColor($r('sys.color.ohos_id_color_text_primary'))
                 Blank()
-                Image($r('app.media.arrow_right'))
+                Image($r('app.media.arrow_right')) .draggable(false)
                   .width(16).height(16)
                   .fillColor($r('sys.color.ohos_id_color_text_tertiary'))
               }
@@ -302,7 +302,7 @@ export struct DebugPage {
                   .fontSize(14)
                   .fontColor($r('sys.color.ohos_id_color_text_primary'))
                 Blank()
-                Image($r('app.media.arrow_right'))
+                Image($r('app.media.arrow_right')) .draggable(false)
                   .width(16).height(16)
                   .fillColor($r('sys.color.ohos_id_color_text_tertiary'))
               }
@@ -318,7 +318,7 @@ export struct DebugPage {
                   .fontSize(14)
                   .fontColor($r('sys.color.ohos_id_color_text_primary'))
                 Blank()
-                Image($r('app.media.arrow_right'))
+                Image($r('app.media.arrow_right')) .draggable(false)
                   .width(16).height(16)
                   .fillColor($r('sys.color.ohos_id_color_text_tertiary'))
               }
@@ -334,7 +334,7 @@ export struct DebugPage {
                   .fontSize(14)
                   .fontColor($r('sys.color.ohos_id_color_text_primary'))
                 Blank()
-                Image($r('app.media.arrow_right'))
+                Image($r('app.media.arrow_right')) .draggable(false)
                   .width(16).height(16)
                   .fillColor($r('sys.color.ohos_id_color_text_tertiary'))
               }
@@ -361,7 +361,7 @@ export struct DebugPage {
 
             Column() {
               Row() {
-                Image($rawfile(IMAGE_RAWFILE))
+                Image($rawfile(IMAGE_RAWFILE)) .draggable(false)
                   .height(64)
                   .objectFit(ImageFit.Contain)
                 Blank()

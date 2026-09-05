@@ -46,7 +46,7 @@ struct signIcon {
 
   build() {
     Row() {
-      Image(this.icon)
+      Image(this.icon) .draggable(false)
         .width(44)
         .height(44)
         .fillColor(this.isEnded ? $r('app.color.secondary_text') : $r('app.color.icon'))
@@ -140,7 +140,7 @@ export struct ActivityListPage {
                   .alignItems(HorizontalAlign.Start)
                   .margin({ left: 12 })
 
-                  Image($r('sys.media.ohos_ic_public_arrow_right'))
+                  Image($r('sys.media.ohos_ic_public_arrow_right')) .draggable(false)
                     .width(14)
                     .height(14)
                     .fillColor($r('app.color.secondary_text'))

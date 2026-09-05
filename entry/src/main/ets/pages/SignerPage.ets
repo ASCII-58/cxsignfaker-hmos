@@ -288,7 +288,7 @@ export struct SignPage {
               Text(user.uname)
                 .fontSize(13)
                 .fontColor($r('sys.color.ohos_id_color_text_primary'))
-              Image($r('sys.media.ohos_ic_public_close'))
+              Image($r('sys.media.ohos_ic_public_close')) .draggable(false)
                 .width(14).height(14)
                 .fillColor($r('sys.color.ohos_id_color_text_tertiary'))
                 .margin({ left: 4 })

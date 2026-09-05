@@ -24,7 +24,7 @@ export struct Icon {
   build() {
     Stack() {
       if (this.ImageData) {
-        Image(this.ImageData)
+        Image(this.ImageData) .draggable(false)
           .width(48)
           .height(48)
           .borderRadius(24) // 圆形

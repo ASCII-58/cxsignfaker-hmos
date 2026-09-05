@@ -12,7 +12,7 @@ export struct CloneSessionBanner {
   build() {
     Row() {
       Column() {
-        Image($r('app.media.person_2'))
+        Image($r('app.media.person_2')) .draggable(false)
           .width(20).height(20)
           .fillColor($r('app.color.selected'))
       }
