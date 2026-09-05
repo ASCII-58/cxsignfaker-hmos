@@ -4,7 +4,7 @@ import image from '@ohos.multimedia.image';
 import { ClassInfo, CourseAndActivity } from '../utils/classFun';
 import { scanBarcode, scanCore } from '@kit.ScanKit';
 import { curves, UIContext } from '@kit.ArkUI';
-import { hdsEffect, HdsTabs, HdsTabsController, HdsTabsBackgroundStyle } from '@kit.UIDesignKit';
+import { hdsEffect, HdsTabs, HdsTabsController, HdsTabsBackgroundStyle, HdsTabsFloatingStyle } from '@kit.UIDesignKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import promptAction from '@ohos.promptAction';
@@ -355,6 +355,11 @@ export default struct HomePage {
   private pageInfos: NavPathStack = new NavPathStack();
   private classListLoading: boolean = false;
   private controller: HdsTabsController = new HdsTabsController();
+  // 悬浮页签（barFloatingStyle）为 6.1.0(23) 新特性：canIUse 运行时判断，
+  // 低版本系统自动退化为沉浸式页签（build 内两条分支共用 HdsTabContents 构建器）
+  private readonly supportFloatingBar: boolean = canIUse('apis: 23');
+  private readonly tabBarMask: HdsTabsBackgroundStyle = { maskColor: $r('app.color.page_background') };
+  private readonly floatingBarStyle: HdsTabsFloatingStyle = { gradientMask: this.tabBarMask };
   private openLinkContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
 
   @Builder tabBuilder(title: string, targetIndex: number) {
@@ -479,174 +484,46 @@ export default struct HomePage {
 
   build() {
     NavDestination() {
-      HdsTabs({ barPosition: BarPosition.End, index: this.currentIndex, controller: this.controller }) {
-        TabContent() {
-          Refresh({ refreshing: $$this.isClassListRefreshing }) {
-            List({ space: 0 }) {
-              ListItem() {
-                Search({ placeholder: '搜索课程...' })
-                  .height(44).borderRadius(20)
-                  .backgroundColor($r('sys.color.ohos_id_color_component_normal'))
-                  .placeholderColor($r('sys.color.ohos_id_color_text_secondary'))
-                  .geometryTransition('SEARCH_ONE_SHOT_DEMO_TRANSITION_ID', { follow: true })
-                  .shadow({ radius: 6, color: '#00000020', offsetX: 0, offsetY: 2 })
-                  .onTouch((event: TouchEvent) => { if (event.type === TouchType.Up) this.showSearchPage(); })
-              }.width('100%').padding({ left: 16, right: 16, top: 56, bottom: 12 }) // STACK 标题栏为悬浮式，56 为其让位
-
-              if (this.cloneSessionCookies !== '') {
-                ListItem() {
-                  Row() {
-                    Image($r('app.media.person_2'))
-                      .width(18).height(18)
-                      .fillColor($r('app.color.selected'))
-                    Column() {
-                      Text(`当前克隆登录用户：${this.cloneSessionName}`)
-                        .fontSize(14).fontWeight(FontWeight.Medium)
-                        .fontColor($r('app.color.primary_text'))
-                        .maxLines(1)
-                        .textOverflow({ overflow: TextOverflow.Ellipsis })
-                      Text(this.cloneSessionPhone)
-                        .fontSize(12)
-                        .fontColor($r('app.color.secondary_text'))
-                    }
-                    .layoutWeight(1).alignItems(HorizontalAlign.Start).margin({ left: 8 })
-                    Text('退出克隆')
-                      .fontSize(14)
-                      .fontColor($r('app.color.selected'))
-                      .padding({ left: 12, right: 4, top: 10, bottom: 10 })
-                      .onClick(() => { this.exitCloneSession() })
-                  }
-                  .width('100%').padding({ left: 16, right: 12, top: 10, bottom: 10 })
-                  .backgroundColor($r('app.color.card_background'))
-                  .border({ width: { left: 3 }, color: { left: $r('app.color.selected') } })
-                  .borderRadius(8).margin({ bottom: 8 })
-                }.width('100%').padding({ left: 16, right: 16, bottom: 8 })
-              }
-
-              ForEach(this.classList, (classInfo: ClassInfo, index: number) => {
-                ListItem() { ClassListItem({ classInfo: classInfo }) }.width('100%')
-                .onClick(() => { this.pageInfos.pushPath({ name: 'ActivityListPage', param: classInfo }); })
-              }, (classInfo: ClassInfo) => classInfo.id)
-            }
-            .divider({ strokeWidth: 0.5, color: $r('sys.color.comp_divider'), startMargin: 72, endMargin: 16 })
-            .width('100%').height('100%').scrollBar(BarState.Off) // 高度占满:课程未加载/数量过少时列表不收缩居中,搜索框保持在悬浮标题栏下方
-            .padding({ bottom: 64 }) // barOverlap 内容穿透：末项不被页签栏遮挡
-          }
-          .width('100%').height('100%')
-          .onRefreshing(async () => { await this.loadClassList(); }) // 仅下滑刷新：下拉触发课程列表重新拉取
+      // 6.1(23) 起支持悬浮页签：底栏胶囊化悬浮于内容之上；低版本系统退化为沉浸式页签
+      if (this.supportFloatingBar) {
+        HdsTabs({ barPosition: BarPosition.End, index: this.currentIndex, controller: this.controller }) {
+          this.HdsTabContents()
         }
-        .height('100%').width('100%')
-        .tabBar($r('app.string.class_list'))
-        .onAppear(async () => {
-          await this.loadClassList();
+        .height('100%').vertical(false)
+        .barMode(BarMode.Fixed)
+        .animationDuration(350) // 平滑内容过渡
+        .barOverlap(true) // 内容穿透：列表从悬浮胶囊下方滚动穿过
+        .barFloatingStyle(this.floatingBarStyle) // 6.1(23) 悬浮页签：gradientMask 保留底部渐隐遮罩
+        .onTabBarClick(() => {
+          this.popCurrentTabLabel();
         })
-
-        TabContent() {
-          Column() {
-            UserInfoComponent({
-              hostName: this.userHostName,
-              hostPhone: this.userHostPhone,
-              url: this.userUrl,
-              QRvalue: this.userQRValue,
-              onLogout: () => { this.showLogoutDialog() }
-            })
-              .margin({ top: 56 }) // STACK 标题栏为悬浮式，56 为其让位
-
-            Row().height(10).width('100%').backgroundColor($r('app.color.page_background'))
-
-            Column() {
-              this.SectionHeader('其他用户', this.otherUserList.length, 0, true)
-              if (this.expandedSection === 0 && this.otherUserList.length > 0) {
-                Column() {
-                  List({ space: 0 }) {
-                    ForEach(this.otherUserList, (item: UserDataAndId, index) => {
-                      ListItem() {
-                        OtherUserItem({
-                          userData: item, otherUserList: this.otherUserList, index: index,
-                          onCloneLogin: () => { this.enterCloneSession() }
-                        })
-                      }.width('100%')
-                    }, (item: UserDataAndId) => item.id.toString())
-                  }
-                  .divider({ strokeWidth: 0.5, color: $r('sys.color.comp_divider'), startMargin: 72, endMargin: 16 })
-                  .scrollBar(BarState.Off)
-                  .constraintSize({ maxHeight: 360 })
-                }
-                .transition(TransitionEffect.OPACITY
-                  .combine(TransitionEffect.translate({ y: -10 }))
-                  .animation({ duration: 400, curve: curves.interpolatingSpring(0, 1, 280, 26) }))
-              }
-            }
-            .backgroundColor($r('app.color.card_background'))
-
-            Row().height(10).width('100%').backgroundColor($r('app.color.page_background'))
-            Column() {
-              this.ActionItem($r('app.media.map_badge_local'), '管理收藏的位置', () => {
-                this.locationsSheetVisible = true
-              })
-              this.ActionItem($r('app.media.github'), '反馈问题', () => {
-                this.openLinkContext.openLink('https://github.com/ASCII-58/chaoxingsignfaker-for-harmony-OS-NEXT/issues/new')
-                  .catch((e: BusinessError<void>) => { hilog.error(0x0000, 'Link', `${e.code}`); });
-              })
-              this.ActionItem($r('app.media.envelope'), '联系我们', () => {
-                let want: Want = { action: 'ohos.want.action.viewData', uri: 'mailto:xyxy1029@petalmail.com' };
-                this.openLinkContext.startAbility(want)
-                  .catch((e: BusinessError) => { hilog.error(0x0000, 'Mail', `${e.code}`); });
-              })
-            }
-            .backgroundColor($r('app.color.card_background'))
-            .bindSheet($$this.locationsSheetVisible, this.LocationsSheetBuilder, {
-              height: 'auto', detents: [SheetSize.MEDIUM, SheetSize.LARGE],
-              backgroundColor: $r('sys.color.ohos_id_color_sub_background')
-            })
-
-            Row().height(10).width('100%').backgroundColor($r('app.color.page_background'))
-
-            if (this.installInfo !== '') {
-              Column() {
-                Row() {
-                  Text('使用时长')
-                    .fontSize(16)
-                    .fontColor($r('sys.color.ohos_id_color_text_primary'))
-                  Blank()
-                  Text(this.installInfo)
-                    .fontSize(14)
-                    .fontColor($r('sys.color.ohos_id_color_text_secondary'))
-                }
-                .width('100%').padding(12)
-              }
-              .width('100%')
-              .backgroundColor($r('app.color.card_background'))
-              .borderRadius(16)
-              .padding({ left: 4, right: 4 })
-            }
-
-            Row().height(64).width('100%').backgroundColor($r('app.color.page_background')) // barOverlap 避让页签栏
-          }
-          .width('100%').height('100%')
-          .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
-          .bindSheet($$this.loginSheetVisible, this.loginSheetContent, {
-            height: 'auto', detents: [SheetSize.MEDIUM, SheetSize.LARGE],
-            backgroundColor: $r('sys.color.ohos_id_color_sub_background')
-          })
+        .backgroundColor($r('app.color.page_background'))
+        .scrollable(false)
+        .onChange((index) => {
+          this.titleName = index === 0 ? '首页' : '用户中心'
+          this.currentIndex = index
+        })
+        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
+      } else {
+        HdsTabs({ barPosition: BarPosition.End, index: this.currentIndex, controller: this.controller }) {
+          this.HdsTabContents()
         }
-        .tabBar($r('app.string.user'))
+        .height('100%').vertical(false)
+        .barMode(BarMode.Fixed)
+        .animationDuration(350) // 平滑内容过渡
+        .barOverlap(true) // 内容穿透：列表从页签栏下滚动穿过
+        .barBackgroundStyle(this.tabBarMask) // 页签栏下渐隐遮罩
+        .onTabBarClick(() => {
+          this.popCurrentTabLabel();
+        })
+        .backgroundColor($r('app.color.page_background'))
+        .scrollable(false)
+        .onChange((index) => {
+          this.titleName = index === 0 ? '首页' : '用户中心'
+          this.currentIndex = index
+        })
+        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
       }
-      .height('100%').vertical(false)
-      .barMode(BarMode.Fixed)
-      .animationDuration(350) // 6.1 沉浸式页签：平滑内容过渡
-      .barOverlap(true) // 内容穿透：列表从页签栏下滚动穿过
-      .barBackgroundStyle({ maskColor: $r('app.color.page_background') }) // 页签栏下渐隐遮罩
-      .onTabBarClick(() => {
-        this.popCurrentTabLabel();
-      })
-      .backgroundColor($r('app.color.page_background'))
-      .scrollable(false)
-      .onChange((index) => {
-        this.titleName = index === 0 ? '首页' : '用户中心'
-        this.currentIndex = index
-      })
-      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
     }
     .backgroundColor($r('app.color.page_background'))
     .title(this.titleName, {
@@ -682,6 +559,162 @@ export default struct HomePage {
       this.openLinkContext.moveAbilityToBackground(); // 首页返回：退回桌面（应用移至后台）
       return true;
     })
+  }
+
+  // 课程/用户中心两个 TabContent：悬浮页签与退化分支共用，保证内容只有一份
+  @Builder
+  HdsTabContents() {
+    TabContent() {
+      Refresh({ refreshing: $$this.isClassListRefreshing }) {
+        List({ space: 0 }) {
+          ListItem() {
+            Search({ placeholder: '搜索课程...' })
+              .height(44).borderRadius(20)
+              .backgroundColor($r('sys.color.ohos_id_color_component_normal'))
+              .placeholderColor($r('sys.color.ohos_id_color_text_secondary'))
+              .geometryTransition('SEARCH_ONE_SHOT_DEMO_TRANSITION_ID', { follow: true })
+              .shadow({ radius: 6, color: '#00000020', offsetX: 0, offsetY: 2 })
+              .onTouch((event: TouchEvent) => { if (event.type === TouchType.Up) this.showSearchPage(); })
+          }.width('100%').padding({ left: 16, right: 16, top: 56, bottom: 12 }) // STACK 标题栏为悬浮式，56 为其让位
+
+          if (this.cloneSessionCookies !== '') {
+            ListItem() {
+              Row() {
+                Image($r('app.media.person_2'))
+                  .width(18).height(18)
+                  .fillColor($r('app.color.selected'))
+                Column() {
+                  Text(`当前克隆登录用户：${this.cloneSessionName}`)
+                    .fontSize(14).fontWeight(FontWeight.Medium)
+                    .fontColor($r('app.color.primary_text'))
+                    .maxLines(1)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  Text(this.cloneSessionPhone)
+                    .fontSize(12)
+                    .fontColor($r('app.color.secondary_text'))
+                }
+                .layoutWeight(1).alignItems(HorizontalAlign.Start).margin({ left: 8 })
+                Text('退出克隆')
+                  .fontSize(14)
+                  .fontColor($r('app.color.selected'))
+                  .padding({ left: 12, right: 4, top: 10, bottom: 10 })
+                  .onClick(() => { this.exitCloneSession() })
+              }
+              .width('100%').padding({ left: 16, right: 12, top: 10, bottom: 10 })
+              .backgroundColor($r('app.color.card_background'))
+              .border({ width: { left: 3 }, color: { left: $r('app.color.selected') } })
+              .borderRadius(8).margin({ bottom: 8 })
+            }.width('100%').padding({ left: 16, right: 16, bottom: 8 })
+          }
+
+          ForEach(this.classList, (classInfo: ClassInfo, index: number) => {
+            ListItem() { ClassListItem({ classInfo: classInfo }) }.width('100%')
+            .onClick(() => { this.pageInfos.pushPath({ name: 'ActivityListPage', param: classInfo }); })
+          }, (classInfo: ClassInfo) => classInfo.id)
+        }
+        .divider({ strokeWidth: 0.5, color: $r('sys.color.comp_divider'), startMargin: 72, endMargin: 16 })
+        .width('100%').height('100%').scrollBar(BarState.Off) // 高度占满:课程未加载/数量过少时列表不收缩居中,搜索框保持在悬浮标题栏下方
+        .padding({ bottom: 64 }) // barOverlap 内容穿透：末项不被页签栏遮挡
+      }
+      .width('100%').height('100%')
+      .onRefreshing(async () => { await this.loadClassList(); }) // 仅下滑刷新：下拉触发课程列表重新拉取
+    }
+    .height('100%').width('100%')
+    .tabBar($r('app.string.class_list'))
+    .onAppear(async () => {
+      await this.loadClassList();
+    })
+
+    TabContent() {
+      Column() {
+        UserInfoComponent({
+          hostName: this.userHostName,
+          hostPhone: this.userHostPhone,
+          url: this.userUrl,
+          QRvalue: this.userQRValue,
+          onLogout: () => { this.showLogoutDialog() }
+        })
+          .margin({ top: 56 }) // STACK 标题栏为悬浮式，56 为其让位
+
+        Row().height(10).width('100%').backgroundColor($r('app.color.page_background'))
+
+        Column() {
+          this.SectionHeader('其他用户', this.otherUserList.length, 0, true)
+          if (this.expandedSection === 0 && this.otherUserList.length > 0) {
+            Column() {
+              List({ space: 0 }) {
+                ForEach(this.otherUserList, (item: UserDataAndId, index) => {
+                  ListItem() {
+                    OtherUserItem({
+                      userData: item, otherUserList: this.otherUserList, index: index,
+                      onCloneLogin: () => { this.enterCloneSession() }
+                    })
+                  }.width('100%')
+                }, (item: UserDataAndId) => item.id.toString())
+              }
+              .divider({ strokeWidth: 0.5, color: $r('sys.color.comp_divider'), startMargin: 72, endMargin: 16 })
+              .scrollBar(BarState.Off)
+              .constraintSize({ maxHeight: 360 })
+            }
+            .transition(TransitionEffect.OPACITY
+              .combine(TransitionEffect.translate({ y: -10 }))
+              .animation({ duration: 400, curve: curves.interpolatingSpring(0, 1, 280, 26) }))
+          }
+        }
+        .backgroundColor($r('app.color.card_background'))
+
+        Row().height(10).width('100%').backgroundColor($r('app.color.page_background'))
+        Column() {
+          this.ActionItem($r('app.media.map_badge_local'), '管理收藏的位置', () => {
+            this.locationsSheetVisible = true
+          })
+          this.ActionItem($r('app.media.github'), '反馈问题', () => {
+            this.openLinkContext.openLink('https://github.com/ASCII-58/chaoxingsignfaker-for-harmony-OS-NEXT/issues/new')
+              .catch((e: BusinessError<void>) => { hilog.error(0x0000, 'Link', `${e.code}`); });
+          })
+          this.ActionItem($r('app.media.envelope'), '联系我们', () => {
+            let want: Want = { action: 'ohos.want.action.viewData', uri: 'mailto:xyxy1029@petalmail.com' };
+            this.openLinkContext.startAbility(want)
+              .catch((e: BusinessError) => { hilog.error(0x0000, 'Mail', `${e.code}`); });
+          })
+        }
+        .backgroundColor($r('app.color.card_background'))
+        .bindSheet($$this.locationsSheetVisible, this.LocationsSheetBuilder, {
+          height: 'auto', detents: [SheetSize.MEDIUM, SheetSize.LARGE],
+          backgroundColor: $r('sys.color.ohos_id_color_sub_background')
+        })
+
+        Row().height(10).width('100%').backgroundColor($r('app.color.page_background'))
+
+        if (this.installInfo !== '') {
+          Column() {
+            Row() {
+              Text('使用时长')
+                .fontSize(16)
+                .fontColor($r('sys.color.ohos_id_color_text_primary'))
+              Blank()
+              Text(this.installInfo)
+                .fontSize(14)
+                .fontColor($r('sys.color.ohos_id_color_text_secondary'))
+            }
+            .width('100%').padding(12)
+          }
+          .width('100%')
+          .backgroundColor($r('app.color.card_background'))
+          .borderRadius(16)
+          .padding({ left: 4, right: 4 })
+        }
+
+        Row().height(64).width('100%').backgroundColor($r('app.color.page_background')) // barOverlap 避让页签栏
+      }
+      .width('100%').height('100%')
+      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+      .bindSheet($$this.loginSheetVisible, this.loginSheetContent, {
+        height: 'auto', detents: [SheetSize.MEDIUM, SheetSize.LARGE],
+        backgroundColor: $r('sys.color.ohos_id_color_sub_background')
+      })
+    }
+    .tabBar($r('app.string.user'))
   }
 
   /**
