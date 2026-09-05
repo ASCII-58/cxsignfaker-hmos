@@ -6,6 +6,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { DatabaseManager } from '../utils/DataBase';
 import { MsCaptchaDetector } from '../utils/detector/MsCaptchaDetector';
+import { CaptchaComponent, CaptchaUserParam } from './Captcha';
 
 const ONNX_TEST_TAG = 'OnnxTest';
 
@@ -24,6 +25,10 @@ export struct DebugPage {
   @State onnxResult: string = '';
   @State onnxRunning: boolean = false;
   @Consume('pathInfos') pathInfos: NavPathStack;
+  // 验证码弹窗演示（全本地模拟，不访问网络）
+  @State captchaDemoShow: boolean = false;
+  @State demoSession: number = 1;
+  @State demoLog: string = '尚未触发回调';
 
   async aboutToAppear() {
     await this.loadInfo();
@@ -161,6 +166,65 @@ export struct DebugPage {
     } finally {
       source.release();
     }
+  }
+
+  /** 演示用验证码用户上下文：无真实 cookie，配合 demoMode 全程本地模拟 */
+  private demoUser(): CaptchaUserParam {
+    return {
+      cookies: 'demo',
+      uname: `演示用户${this.demoSession}`,
+      refererParams: {
+        courseId: 'demo',
+        classId: 'demo',
+        activePrimaryId: 'demo',
+        uid: 'demo'
+      }
+    };
+  }
+
+  @Builder
+  CaptchaDemoSheetBuilder() {
+    Column({ space: 12 }) {
+      CaptchaComponent({
+        demoMode: true,
+        captchaUser: this.demoUser(),
+        captchaSession: this.demoSession,
+        onValidated: (validate: string) => {
+          this.demoLog = `onValidated(validate=${validate})`
+        },
+        onSkip: () => {
+          this.demoLog = 'onSkip() 已跳过'
+        }
+      })
+
+      Row({ space: 12 }) {
+        Button('模拟下一位用户')
+          .layoutWeight(1)
+          .fontSize(14)
+          .onClick(() => {
+            this.demoSession++
+            this.demoLog = `已切换到 ${this.demoUser().uname}（会话 ${this.demoSession}）`
+          })
+        Button('重置演示')
+          .layoutWeight(1)
+          .fontSize(14)
+          .backgroundColor($r('sys.color.ohos_id_color_button_normal'))
+          .fontColor($r('sys.color.ohos_id_color_text_primary'))
+          .onClick(() => {
+            this.demoSession = 1
+            this.demoLog = '已重置为演示用户1'
+          })
+      }
+      .width('100%')
+      .padding({ left: 16, right: 16, bottom: 12 })
+
+      Text('说明：演示模式全程本地模拟，不访问网络；奇数会话演示模型校验成功，偶数会话演示失败回退手动。')
+        .fontSize(11)
+        .fontColor($r('sys.color.ohos_id_color_text_tertiary'))
+        .width('100%')
+        .padding({ left: 16, right: 16 })
+    }
+    .width('100%')
   }
 
   build() {
@@ -326,6 +390,37 @@ export struct DebugPage {
             .borderRadius(16)
           }
         }
+
+        ListItem() {
+          Column() {
+            Text('验证码弹窗演示')
+              .fontSize(14)
+              .fontColor($r('sys.color.ohos_id_color_text_secondary'))
+              .width('100%')
+              .margin({ bottom: 8, left: 4 })
+
+            Column() {
+              Row() {
+                Text('多用户弹层复用 + 模型状态文案（本地模拟）')
+                  .fontSize(16)
+                  .fontColor($r('sys.color.ohos_id_color_text_primary'))
+                Blank()
+                Button('打开演示弹窗')
+                  .fontSize(14)
+                  .height(36)
+                  .onClick(() => { this.captchaDemoShow = true })
+              }
+              .width('100%').padding(12)
+
+              Text(this.demoLog)
+                .fontSize(12)
+                .fontColor($r('sys.color.ohos_id_color_text_tertiary'))
+                .width('100%').padding({ left: 12, right: 12, bottom: 12 })
+            }
+            .backgroundColor($r('sys.color.ohos_id_color_list_card_bg'))
+            .borderRadius(16)
+          }
+        }
       }
       .width('100%').layoutWeight(1)
       .padding({ left: 16, right: 16 })
@@ -333,5 +428,10 @@ export struct DebugPage {
     .width('100%').height('100%')
     .backgroundColor($r('sys.color.ohos_id_color_sub_background'))
     .borderRadius({ topLeft: 20, topRight: 20 })
+    .bindSheet($$this.captchaDemoShow, this.CaptchaDemoSheetBuilder, {
+      title: { title: '验证码弹窗演示' },
+      backgroundColor: $r('sys.color.ohos_id_color_dialog_bg'),
+      detents: [SheetSize.MEDIUM, SheetSize.LARGE]
+    })
   }
 }
