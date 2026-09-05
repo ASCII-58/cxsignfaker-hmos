@@ -6,7 +6,7 @@ import { scanBarcode, scanCore } from '@kit.ScanKit';
 import { curves, UIContext } from '@kit.ArkUI';
 import { hdsEffect, HdsTabs, HdsTabsController, HdsTabsBackgroundStyle, HdsTabsFloatingStyle } from '@kit.UIDesignKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { BusinessError } from '@kit.BasicServicesKit';
+import { BusinessError, deviceInfo } from '@kit.BasicServicesKit';
 import promptAction from '@ohos.promptAction';
 import { loginByCommon, loginByURL } from '../Component/LoginCom';
 import { OtherUserItem } from '../Component/OtherUserCom';
@@ -355,9 +355,10 @@ export default struct HomePage {
   private pageInfos: NavPathStack = new NavPathStack();
   private classListLoading: boolean = false;
   private controller: HdsTabsController = new HdsTabsController();
-  // 悬浮页签（barFloatingStyle）为 6.1.0(23) 新特性：canIUse 运行时判断，
-  // 低版本系统自动退化为沉浸式页签（build 内两条分支共用 HdsTabContents 构建器）
-  private readonly supportFloatingBar: boolean = canIUse('apis: 23');
+  // 悬浮页签（barFloatingStyle）为 6.1.0(23) 新特性：按系统 API 版本运行时判断，
+  // 低版本系统自动退化为沉浸式页签（build 内两条分支共用 HdsTabContents 构建器）。
+  // 注意：不能用 canIUse('apis: 23')——实测 6.1(API 24) 真机返回 false，与文档不符
+  private readonly supportFloatingBar: boolean = deviceInfo.sdkApiVersion >= 23;
   private readonly tabBarMask: HdsTabsBackgroundStyle = { maskColor: $r('app.color.page_background') };
   private readonly floatingBarStyle: HdsTabsFloatingStyle = { gradientMask: this.tabBarMask };
   private openLinkContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
