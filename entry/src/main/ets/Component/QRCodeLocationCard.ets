@@ -17,6 +17,8 @@ export interface QRCodePosition {
 @Component
 export struct QRCodeLocation {
   @Prop ActivityId: string;
+  /** 服务端 ifopenAddress==1 时该签到要求位置，未选点会被 SignerPage 门控 */
+  @Prop positionRequired: boolean = false;
   onPositionChange?: (position: QRCodePosition) => void
   @State DestinationLocationName: string = '获取中...'
   @State Position: QRCodePosition | null = null
@@ -62,9 +64,10 @@ export struct QRCodeLocation {
             .fontColor($r('sys.color.ohos_id_color_text_tertiary'))
         }.alignItems(HorizontalAlign.Start).width('100%').margin({ top: 8 })
       } else {
-        Text('该签到可不选位置，选点后将随签到提交')
+        Text(this.positionRequired ? '该签到要求位置，请先选点后签到' : '该签到可不选位置，选点后将随签到提交')
           .fontSize(14)
-          .fontColor($r('sys.color.ohos_id_color_text_secondary'))
+          .fontColor(this.positionRequired ? $r('sys.color.ohos_id_color_warning') :
+          $r('sys.color.ohos_id_color_text_secondary'))
           .margin({ top: 16, bottom: 4 })
           .width('100%')
       }
