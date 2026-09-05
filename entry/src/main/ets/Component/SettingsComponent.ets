@@ -22,6 +22,8 @@ const KEY_EXPORT_DB = 12;
 const KEY_IMPORT_DB = 13;
 const KEY_CHANGELOG = 14;
 const KEY_GITHUB = 15;
+// 按压态最短保持时长：保证按下动画(约300ms)播完后才开始回弹
+const MIN_PRESS_HOLD_MS = 320;
 
 // 应用内更新日志数据结构（来源：rawfile/changelog.json，更新日志只需编辑该文件）
 interface ChangelogSection {
@@ -57,6 +59,9 @@ export struct SettingsComponent {
   @State thumbStretch: number = 0;
   // 通用按压 Q 弹：当前按下的按钮标识，-1 表示无
   @State pressedKey: number = -1;
+  // 本次按压的开始时间与代次：代次用于丢弃快速连按时上一次的恢复定时器
+  private pressStartAt: number = 0;
+  private pressToken: number = 0;
   private panActive: boolean = false;
   private dragStartThumbX: number = 0;
   private touchStartX: number = 0;
@@ -383,7 +388,7 @@ export struct SettingsComponent {
 
   @Builder
   Chevron() {
-    Image($r('app.media.arrow_right'))
+    Image($r('app.media.arrow_right')) .draggable(false)
       .width(14).height(14)
       .fillColor($r('app.color.icon'))
   }
@@ -401,15 +406,15 @@ export struct SettingsComponent {
   }
 
   private snapThumb(index: number) {
-    // 低阻尼弹簧：滑块落位后带一次回弹(Q弹)
-    this.getUIContext().animateTo({ curve: curves.springMotion(0.3, 0.55) }, () => {
+    // 增大阻尼：滑块落位只带轻微回弹，不出现明显震荡
+    this.getUIContext().animateTo({ curve: curves.springMotion(0.3, 0.75) }, () => {
       this.thumbX = index * this.getSegWidth();
     });
   }
 
   /** 按压果冻效果：滑块横向微胀、纵向压缩，松手弹回 */
   private animateThumbPress(pressed: boolean) {
-    this.getUIContext().animateTo({ curve: curves.springMotion(0.3, 0.5) }, () => {
+    this.getUIContext().animateTo({ curve: curves.springMotion(0.3, 0.75) }, () => {
       this.thumbPressed = pressed;
     });
   }
@@ -418,30 +423,35 @@ export struct SettingsComponent {
    *  响应式弹簧会在 overlapDuration 内衔接上一次动画，跟手不抖不跳 */
   private applyDragJelly(velocityX: number) {
     const stretch = Math.min(0.15, Math.abs(velocityX) / 9000);
-    this.getUIContext().animateTo({ curve: curves.responsiveSpringMotion(0.25, 0.6) }, () => {
+    this.getUIContext().animateTo({ curve: curves.responsiveSpringMotion(0.25, 0.75) }, () => {
       this.thumbStretch = stretch;
     });
   }
 
-  /** 离手收尾：形变量归零，springMotion(低阻尼)从跟手动画继承初速度，Q 弹回正 */
+  /** 离手收尾：形变量归零，springMotion 从跟手动画继承初速度，平滑回正 */
   private releaseDragJelly() {
-    this.getUIContext().animateTo({ curve: curves.springMotion(0.3, 0.55) }, () => {
+    this.getUIContext().animateTo({ curve: curves.springMotion(0.3, 0.75) }, () => {
       this.thumbStretch = 0;
     });
   }
 
-  /** 通用按压 Q 弹触控：按下记 pressedKey，离手后稍作停顿再弹回，
-   *  回弹由 interpolatingSpring(0,1,328,28) 低阻尼过冲完成(与首页图钉按钮同参数) */
+  /** 通用按压 Q 弹触控：按下记 pressedKey，离手后最短保持 MIN_PRESS_HOLD_MS 再弹回，
+   *  保证按下动画完整播完，不会一按完立刻恢复；回弹由 interpolatingSpring 完成，
+   *  阻尼增大后只带一次轻微过冲(与首页图钉按钮同刚度) */
   private pressTouchHandler(key: number): (event: TouchEvent) => void {
     return (event: TouchEvent) => {
       if (event.type === TouchType.Down) {
         this.pressedKey = key;
+        this.pressStartAt = Date.now();
+        this.pressToken++;
       } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+        const token = this.pressToken;
+        const remain = Math.max(0, MIN_PRESS_HOLD_MS - (Date.now() - this.pressStartAt));
         setTimeout(() => {
-          if (this.pressedKey === key) {
+          if (this.pressedKey === key && this.pressToken === token) {
             this.pressedKey = -1;
           }
-        }, 150);
+        }, remain);
       }
     };
   }
@@ -501,7 +511,7 @@ export struct SettingsComponent {
   /** SVG 动画指示：非选中图标旋转±90°并缩放淡出，选中图标从对应方向旋入 */
   @Builder
   ThemeModeIcon(idx: number) {
-    Image(COLOR_MODE_ICONS[idx])
+    Image(COLOR_MODE_ICONS[idx]) .draggable(false)
       .width(24).height(24)
       .fillColor(this.colorModeIndex === idx
         ? $r('app.color.selected') : $r('app.color.secondary_text'))
@@ -514,7 +524,7 @@ export struct SettingsComponent {
         z: 1,
         angle: this.colorModeIndex === idx ? 0 : (idx < this.colorModeIndex ? -90 : 90)
       })
-      .animation({ curve: curves.springMotion(0.3, 0.6) })
+      .animation({ curve: curves.springMotion(0.3, 0.75) })
   }
 
   build() {
@@ -591,7 +601,7 @@ export struct SettingsComponent {
                         x: this.pressedKey === idx ? 0.92 : 1,
                         y: this.pressedKey === idx ? 0.92 : 1
                       })
-                      .animation({ duration: 300, curve: curves.interpolatingSpring(0, 1, 328, 28) })
+                      .animation({ duration: 300, curve: curves.interpolatingSpring(0, 1, 328, 38) })
                       .onTouch(this.pressTouchHandler(idx))
                       .onClick(() => {
                         this.commitIndex(idx);
@@ -687,7 +697,7 @@ export struct SettingsComponent {
                       x: this.pressedKey === KEY_MODEL_TEST ? 0.95 : 1,
                       y: this.pressedKey === KEY_MODEL_TEST ? 0.95 : 1
                     })
-                    .animation({ duration: 300, curve: curves.interpolatingSpring(0, 1, 328, 28) })
+                    .animation({ duration: 300, curve: curves.interpolatingSpring(0, 1, 328, 38) })
                     .onTouch(this.pressTouchHandler(KEY_MODEL_TEST))
                     .onClick(() => {
                       this.runModelTest()
@@ -734,7 +744,7 @@ export struct SettingsComponent {
                 x: this.pressedKey === KEY_CLEAR_CACHE ? 0.97 : 1,
                 y: this.pressedKey === KEY_CLEAR_CACHE ? 0.97 : 1
               })
-              .animation({ duration: 300, curve: curves.interpolatingSpring(0, 1, 328, 28) })
+              .animation({ duration: 300, curve: curves.interpolatingSpring(0, 1, 328, 38) })
               .onTouch(this.pressTouchHandler(KEY_CLEAR_CACHE))
               .onClick(() => {
                 this.confirmClearCache()
@@ -751,7 +761,7 @@ export struct SettingsComponent {
                 x: this.pressedKey === KEY_EXPORT_DB ? 0.97 : 1,
                 y: this.pressedKey === KEY_EXPORT_DB ? 0.97 : 1
               })
-              .animation({ duration: 300, curve: curves.interpolatingSpring(0, 1, 328, 28) })
+              .animation({ duration: 300, curve: curves.interpolatingSpring(0, 1, 328, 38) })
               .onTouch(this.pressTouchHandler(KEY_EXPORT_DB))
               .onClick(() => {
                 this.exportDatabase()
@@ -768,7 +778,7 @@ export struct SettingsComponent {
                 x: this.pressedKey === KEY_IMPORT_DB ? 0.97 : 1,
                 y: this.pressedKey === KEY_IMPORT_DB ? 0.97 : 1
               })
-              .animation({ duration: 300, curve: curves.interpolatingSpring(0, 1, 328, 28) })
+              .animation({ duration: 300, curve: curves.interpolatingSpring(0, 1, 328, 38) })
               .onTouch(this.pressTouchHandler(KEY_IMPORT_DB))
               .onClick(() => {
                 this.importDatabase()
@@ -785,7 +795,7 @@ export struct SettingsComponent {
                 x: this.pressedKey === KEY_CHANGELOG ? 0.97 : 1,
                 y: this.pressedKey === KEY_CHANGELOG ? 0.97 : 1
               })
-              .animation({ duration: 300, curve: curves.interpolatingSpring(0, 1, 328, 28) })
+              .animation({ duration: 300, curve: curves.interpolatingSpring(0, 1, 328, 38) })
               .onTouch(this.pressTouchHandler(KEY_CHANGELOG))
               .onClick(() => {
                 this.showChangelog()
@@ -794,7 +804,7 @@ export struct SettingsComponent {
               this.SettingsDivider()
 
               Row() {
-                Image($r('app.media.github'))
+                Image($r('app.media.github')) .draggable(false)
                   .width(20).height(20).margin({ right: 10 })
                   .fillColor($r('app.color.primary_text'))
                 this.SettingTexts('项目地址', '在 GitHub 上查看源码')
@@ -805,7 +815,7 @@ export struct SettingsComponent {
                 x: this.pressedKey === KEY_GITHUB ? 0.97 : 1,
                 y: this.pressedKey === KEY_GITHUB ? 0.97 : 1
               })
-              .animation({ duration: 300, curve: curves.interpolatingSpring(0, 1, 328, 28) })
+              .animation({ duration: 300, curve: curves.interpolatingSpring(0, 1, 328, 38) })
               .onTouch(this.pressTouchHandler(KEY_GITHUB))
               .onClick(() => {
                 this.openUrl('https://github.com/ASCII-58/chaoxingsignfacker')

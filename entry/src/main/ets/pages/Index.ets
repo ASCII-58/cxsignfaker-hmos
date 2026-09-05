@@ -72,7 +72,7 @@ struct ClassListItem {
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
       .margin({ left: 12 })
-      Image($r('sys.media.ohos_ic_public_arrow_right'))
+      Image($r('sys.media.ohos_ic_public_arrow_right')) .draggable(false)
         .width(14).height(14)
         .fillColor($r('app.color.secondary_text'))
     }
@@ -98,7 +98,7 @@ struct ClassIcon {
 
   build() {
     Column() {
-      Image(this.ImageData)
+      Image(this.ImageData) .draggable(false)
         .width(44).height(44)
         .borderColor($r('app.color.class_icon_border'))
         .borderWidth(2).borderRadius(12)
@@ -203,7 +203,7 @@ struct UserInfoComponent {
 
   build() {
     Row() {
-      Image(this.HostImageData)
+      Image(this.HostImageData) .draggable(false)
         .width(60).height(60).borderRadius(30)
         .objectFit(ImageFit.Cover).alt($r('app.media.foreground'))
         .onAppear(async () => {
@@ -229,7 +229,7 @@ struct UserInfoComponent {
       .layoutWeight(1).alignItems(HorizontalAlign.Start).margin({ left: 12 })
       Row({ space: 4 }) {
         Column() {
-          Image($r('app.media.settings')).width(22).height(22)
+          Image($r('app.media.settings')).width(22).height(22) .draggable(false)
             .fillColor($r('app.color.icon'))
         }
         .width(40).height(40).borderRadius(20)
@@ -257,7 +257,7 @@ struct UserInfoComponent {
         })
 
         Column() {
-          Image($r('app.media.share')).width(22).height(22)
+          Image($r('app.media.share')).width(22).height(22) .draggable(false)
             .fillColor($r('app.color.icon'))
         }
         .width(40).height(40).borderRadius(20)
@@ -285,7 +285,7 @@ struct UserInfoComponent {
         })
 
         Column() {
-          Image($r('app.media.ic_public_quit')).width(22).height(22)
+          Image($r('app.media.ic_public_quit')).width(22).height(22) .draggable(false)
             .fillColor($r('app.color.unsignable'))
         }
         .width(40).height(40).borderRadius(20)
@@ -437,10 +437,10 @@ export default struct HomePage {
 
   @Builder ActionItem(icon: Resource, label: string, onClickAction: () => void, iconColor?: ResourceColor) {
     Row() {
-      Image(icon).width(24).height(24).fillColor(iconColor ?? $r('app.color.icon'))
+      Image(icon).width(24).height(24).fillColor(iconColor ?? $r('app.color.icon')) .draggable(false)
       Text(label).fontSize(16).fontColor($r('app.color.primary_text')).margin({ left: 12 })
       Blank()
-      Image($r('sys.media.ohos_ic_public_arrow_right')).width(14).height(14)
+      Image($r('sys.media.ohos_ic_public_arrow_right')).width(14).height(14) .draggable(false)
         .fillColor($r('app.color.secondary_text'))
     }
     .width('100%').height(52).padding({ left: 16, right: 16 })
@@ -459,7 +459,7 @@ export default struct HomePage {
 
   @Builder SectionHeader(title: string, count: number, sectionIndex: number, showAdd: boolean = false) {
     Row() {
-      Image($r('app.media.arrow_right'))
+      Image($r('app.media.arrow_right')) .draggable(false)
         .width(14).height(14)
         .fillColor($r('app.color.secondary_text'))
         .rotate({ angle: this.expandedSection === sectionIndex ? 90 : 0 })
@@ -477,7 +477,7 @@ export default struct HomePage {
       }
       if (showAdd) {
         Column() {
-          Image($r('app.media.ic_contacts_addcontact'))
+          Image($r('app.media.ic_contacts_addcontact')) .draggable(false)
             .width(18).height(18)
             .fillColor($r('app.color.text_on_primary'))
         }

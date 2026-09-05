@@ -141,7 +141,7 @@ export struct loginByCommon {
               .hitTestBehavior(HitTestMode.None)
           }
 
-          Image(this.isPasswordVisible ? $r('app.media.eye') : $r('app.media.eyeclose'))
+          Image(this.isPasswordVisible ? $r('app.media.eye') : $r('app.media.eyeclose')) .draggable(false)
             .width(24)
             .height(24)
             .margin({ right: 12 })

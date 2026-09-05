@@ -134,7 +134,7 @@ export struct OtherUserItem {
 
   build() {
     Row() {
-      Image(this.userImage)
+      Image(this.userImage) .draggable(false)
         .width(44).height(44)
         .borderRadius(10)
         .alt($r('app.media.foreground'))
@@ -154,7 +154,7 @@ export struct OtherUserItem {
       .margin({ left: 12 })
 
       Column() {
-        Image($r('app.media.person_2'))
+        Image($r('app.media.person_2')) .draggable(false)
           .width(18).height(18)
           .fillColor($r('app.color.selected'))
       }
@@ -168,7 +168,7 @@ export struct OtherUserItem {
       .onClick(() => { this.showCloneDialog() })
 
       Column() {
-        Image($r('app.media.share'))
+        Image($r('app.media.share')) .draggable(false)
           .width(18).height(18)
           .fillColor($r('app.color.icon'))
       }
@@ -182,7 +182,7 @@ export struct OtherUserItem {
       .onClick(() => { this.shareDialogVisible = true })
 
       Column() {
-        Image($r('app.media.ic_public_delete'))
+        Image($r('app.media.ic_public_delete')) .draggable(false)
           .width(18).height(18)
           .fillColor($r('app.color.unsignable'))
       }

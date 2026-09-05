@@ -338,11 +338,11 @@ export struct CaptchaComponent {
         .justifyContent(FlexAlign.Center)
       } else {
         Stack({ alignContent: Alignment.Start }) {
-          Image(this.demoMode ? $r('app.media.captcha_demo_shade') : this.info.imageVerificationVo.shadeImage)
+          Image(this.demoMode ? $r('app.media.captcha_demo_shade') : this.info.imageVerificationVo.shadeImage) .draggable(false)
             .width('100%')
             .height('100%')
             .objectFit(ImageFit.Fill)
-          Image(this.demoMode ? $r('app.media.captcha_demo_cutout') : this.info.imageVerificationVo.cutoutImage)
+          Image(this.demoMode ? $r('app.media.captcha_demo_cutout') : this.info.imageVerificationVo.cutoutImage) .draggable(false)
             .position({
               x: this.sliderValue / this.sliderMax * (this.containerWidth - 56)
             })
