@@ -549,8 +549,8 @@ export default struct HomePage {
     .backgroundColor($r('app.color.page_background'))
     .titleBar({
       content: {
-        // 标题+搜索框走 stackBuilder 自定义：搜索框带 geometryTransition，保留一镜到底转场动画
-        stackBuilder: () => { this.HomeTitle() }
+        // 还原为系统默认标题栏（官方示例同款 mainTitle 用法）；沉浸样式由后续自行实现
+        title: { mainTitle: this.titleName }
       },
       style: {
         scrollEffectOpts: { // 系统级无级渐变模糊：模糊量随列表滚动连续变化（6.0 起支持）
@@ -607,29 +607,6 @@ export default struct HomePage {
       this.userQRValue = `http://cdn.aquamarine5.fun/?phone=${hostUser.phone}&pwd=${encodeURIComponent(hostUser.pwd)}&name=${encodeURIComponent(HostUser.uname)}`
     } catch (e) { hilog.error(DOMAIN, TAG, `Error in initPageData: ${e.message}`); }
     await this.loadInstallInfo();
-  }
-
-  // 标题栏 stackBuilder：标题 + 搜索框。搜索框带 geometryTransition，
-  // 点击时与搜索页输入框做一镜到底转场；用户中心 Tab 不渲染搜索框
-  @Builder
-  HomeTitle() {
-    Row() {
-      Text(this.titleName)
-        .fontSize(24)
-        .fontWeight(FontWeight.Bold)
-        .fontColor($r('app.color.primary_text'))
-      if (this.currentIndex === 0) {
-        Search({ placeholder: '搜索课程...' })
-          .layoutWeight(1).height(40).margin({ left: 16 }).borderRadius(20)
-          .backgroundColor($r('sys.color.ohos_id_color_component_normal'))
-          .placeholderColor($r('sys.color.ohos_id_color_text_secondary'))
-          .geometryTransition('SEARCH_ONE_SHOT_DEMO_TRANSITION_ID', { follow: true })
-          .shadow({ radius: 6, color: '#00000020', offsetX: 0, offsetY: 2 })
-          .onTouch((event: TouchEvent) => { if (event.type === TouchType.Up) this.showSearchPage(); })
-      }
-    }
-    .width('100%').height('100%')
-    .padding({ top: this.statusBarHeight, left: 16, right: 16 }) // stackBuilder 从屏幕 y=0 起绘，需自行下沉到状态栏之下
   }
 
   // 课程/用户中心两个 TabContent：悬浮页签与退化分支共用，保证内容只有一份
@@ -879,12 +856,6 @@ export default struct HomePage {
 
   private async getHostUser(): Promise<UserDataAndId> {
     return await DatabaseManager.getInstance().getUserByPosition(1, true) as UserDataAndId
-  }
-
-  private showSearchPage(): void {
-    this.getUIContext().animateTo({
-      curve: curves.interpolatingSpring(0, 1, 342, 38)
-    }, () => { this.pageInfos.pushPath({ name: 'SearchCoursePage' }, false); })
   }
 
   private startScan(): void {
