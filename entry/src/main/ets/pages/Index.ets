@@ -360,11 +360,12 @@ export default struct HomePage {
   // 注意：不能用 canIUse('apis: 23')——实测 6.1(API 24) 真机返回 false，与文档不符
   private readonly supportFloatingBar: boolean = deviceInfo.sdkApiVersion >= 23;
   private readonly tabBarMask: HdsTabsBackgroundStyle = { maskColor: $r('app.color.page_background') };
-  // 应用市场同款沉浸悬浮页签：系统沉浸材质（毛玻璃）+ 标准悬浮间距 + 响应式栏宽；
-  // 勿配 gradientMask——不透明 maskColor 会把胶囊下方糊成实色，毁掉沉浸感
+  // 应用市场同款沉浸悬浮页签：系统沉浸材质（毛玻璃）+ 标准悬浮间距 + 响应式栏宽。
+  // 注意 gradientMask 必须显式置透明：默认值自带黑色渐变遮罩，会在胶囊下方糊出一条黑边
   private readonly floatingBarStyle: HdsTabsFloatingStyle = {
     barWidth: { smallWidth: 280, mediumWidth: 400, largeWidth: 560 },
     barBottomMargin: 28,
+    gradientMask: { maskColor: Color.Transparent },
     systemMaterialEffect: {
       materialType: hdsMaterial.MaterialType.IMMERSIVE,
       materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
