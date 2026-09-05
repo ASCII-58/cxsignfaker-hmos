@@ -86,12 +86,34 @@ export struct ActivityListPage {
   @State ActivityList: ActivityItem[] | null = null
   @State activityExt: string = ''
   @State isRefreshing: boolean = false
+  @StorageProp('cloneSessionCookies') cloneSessionCookies: string = ''
+  @StorageProp('cloneSessionName') cloneSessionName: string = ''
   private loadEpoch: number = 0 // 每次拉取递增：让 ForEach 生成新 key，强制重建条目
 
   build() {
     NavDestination() {
       if (this.ActivityList) {
         List({ space: 0, initialIndex: 0 }) {
+          if (this.cloneSessionCookies !== '') {
+            ListItem() {
+              Row() {
+                Image($r('app.media.person_2'))
+                  .width(18).height(18)
+                  .fillColor($r('app.color.selected'))
+                Text(`当前克隆登录用户：${this.cloneSessionName}`)
+                  .fontSize(13).fontWeight(FontWeight.Medium)
+                  .fontColor($r('app.color.primary_text'))
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .layoutWeight(1)
+                  .margin({ left: 8 })
+              }
+              .width('100%').padding({ left: 16, right: 16, top: 10, bottom: 10 })
+              .backgroundColor($r('app.color.card_background'))
+              .border({ width: { left: 3 }, color: { left: $r('app.color.selected') } })
+              .borderRadius(8).margin({ top: 8 })
+            }.width('100%').padding({ left: 16, right: 16 })
+          }
           ForEach(this.ActivityList, (Activity: ActivityItem, index: number) => {
             if (!(Activity.type != 2 && Activity.type != 74)) {
               ListItem() {
@@ -227,7 +249,10 @@ export struct ActivityListPage {
     this.isRefreshing = true
     try {
       const dbManager = DatabaseManager.getInstance()
-      const cookies = (await dbManager.getUserByPosition(1, true))?.cookies
+      // 克隆登录时活动属于克隆用户的课程，活动列表请求走克隆会话
+      const cookies = this.cloneSessionCookies !== ''
+        ? this.cloneSessionCookies
+        : (await dbManager.getUserByPosition(1, true))?.cookies
       if (!cookies) {
         throw new Error('用户登录信息错误')
       }

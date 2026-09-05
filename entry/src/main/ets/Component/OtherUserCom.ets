@@ -19,6 +19,7 @@ export struct OtherUserItem {
   @Prop userData: UserDataAndId;
   @Prop index: number;
   @Link otherUserList: UserDataAndId[]
+  onCloneLogin?: () => void
   @State userImage: image.PixelMap | null = null;
   @State userName: string = ''
   @State isLoaded: boolean = false;
@@ -88,6 +89,28 @@ export struct OtherUserItem {
     }).catch((error: BusinessError) => { console.error(`Share error: ${error?.message}`); });
   }
 
+  private showCloneDialog() {
+    AlertDialog.show({
+      title: '克隆登录',
+      message: `将以「${this.userName || this.userData.phone}」的身份克隆登录，浏览其课程并代签。\n克隆会话仅本次运行有效，可随时退出。`,
+      primaryButton: {
+        value: '取消',
+        action: () => {}
+      },
+      secondaryButton: {
+        value: '克隆登录',
+        action: () => {
+          AppStorage.setOrCreate('cloneSessionCookies', this.userData.cookies)
+          AppStorage.setOrCreate('cloneSessionName', this.userName || this.userData.phone)
+          AppStorage.setOrCreate('cloneSessionPhone', this.userData.phone)
+          if (this.onCloneLogin) {
+            this.onCloneLogin()
+          }
+        }
+      }
+    })
+  }
+
   private showDeleteDialog() {
     AlertDialog.show({
       title: '确认删除',
@@ -129,6 +152,20 @@ export struct OtherUserItem {
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
       .margin({ left: 12 })
+
+      Column() {
+        Image($r('app.media.person_2'))
+          .width(18).height(18)
+          .fillColor($r('app.color.selected'))
+      }
+      .width(32).height(32).borderRadius(16)
+      .justifyContent(FlexAlign.Center)
+      .scale({ x: this.iconPressed === 'clone' ? 0.85 : 1, y: this.iconPressed === 'clone' ? 0.85 : 1 })
+      .animation({ duration: 150, curve: Curve.EaseInOut })
+      .onTouch((event: TouchEvent) => {
+        this.iconPressed = event.type === TouchType.Down ? 'clone' : ''
+      })
+      .onClick(() => { this.showCloneDialog() })
 
       Column() {
         Image($r('app.media.share'))
