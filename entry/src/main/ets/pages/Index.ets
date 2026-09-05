@@ -509,6 +509,7 @@ export default struct HomePage {
         .animationDuration(350) // 平滑内容过渡
         .barOverlap(true) // 内容穿透：列表从悬浮胶囊下方滚动穿过
         .barFloatingStyle(this.floatingBarStyle) // 6.1(23) 悬浮页签：gradientMask 保留底部渐隐遮罩
+        .overlay(this.TitleGradientBlur(), { align: Alignment.Top })
         .onTabBarClick(() => {
           this.popCurrentTabLabel();
         })
@@ -528,6 +529,7 @@ export default struct HomePage {
         .animationDuration(350) // 平滑内容过渡
         .barOverlap(true) // 内容穿透：列表从页签栏下滚动穿过
         .barBackgroundStyle(this.tabBarMask) // 页签栏下渐隐遮罩
+        .overlay(this.TitleGradientBlur(), { align: Alignment.Top })
         .onTabBarClick(() => {
           this.popCurrentTabLabel();
         })
@@ -541,13 +543,7 @@ export default struct HomePage {
       }
     }
     .backgroundColor($r('app.color.page_background'))
-    .title(this.titleName, {
-      backgroundBlurStyle: BlurStyle.BACKGROUND_THIN, barStyle: BarStyle.STACK,
-      backgroundBlurStyleOptions: {
-        adaptiveColor: AdaptiveColor.DEFAULT,
-        blurOptions: { grayscale: [8, 8] }, scale: 1
-      }
-    })
+    .title(this.titleName, { barStyle: BarStyle.STACK }) // 标题栏背景交给 TitleGradientBlur 渐进模糊，勿再加硬边 backgroundBlurStyle
     .hideBackButton(true).backgroundImageSize({ width: '100%', height: '100%' })
     .borderRadius($r('sys.float.corner_radius_level8')).height('100%').width('100%')
     .onReady((ctx: NavDestinationContext) => { this.pageInfos = ctx.pathStack; })
@@ -574,6 +570,25 @@ export default struct HomePage {
       this.openLinkContext.moveAbilityToBackground(); // 首页返回：退回桌面（应用移至后台）
       return true;
     })
+  }
+
+  // 顶部渐变模糊：5 段横条模糊半径自上而下递减，叠出渐进模糊（应用市场顶栏同款观感），
+  // 替代 STACK 标题栏原生的硬边模糊横带；HitTestMode.None 让触摸穿透到下方列表
+  @Builder
+  TitleGradientBlur() {
+    Stack() {
+      Column() {
+        Column().width('100%').height(16).backgroundEffect({ radius: 30, color: Color.Transparent })
+        Column().width('100%').height(16).backgroundEffect({ radius: 20, color: Color.Transparent })
+        Column().width('100%').height(16).backgroundEffect({ radius: 12, color: Color.Transparent })
+        Column().width('100%').height(16).backgroundEffect({ radius: 6, color: Color.Transparent })
+        Column().width('100%').height(16).backgroundEffect({ radius: 2, color: Color.Transparent })
+      }.width('100%')
+      Column().width('100%').height(80)
+        .linearGradient({ angle: 180, colors: [['#2E000000', 0], ['#0F000000', 0.55], ['#00000000', 1]] })
+    }
+    .width('100%')
+    .hitTestBehavior(HitTestMode.None)
   }
 
   // 课程/用户中心两个 TabContent：悬浮页签与退化分支共用，保证内容只有一份
