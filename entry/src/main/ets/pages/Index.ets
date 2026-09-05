@@ -4,7 +4,7 @@ import image from '@ohos.multimedia.image';
 import { ClassInfo, CourseAndActivity } from '../utils/classFun';
 import { scanBarcode, scanCore } from '@kit.ScanKit';
 import { curves, UIContext } from '@kit.ArkUI';
-import { hdsEffect, hdsMaterial, HdsNavDestination, HdsTabs, HdsTabsController, HdsTabsBackgroundStyle, HdsTabsFloatingStyle, ScrollEffectType, TextStyleMode } from '@kit.UIDesignKit';
+import { hdsEffect, hdsMaterial, HdsNavDestination, HdsTabs, HdsTabsController, HdsTabsBackgroundStyle, HdsTabsFloatingStyle, ScrollEffectType } from '@kit.UIDesignKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BusinessError, deviceInfo } from '@kit.BasicServicesKit';
 import promptAction from '@ohos.promptAction';
@@ -360,6 +360,7 @@ export default struct HomePage {
   // 注意：不能用 canIUse('apis: 23')——实测 6.1(API 24) 真机返回 false，与文档不符
   private readonly supportFloatingBar: boolean = deviceInfo.sdkApiVersion >= 23;
   @StorageLink('naviIndicatorHeight') naviIndicatorHeight: number = 0; // EntryAbility 实测的系统手势条高度
+  @StorageLink('statusBarHeight') statusBarHeight: number = 0; // EntryAbility 实测的状态栏高度
   private listScroller: Scroller = new Scroller(); // 标题栏渐变模糊的滚动绑定源
   private readonly tabBarMask: HdsTabsBackgroundStyle = { maskColor: $r('app.color.page_background') };
   // 应用市场同款沉浸悬浮页签：系统沉浸材质（毛玻璃）+ 响应式栏宽。
@@ -546,17 +547,8 @@ export default struct HomePage {
     .backgroundColor($r('app.color.page_background'))
     .titleBar({
       content: {
-        title: { mainTitle: this.titleName },
-        menu: this.currentIndex === 0 ? {
-          value: [{
-            content: {
-              label: '搜索课程',
-              icon: $r('sys.symbol.magnifyingglass'),
-              type: TextStyleMode.NORMAL,
-              action: () => { this.showSearchPage(); }
-            }
-          }]
-        } : undefined // 搜索入口仅课程 Tab 有，用户中心不显示
+        // 标题+搜索框走 stackBuilder 自定义：搜索框带 geometryTransition，保留一镜到底转场动画
+        stackBuilder: () => { this.HomeTitle() }
       },
       style: {
         scrollEffectOpts: { // 系统级无级渐变模糊：模糊量随列表滚动连续变化（6.0 起支持）
@@ -605,6 +597,29 @@ export default struct HomePage {
     await this.loadInstallInfo();
   }
 
+  // 标题栏 stackBuilder：标题 + 搜索框。搜索框带 geometryTransition，
+  // 点击时与搜索页输入框做一镜到底转场；用户中心 Tab 不渲染搜索框
+  @Builder
+  HomeTitle() {
+    Row() {
+      Text(this.titleName)
+        .fontSize(24)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.primary_text'))
+      if (this.currentIndex === 0) {
+        Search({ placeholder: '搜索课程...' })
+          .layoutWeight(1).height(40).margin({ left: 16 }).borderRadius(20)
+          .backgroundColor($r('sys.color.ohos_id_color_component_normal'))
+          .placeholderColor($r('sys.color.ohos_id_color_text_secondary'))
+          .geometryTransition('SEARCH_ONE_SHOT_DEMO_TRANSITION_ID', { follow: true })
+          .shadow({ radius: 6, color: '#00000020', offsetX: 0, offsetY: 2 })
+          .onTouch((event: TouchEvent) => { if (event.type === TouchType.Up) this.showSearchPage(); })
+      }
+    }
+    .width('100%').height('100%')
+    .padding({ top: this.statusBarHeight, left: 16, right: 16 }) // stackBuilder 从屏幕 y=0 起绘，需自行下沉到状态栏之下
+  }
+
   // 课程/用户中心两个 TabContent：悬浮页签与退化分支共用，保证内容只有一份
   @Builder
   HdsTabContents() {
@@ -623,8 +638,9 @@ export default struct HomePage {
           }, (classInfo: ClassInfo) => classInfo.id)
         }
         .divider({ strokeWidth: 0.5, color: $r('sys.color.comp_divider'), startMargin: 72, endMargin: 16 })
-        .width('100%').height('100%').scrollBar(BarState.Off) // 高度占满:课程未加载/数量过少时列表不收缩居中,搜索框保持在悬浮标题栏下方
-        .padding({ top: 56 }) // 首行须让出标题栏：标题栏图层会吞掉其覆盖区的触摸，压在底下会难点；滚动时内容仍穿透到状态栏之下
+        .width('100%').height('100%').scrollBar(BarState.Off) // 高度占满:课程未加载/数量过少时列表不收缩居中
+        // 静止时首行让出「状态栏+标题栏」高度避免被遮挡；滚动时内容穿透到屏幕最顶端，由 scrollEffect 无级渐变模糊
+        .padding({ top: this.statusBarHeight + 48 })
       }
       .width('100%').height('100%')
       .onRefreshing(async () => { await this.loadClassList(); }) // 仅下滑刷新：下拉触发课程列表重新拉取

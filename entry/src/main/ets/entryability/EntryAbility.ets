@@ -49,19 +49,24 @@ export default class EntryAbility extends UIAbility {
       }
       // Load main page immediately without waiting for other users to login
       windowStage.loadContent('pages/initPage', (err) => {
-        if (err) {
-          const error = err as BusinessError;
-          hilog.error(DOMAIN, TAG, 'Failed to load main page: Code=%{public}d, Message=%{public}s', error.code,
-            error.message);
+        // 成功时 err 也可能带 code=0（且类型可能是字符串），必须数值归一化后判断
+        const loadErrCode = Number(err?.code ?? 0);
+        if (loadErrCode !== 0) {
+          hilog.error(DOMAIN, TAG, 'Failed to load main page: Code=%{public}d, Message=%{public}s', loadErrCode,
+            (err as BusinessError)?.message ?? '');
           return;
         }
         hilog.info(DOMAIN, TAG, '%{public}s', 'Succeeded in loading the main content.');
-        // 实测系统手势条高度，供首页悬浮胶囊贴底定位（AppStorage 由页面 @StorageLink 消费）
+        // 实测系统安全区：手势条高度供悬浮胶囊贴底定位，状态栏高度供标题栏内容下沉（AppStorage 由页面消费）
         try {
           const mainWindow = windowStage.getMainWindowSync();
           const ui = mainWindow.getUIContext();
+          const systemArea = mainWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM);
           const indicator = mainWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR);
+          AppStorage.setOrCreate('statusBarHeight', ui.px2vp(systemArea?.topRect?.height ?? 0));
           AppStorage.setOrCreate('naviIndicatorHeight', ui.px2vp(indicator?.bottomRect?.height ?? 0));
+          hilog.info(DOMAIN, TAG,
+            `SafeArea measured: statusBar=${AppStorage.get<number>('statusBarHeight') ?? -1} vp, naviIndicator=${AppStorage.get<number>('naviIndicatorHeight') ?? -1} vp`);
         } catch (measureError) {
           hilog.error(DOMAIN, TAG, 'Measure navi indicator failed: %{public}s', (measureError as Error).message);
         }
