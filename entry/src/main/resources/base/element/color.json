@@ -87,6 +87,10 @@
     {
       "name": "beta_badge",
       "value": "#BF8700"
+    },
+    {
+      "name": "captcha_status_text",
+      "value": "#99182431"
     }
   ]
 }
