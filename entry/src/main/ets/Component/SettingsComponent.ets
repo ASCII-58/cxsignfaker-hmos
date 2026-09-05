@@ -561,7 +561,6 @@ export struct SettingsComponent {
       .edgeEffect(EdgeEffect.Spring)
     }
     .width('100%').height('100%')
-    .backgroundColor($r('app.color.page_background'))
-    .borderRadius({ topLeft: 20, topRight: 20 })
+    .backgroundColor(Color.Transparent)
   }
 }

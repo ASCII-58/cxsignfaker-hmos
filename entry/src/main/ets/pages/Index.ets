@@ -315,7 +315,7 @@ struct UserInfoComponent {
     .translate({ y: this.isReady ? 0 : -16 })
     .bindSheet($$this.sheetVisible, this.UnifiedSheet, {
       height: 'auto', detents: [SheetSize.MEDIUM, SheetSize.LARGE],
-      // 与 SettingsComponent 根容器同色：sheet 表面延伸进小白条避让区，双色会形成断层
+      // 内容组件自身背景透明，表面色统一由 sheet 提供（延伸进小白条避让区，双色会形成断层）
       backgroundColor: $r('app.color.page_background')
     })
   }
