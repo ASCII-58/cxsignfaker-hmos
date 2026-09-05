@@ -438,6 +438,11 @@ export struct SettingsComponent {
                 Toggle({ type: ToggleType.Switch, isOn: this.modelCaptchaEnabled })
                   .selectedColor($r('app.color.selected'))
                   .onChange((value: boolean) => {
+                    // sheet 每次打开都会重建本组件，异步读偏好会把 isOn 由 false 回填为 true，
+                    // 程序化回填同样触发 onChange；回填值必然与当前状态一致，用户真实拨动才会相异
+                    if (value === this.modelCaptchaEnabled) {
+                      return;
+                    }
                     this.onModelCaptchaToggle(value)
                   })
               }
