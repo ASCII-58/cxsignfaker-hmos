@@ -1,6 +1,11 @@
 import { ActivityItem, ClassInfo, CourseAndActivity } from '../utils/classFun';
 import { ChaoxingUtils } from '../utils/utils';
-import { promptAction } from '@kit.ArkUI';
+import { LengthMetrics, promptAction } from '@kit.ArkUI';
+import { deviceInfo } from '@kit.BasicServicesKit';
+import { HideMode, HdsNavDestination, ScrollEffectType } from '@kit.UIDesignKit';
+// hdsMaterial 是 6.1(23) API：API<23 系统无该导出，静态 import 值会启动即崩（见 Index.ets 同款处理），
+// 这里只做类型导入，枚举值用常量
+import type { hdsMaterial } from '@kit.UIDesignKit';
 import { DatabaseManager } from '../utils/DataBase';
 import { CloneSessionBanner } from '../Component/CloneSessionBanner';
 import { JSON } from '@kit.ArkTS';
@@ -8,6 +13,9 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const TAG = 'ActivityListPage';
 const DOMAIN = 0x0005;
+// 沉浸光感枚举值别名（与 SDK 6.1 d.ts 一致）：MaterialType.ADAPTIVE=100、MaterialLevel.GENTLE=1（首页同款）
+const HDS_MATERIAL_TYPE_ADAPTIVE = 100;
+const HDS_MATERIAL_LEVEL_GENTLE = 1;
 
 /**
  * @param signType '0' 普通/拍照签到 | '2' 扫码签到 | '3' 手势签到 | '4' 位置签到 | '5' 签到码签到
@@ -88,12 +96,22 @@ export struct ActivityListPage {
   @State activityExt: string = ''
   @State isRefreshing: boolean = false
   @StorageProp('cloneSessionCookies') cloneSessionCookies: string = ''
+  @StorageProp('statusBarHeight') statusBarHeight: number = 0 // EntryAbility 实测的状态栏高度
   private loadEpoch: number = 0 // 每次拉取递增：让 ForEach 生成新 key，强制重建条目
+  private listScroller: Scroller = new Scroller() // 标题栏渐变模糊的滚动绑定源
+  // 6.1(23) 起支持沉浸光感材质，低版本系统走默认样式（首页同款）
+  private readonly supportFloatingBar: boolean = deviceInfo.sdkApiVersion >= 23
 
   build() {
-    NavDestination() {
-      if (this.ActivityList) {
-        List({ space: 0, initialIndex: 0 }) {
+    // HdsNavDestination（首页同款悬浮标题栏）：无级渐变模糊随列表滚动连续变化，上滑一镜到底隐藏
+    HdsNavDestination() {
+      if (this.ActivityList !== null && this.ActivityList.length > 0) {
+        List({ space: 0, initialIndex: 0, scroller: this.listScroller }) {
+          // 让位标题栏的空白必须做成列表首项（随内容滚动收起）：List 的 .padding 是固定视口内缩，
+          // 内容会被永远裁剪在标题栏底边之下，无法产生内容穿透标题栏的渐变模糊（见 Index.ets 同款处理）
+          ListItem() {
+            Column().height(this.statusBarHeight + 56)
+          }.width('100%')
           if (this.cloneSessionCookies !== '') {
             ListItem() {
               CloneSessionBanner()
@@ -168,8 +186,9 @@ export struct ActivityListPage {
           }, (Activity: ActivityItem) => `${this.loadEpoch}_${Activity.id}`)
         }
         .divider({ strokeWidth: 0.5, color: $r('sys.color.comp_divider'), startMargin: 72, endMargin: 16 })
-        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+        .width('100%')
         .height('100%')
+        .scrollBar(BarState.Off)
       } else if (this.isRefreshing) {
         Column() {
           LoadingProgress()
@@ -194,14 +213,41 @@ export struct ActivityListPage {
     .height('100%')
     .width('100%')
     .backgroundColor($r('app.color.page_background'))
-    .title(`${this.name}`)
-    .menus([{
-      value: '刷新签到活动',
-      icon: $r('app.media.ic_refresh'),
-      action: () => {
-        this.loadActivities(true)
-      }
-    }])
+    .titleBar({
+      content: {
+        title: { mainTitle: this.name },
+        menu: { // 右上角刷新入口（官方示例同款标题栏菜单）
+          value: [{
+            content: {
+              icon: $r('app.media.ic_refresh'),
+              label: '刷新签到活动',
+              action: () => { this.loadActivities(true); }
+            }
+          }]
+        }
+      },
+      style: {
+        scrollEffectOpts: { // 系统级无级渐变模糊（首页同款）：模糊量随列表滚动连续变化
+          enableScrollEffect: true,
+          scrollEffectType: ScrollEffectType.GRADIENT_BLUR,
+          blurEffectiveEndOffset: LengthMetrics.vp(this.statusBarHeight + 56)
+        },
+        systemMaterialEffect: this.supportFloatingBar ? { // 沉浸光感材质（首页同款），6.0 走默认样式
+          materialType: HDS_MATERIAL_TYPE_ADAPTIVE as hdsMaterial.MaterialType,
+          materialLevel: HDS_MATERIAL_LEVEL_GENTLE as hdsMaterial.MaterialLevel
+        } : undefined
+      },
+      avoidLayoutSafeArea: false,
+      enableComponentSafeArea: false
+    })
+    // 上滑隐没标题区与状态栏文字、下滑回顶恢复（首页同款一镜到底）
+    .dynamicHideTitleBar({
+      hideTitleArea: true,
+      hideStatusBar: true,
+      mode: HideMode.SCROLL_UP_TO
+    })
+    .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM]) // 内容铺满状态栏和手势条之下
+    .bindToScrollable([this.listScroller]) // 标题栏模糊绑定活动列表滚动
     .onReady((ctx: NavDestinationContext) => {
       this.pathInfos = ctx.pathStack;
     })
@@ -220,7 +266,6 @@ export struct ActivityListPage {
       hilog.debug(DOMAIN, TAG, `Class name: ${this.name}`);
       await this.loadActivities(false)
     })
-    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
   }
 
   /**

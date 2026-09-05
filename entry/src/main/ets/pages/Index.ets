@@ -4,7 +4,7 @@ import image from '@ohos.multimedia.image';
 import { ClassInfo, CourseAndActivity } from '../utils/classFun';
 import { scanBarcode, scanCore } from '@kit.ScanKit';
 import { curves, LengthMetrics, UIContext } from '@kit.ArkUI';
-import { hdsEffect, HideMode, HdsNavDestination, HdsNavigationMenuContentOptions, HdsTabs, HdsTabsController, HdsTabsBackgroundStyle, HdsTabsFloatingStyle, ScrollEffectType } from '@kit.UIDesignKit';
+import { hdsEffect, HideMode, HdsNavDestination, HdsTabs, HdsTabsController, HdsTabsBackgroundStyle, HdsTabsFloatingStyle, ScrollEffectType } from '@kit.UIDesignKit';
 // hdsMaterial 是 6.1(23) 新 API：API22 及以下系统的 @hms:hds.hdsMaterial 模块没有该导出，
 // 静态 import 会在页面加载期直接 SyntaxError 崩溃（6.0 模拟器实测）。因此只做类型导入（编译期擦除、
 // 运行时不产生 import），枚举值以常量书写，运行时只是普通数字，由系统按版本决定是否生效
@@ -371,17 +371,6 @@ export default struct HomePage {
   @StorageLink('statusBarHeight') statusBarHeight: number = 0; // EntryAbility 实测的状态栏高度
   private listScroller: Scroller = new Scroller(); // 标题栏渐变模糊的滚动绑定源
   private readonly tabBarMask: HdsTabsBackgroundStyle = { maskColor: $r('app.color.page_background') };
-  // 标题栏菜单（官方 Spatialization 示例同款 HdsNavigationMenuContentOptions）：课程 Tab 右上角系统搜索按钮，
-  // 随标题栏一起覆盖沉浸材质、随一镜到底隐藏，替代此前自绘 stackBuilder 搜索框（已回退）的入口职能
-  private searchMenu: HdsNavigationMenuContentOptions = {
-    value: [{
-      content: {
-        icon: $r('sys.symbol.magnifyingglass'),
-        label: '搜索课程',
-        action: () => { this.pageInfos.pushPath({ name: 'SearchCoursePage' }); }
-      }
-    }]
-  };
   // 沉浸光感悬浮页签（官方 Spatialization 示例同款）：材质类型跟随系统策略（ADAPTIVE，随壁纸/深浅色自适应光感），
   // 等级用示例默认 GENTLE（轻柔），与标题栏材质强弱保持一致；adaptToHandedness 让胶囊按持机手自动左右换位。
   // barBottomMargin 取实测手势条高度：胶囊落在手势条区域内
@@ -569,9 +558,10 @@ export default struct HomePage {
     .backgroundColor($r('app.color.page_background'))
     .titleBar({
       content: {
-        // 系统默认标题栏（官方示例同款 mainTitle 用法）+ 示例同款标题栏菜单：课程 Tab 右上角挂搜索入口
-        title: { mainTitle: this.titleName },
-        menu: this.currentIndex === 0 ? this.searchMenu : undefined
+        // 标题+搜索框走 stackBuilder 自定义：搜索框带 geometryTransition，点击时与搜索页输入框
+        // 做一镜到底转场；用户中心 Tab 不渲染搜索框。系统 menu 按钮是系统渲染的，挂不上
+        // geometryTransition，做不了一镜到底，故搜索入口用自绘搜索框
+        stackBuilder: () => { this.HomeTitle() }
       },
       style: {
         scrollEffectOpts: { // 系统级无级渐变模糊：模糊量随列表滚动连续变化（6.0 起支持）。
@@ -635,6 +625,36 @@ export default struct HomePage {
       this.userQRValue = `http://cdn.aquamarine5.fun/?phone=${hostUser.phone}&pwd=${encodeURIComponent(hostUser.pwd)}&name=${encodeURIComponent(HostUser.uname)}`
     } catch (e) { hilog.error(DOMAIN, TAG, `Error in initPageData: ${e.message}`); }
     await this.loadInstallInfo();
+  }
+
+  // 标题栏 stackBuilder：标题 + 搜索框。搜索框带 geometryTransition，
+  // 点击时与搜索页输入框做一镜到底转场；用户中心 Tab 不渲染搜索框
+  @Builder
+  HomeTitle() {
+    Row() {
+      Text(this.titleName)
+        .fontSize(24)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.primary_text'))
+      if (this.currentIndex === 0) {
+        Search({ placeholder: '搜索课程...' })
+          .layoutWeight(1).height(40).margin({ left: 16 }).borderRadius(20)
+          .backgroundColor($r('sys.color.ohos_id_color_component_normal'))
+          .placeholderColor($r('sys.color.ohos_id_color_text_secondary'))
+          .geometryTransition('SEARCH_ONE_SHOT_DEMO_TRANSITION_ID', { follow: true })
+          .shadow({ radius: 6, color: '#00000020', offsetX: 0, offsetY: 2 })
+          .onTouch((event: TouchEvent) => { if (event.type === TouchType.Up) this.showSearchPage(); })
+      }
+    }
+    .width('100%').height('100%')
+    .padding({ top: this.statusBarHeight, left: 16, right: 16 }) // stackBuilder 从屏幕 y=0 起绘，需自行下沉到状态栏之下
+  }
+
+  // 一镜到底跳搜索页：关闭系统默认转场（pushPath 第二参 false），由 geometryTransition 弹簧动画接管
+  private showSearchPage(): void {
+    this.getUIContext().animateTo({
+      curve: curves.interpolatingSpring(0, 1, 342, 38)
+    }, () => { this.pageInfos.pushPath({ name: 'SearchCoursePage' }, false); })
   }
 
   // 课程/用户中心两个 TabContent：悬浮页签与退化分支共用，保证内容只有一份
