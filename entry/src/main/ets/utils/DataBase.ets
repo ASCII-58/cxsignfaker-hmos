@@ -27,6 +27,32 @@ interface UpdateUserData {
   cookies?: string;
 }
 
+/**
+ * 收藏的位置（行记录，含自增 id）
+ * latitude/longitude 为签到提交用的 BD-09 坐标字符串，选用时可直接赋给签到参数
+ */
+export interface SavedLocation {
+  id: number
+  note: string
+  latitude: string
+  longitude: string
+  address: string
+}
+
+interface SavedLocationData {
+  note: string
+  latitude: string
+  longitude: string
+  address: string
+}
+
+interface UpdateSavedLocation {
+  note?: string
+  latitude?: string
+  longitude?: string
+  address?: string
+}
+
 interface ExportUserEntry {
   phone: string;
   pwd: string;
@@ -500,6 +526,186 @@ class DatabaseManager {
   }
 
   /**
+   * 插入收藏位置
+   * @param locationData 位置数据（note 备注可为空字符串）
+   * @returns 插入结果状态码：1-成功，0-失败
+   */
+  public async insertSavedLocation(locationData: SavedLocationData): Promise<number> {
+    if (!this.rdbStore) {
+      throw new Error('Database not initialized. Call init() first.');
+    }
+
+    if (!locationData.latitude || !locationData.longitude) {
+      throw new Error('经纬度不能为空');
+    }
+
+    try {
+      this.rdbStore.beginTransaction();
+
+      try {
+        await this.rdbStore.executeSql(
+          'INSERT INTO SavedLocation (note, latitude, longitude, address) VALUES (?, ?, ?, ?)',
+          [locationData.note, locationData.latitude, locationData.longitude, locationData.address]
+        );
+        this.rdbStore.commit();
+        hilog.info(0x0000, 'DB', `Successfully inserted saved location: ${locationData.note}`);
+        return 1; // 插入成功
+      } catch (error) {
+        this.rdbStore.rollBack();
+        throw Error(error);
+      }
+    } catch (err) {
+      hilog.error(0x0000, 'DB', `Failed to insert saved location: ${err.message}`);
+      return 0; // 插入失败
+    }
+  }
+
+  /**
+   * 获取所有收藏位置（按 id 倒序，最新添加的在前）
+   * @returns 收藏位置数组
+   */
+  public async getAllSavedLocations(): Promise<SavedLocation[]> {
+    if (!this.rdbStore) {
+      throw new Error('Database not initialized. Call init() first.');
+    }
+
+    const sql = 'SELECT * FROM SavedLocation ORDER BY id DESC';
+
+    try {
+      const resultSet = await this.rdbStore.querySql(sql);
+      const locations: SavedLocation[] = [];
+
+      while (resultSet.goToNextRow()) {
+        locations.push({
+          id: resultSet.getLong(resultSet.getColumnIndex('id')),
+          note: resultSet.getString(resultSet.getColumnIndex('note')),
+          latitude: resultSet.getString(resultSet.getColumnIndex('latitude')),
+          longitude: resultSet.getString(resultSet.getColumnIndex('longitude')),
+          address: resultSet.getString(resultSet.getColumnIndex('address'))
+        });
+      }
+
+      resultSet.close();
+      return locations;
+    } catch (error) {
+      const err = new Error(`Failed to fetch saved locations: ${error.message}`);
+      hilog.error(0x0000, 'DB', err.message);
+      throw err;
+    }
+  }
+
+  /**
+   * 更新单个收藏位置
+   * @param id 位置ID
+   * @param locationData 要更新的位置数据（至少提供一个字段）
+   * @returns 更新结果状态码：1-成功，-1-位置不存在，0-失败
+   */
+  public async updateSavedLocation(id: number, locationData: UpdateSavedLocation): Promise<number> {
+    if (!this.rdbStore) {
+      throw new Error('Database not initialized. Call init() first.');
+    }
+
+    if (!Number.isInteger(id) || id <= 0) {
+      throw new Error('无效的位置ID');
+    }
+
+    const updateParts: string[] = [];
+    const params: (string | number)[] = [];
+
+    if (locationData.note !== undefined) {
+      updateParts.push('note = ?');
+      params.push(locationData.note);
+    }
+    if (locationData.latitude !== undefined) {
+      updateParts.push('latitude = ?');
+      params.push(locationData.latitude);
+    }
+    if (locationData.longitude !== undefined) {
+      updateParts.push('longitude = ?');
+      params.push(locationData.longitude);
+    }
+    if (locationData.address !== undefined) {
+      updateParts.push('address = ?');
+      params.push(locationData.address);
+    }
+
+    if (updateParts.length === 0) {
+      throw new Error('至少需要提供一个要更新的字段');
+    }
+
+    try {
+      this.rdbStore.beginTransaction();
+
+      try {
+        const exists = await this.savedLocationExists(id);
+        if (!exists) {
+          this.rdbStore.rollBack();
+          return -1; // 位置不存在
+        }
+
+        params.push(id);
+        const updateSql = `UPDATE SavedLocation SET ${updateParts.join(', ')} WHERE id = ?`;
+        await this.rdbStore.executeSql(updateSql, params);
+        this.rdbStore.commit();
+
+        return 1; // 更新成功
+      } catch (error) {
+        this.rdbStore.rollBack();
+        throw new Error(error);
+      }
+    } catch (err) {
+      hilog.error(0x0000, 'DB', `Failed to update saved location: ${err.message}`);
+      return 0; // 更新失败
+    }
+  }
+
+  /**
+   * 删除指定收藏位置
+   * @param id 位置ID
+   * @returns 删除结果状态码：1-成功，-1-位置不存在，0-失败
+   */
+  public async deleteSavedLocation(id: number): Promise<number> {
+    if (!this.rdbStore) {
+      throw new Error('Database not initialized. Call init() first.');
+    }
+
+    if (!Number.isInteger(id) || id <= 0) {
+      throw new Error('无效的位置ID');
+    }
+
+    try {
+      this.rdbStore.beginTransaction();
+
+      try {
+        const exists = await this.savedLocationExists(id);
+        if (!exists) {
+          this.rdbStore.rollBack();
+          return -1; // 位置不存在
+        }
+
+        const predicates = new relationalStore.RdbPredicates('SavedLocation');
+        predicates.equalTo('id', id);
+        const deletedRows = await this.rdbStore.delete(predicates);
+
+        if (deletedRows > 0) {
+          this.rdbStore.commit();
+          hilog.info(0x0000, 'DB', `Successfully deleted saved location ID: ${id}`);
+          return 1; // 删除成功
+        } else {
+          this.rdbStore.rollBack();
+          return -1; // 没有删除任何记录
+        }
+      } catch (error) {
+        this.rdbStore.rollBack();
+        throw Error(error);
+      }
+    } catch (err) {
+      hilog.error(0x0000, 'DB', `Failed to delete saved location ID ${id}: ${err.message}`);
+      return 0; // 删除失败
+    }
+  }
+
+  /**
    * 清空HostUser表中的所有数据
    *
    * @returns {Promise<number>} 删除的记录数量
@@ -712,6 +918,16 @@ class DatabaseManager {
           uid INTEGER NOT NULL
         );
       `);
+
+      await this.rdbStore.executeSql(`
+        CREATE TABLE IF NOT EXISTS SavedLocation (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          note TEXT NOT NULL,
+          latitude TEXT NOT NULL,
+          longitude TEXT NOT NULL,
+          address TEXT NOT NULL DEFAULT ''
+        );
+      `);
     } catch (err) {
       const error = err as BusinessError;
       console.error(`Failed to create tables. Code: ${error.code}, Message: ${error.message}`);
@@ -729,6 +945,20 @@ class DatabaseManager {
     }
     const table = isHost ? 'HostUser' : 'OtherUser';
     const sql = `SELECT 1 FROM ${table} WHERE id = ? LIMIT 1`;
+    const resultSet = await this.rdbStore.querySql(sql, [id]);
+    try {
+      return resultSet.rowCount > 0;
+    } finally {
+      resultSet.close();
+    }
+  }
+
+  // 辅助方法：检查收藏位置是否存在
+  private async savedLocationExists(id: number): Promise<boolean> {
+    if (!this.rdbStore) {
+      return false;
+    }
+    const sql = 'SELECT 1 FROM SavedLocation WHERE id = ? LIMIT 1';
     const resultSet = await this.rdbStore.querySql(sql, [id]);
     try {
       return resultSet.rowCount > 0;

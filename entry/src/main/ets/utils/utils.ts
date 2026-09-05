@@ -120,6 +120,52 @@ export class ChaoxingUtils {
     return { lat: bd_lat, lon: bd_lon };
   }
 
+  /**
+   * 将WGS-84坐标系（GPS设备原始坐标）转换为GCJ-02坐标系（火星坐标）
+   *
+   * geoLocationManager 定位返回 WGS-84，而地图选点返回 GCJ-02；
+   * 提交签到前统一走 WGS-84 → GCJ-02 → BD-09 的链路
+   *
+   * @param wg_lat WGS-84纬度值，单位为度
+   * @param wg_lon WGS-84经度值，单位为度
+   * @returns 转换后的GCJ-02坐标 { lat, lon }（境外坐标不做偏移，原样返回）
+   */
+  static wgs84_to_gcj02(wg_lat: number, wg_lon: number): { lat: number, lon: number } {
+    // 粗略判断是否在中国坐标范围外，境外无偏移参数，直接返回
+    if (wg_lon < 72.004 || wg_lon > 137.8347 || wg_lat < 0.8293 || wg_lat > 55.8271) {
+      return { lat: wg_lat, lon: wg_lon };
+    }
+
+    let dLat = ChaoxingUtils.transformLat(wg_lon - 105.0, wg_lat - 35.0);
+    let dLon = ChaoxingUtils.transformLon(wg_lon - 105.0, wg_lat - 35.0);
+    const radLat = wg_lat / 180.0 * Math.PI;
+    let magic = Math.sin(radLat);
+    magic = 1 - 0.00669342162296594323 * magic * magic;
+    const sqrtMagic = Math.sqrt(magic);
+    dLat = (dLat * 180.0) / ((6378245.0 * (1 - 0.00669342162296594323)) / (magic * sqrtMagic) * Math.PI);
+    dLon = (dLon * 180.0) / (6378245.0 / sqrtMagic * Math.cos(radLat) * Math.PI);
+
+    return { lat: wg_lat + dLat, lon: wg_lon + dLon };
+  }
+
+  // 纬度偏移量的多项式拟合（标准 WGS-84 → GCJ-02 算法）
+  private static transformLat(x: number, y: number): number {
+    let ret = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * Math.sqrt(Math.abs(x));
+    ret += (20.0 * Math.sin(6.0 * x * Math.PI) + 20.0 * Math.sin(2.0 * x * Math.PI)) * 2.0 / 3.0;
+    ret += (20.0 * Math.sin(y * Math.PI) + 40.0 * Math.sin(y / 3.0 * Math.PI)) * 2.0 / 3.0;
+    ret += (160.0 * Math.sin(y / 12.0 * Math.PI) + 320 * Math.sin(y * Math.PI / 30.0)) * 2.0 / 3.0;
+    return ret;
+  }
+
+  // 经度偏移量的多项式拟合（标准 WGS-84 → GCJ-02 算法）
+  private static transformLon(x: number, y: number): number {
+    let ret = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * Math.sqrt(Math.abs(x));
+    ret += (20.0 * Math.sin(6.0 * x * Math.PI) + 20.0 * Math.sin(2.0 * x * Math.PI)) * 2.0 / 3.0;
+    ret += (20.0 * Math.sin(x * Math.PI) + 40.0 * Math.sin(x / 3.0 * Math.PI)) * 2.0 / 3.0;
+    ret += (150.0 * Math.sin(x / 12.0 * Math.PI) + 300.0 * Math.sin(x / 30.0 * Math.PI)) * 2.0 / 3.0;
+    return ret;
+  }
+
   static hasHole(arr: any[]): boolean {
     for (let i = 0; i < arr.length; i++) {
       if (!(i in arr)) {
