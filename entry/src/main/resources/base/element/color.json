@@ -73,8 +73,8 @@
       "value": "#656D76"
     },
     {
-      "name": "light_glow",
-      "value": "#FFFFFF"
+      "name": "press_halo",
+      "value": "#1F000000"
     },
     {
       "name": "text_field_bg",
