@@ -45,6 +45,12 @@ export struct SettingsComponent {
   @State previewIndex: number = 0;
   @State thumbX: number = 0;
   @State trackWidth: number = 0;
+  @State thumbPressed: boolean = false;
+  private panActive: boolean = false;
+  private dragStartThumbX: number = 0;
+  private touchStartX: number = 0;
+  private touchStartY: number = 0;
+  private touchMoved: number = 0;
   private thumbInitialized: boolean = false;
   @State modelCaptchaEnabled: boolean = false;
   @State modelTestRunning: boolean = false;
@@ -384,8 +390,16 @@ export struct SettingsComponent {
   }
 
   private snapThumb(index: number) {
-    this.getUIContext().animateTo({ curve: curves.springMotion(0.35, 0.9) }, () => {
+    // 低阻尼弹簧：滑块落位后带一次回弹(Q弹)
+    this.getUIContext().animateTo({ curve: curves.springMotion(0.3, 0.55) }, () => {
       this.thumbX = index * this.getSegWidth();
+    });
+  }
+
+  /** 按压果冻效果：滑块横向微胀、纵向压缩，松手弹回 */
+  private animateThumbPress(pressed: boolean) {
+    this.getUIContext().animateTo({ curve: curves.springMotion(0.3, 0.5) }, () => {
+      this.thumbPressed = pressed;
     });
   }
 
@@ -398,23 +412,41 @@ export struct SettingsComponent {
     }
   }
 
-  /** 悬浮页签式交互：按下滑块即弹至按压位置，随手指拖动，松手提交 */
+  /** 悬浮页签式交互：按下滑块即弹至按压处档位；拖动交给横向 PanGesture(轴向裁决，
+   *  纵向漂移让给 List 滚动)；松手若位移极小视为点击提交，否则弹回生效档位 */
   private onSliderTouch(event: TouchEvent) {
     const segW = this.getSegWidth();
     if (segW <= 0) {
       return;
     }
-    const touchX = event.touches[0].x - segW / 2;
+    const touch = event.touches[0];
     if (event.type === TouchType.Down) {
-      // 按下不硬切：弹簧动画滑到按压处所在档位，手指拖动时再转跟手
-      this.previewIndex = this.indexFromX(touchX);
+      this.touchStartX = touch.x;
+      this.touchStartY = touch.y;
+      this.touchMoved = 0;
+      this.previewIndex = this.indexFromX(touch.x - segW / 2);
       this.snapThumb(this.previewIndex);
+      this.animateThumbPress(true);
     } else if (event.type === TouchType.Move) {
-      // 拖动中不施加动画，滑块实时跟手
-      this.thumbX = this.clampThumbX(touchX);
-      this.previewIndex = this.indexFromThumb();
+      const dx = touch.x - this.touchStartX;
+      const dy = touch.y - this.touchStartY;
+      this.touchMoved = Math.max(this.touchMoved, Math.sqrt(dx * dx + dy * dy));
+      if (this.touchMoved > 10 && this.thumbPressed) {
+        this.animateThumbPress(false);
+      }
     } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-      this.commitIndex(this.previewIndex);
+      this.animateThumbPress(false);
+      if (this.panActive) {
+        // 横向拖动由 PanGesture 的 onActionEnd 提交
+        return;
+      }
+      if (this.touchMoved < 10) {
+        this.commitIndex(this.previewIndex);
+      } else {
+        // 起手后转成列表滚动等，未构成点击：滑块弹回当前生效档位
+        this.previewIndex = this.colorModeIndex;
+        this.snapThumb(this.colorModeIndex);
+      }
     }
   }
 
@@ -439,7 +471,7 @@ export struct SettingsComponent {
         z: 1,
         angle: this.colorModeIndex === idx ? 0 : (idx < this.colorModeIndex ? -90 : 90)
       })
-      .animation({ duration: 400, curve: Curve.Friction })
+      .animation({ curve: curves.springMotion(0.3, 0.6) })
   }
 
   build() {
@@ -497,6 +529,7 @@ export struct SettingsComponent {
                   })
                   .margin({ left: 3 })
                   .translate({ x: this.thumbX })
+                  .scale({ x: this.thumbPressed ? 1.06 : 1, y: this.thumbPressed ? 0.92 : 1 })
                 Row() {
                   ForEach([0, 1, 2], (idx: number) => {
                     Text(COLOR_MODE_LABELS[idx])
@@ -527,6 +560,26 @@ export struct SettingsComponent {
               .onTouch((event: TouchEvent) => {
                 this.onSliderTouch(event);
               })
+              .gesture(
+                // 横向 Pan 与 List 纵向滚动按轴向竞争：横向拖动独占触控，纵向漂移由列表滚动
+                PanGesture({ fingers: 1, direction: PanDirection.Horizontal, distance: 3 })
+                  .onActionStart(() => {
+                    this.panActive = true;
+                    this.dragStartThumbX = this.thumbX;
+                  })
+                  .onActionUpdate((event: GestureEvent) => {
+                    this.thumbX = this.clampThumbX(this.dragStartThumbX + event.offsetX);
+                    this.previewIndex = this.indexFromThumb();
+                  })
+                  .onActionEnd(() => {
+                    this.panActive = false;
+                    this.commitIndex(this.indexFromThumb());
+                  })
+                  .onActionCancel(() => {
+                    this.panActive = false;
+                    this.commitIndex(this.indexFromThumb());
+                  })
+              )
             }
             .width('100%')
             .alignItems(VerticalAlign.Center)
