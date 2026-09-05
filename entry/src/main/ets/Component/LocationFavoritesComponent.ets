@@ -272,7 +272,7 @@ export struct LocationFavoritesComponent {
 
                   Button('编辑')
                     .fontSize(13).height(28).borderRadius(14)
-                    .backgroundColor($r('app.color.card_background'))
+                    .backgroundColor($r('app.color.text_field_bg'))
                     .fontColor($r('app.color.selected'))
                     .margin({ right: 8 })
                     .onClick(() => {
@@ -280,7 +280,7 @@ export struct LocationFavoritesComponent {
                     })
                   Button('删除')
                     .fontSize(13).height(28).borderRadius(14)
-                    .backgroundColor($r('app.color.card_background'))
+                    .backgroundColor($r('app.color.text_field_bg'))
                     .fontColor($r('app.color.unsignable'))
                     .onClick(() => {
                       this.confirmDelete(loc)
