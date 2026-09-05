@@ -52,6 +52,7 @@ export struct SignPage {
   @State objectidArr: string[] = []
   @State DestinationLocationName: string = '获取中...' // 初始状态
   @State hostCookies: string = ''
+  @StorageProp('cloneSessionCookies') cloneSessionCookies: string = ''
   @State signDetail: SignDetailResult | null = null
   @State faceRequired: boolean = false
   @State faceObjectIdArr: string[] = []
@@ -671,12 +672,16 @@ export struct SignPage {
       return;
     }
 
-    this.hostCookies = currentUser.cookies;
+    // 克隆登录时活动属于克隆用户的课程：活动级请求（详情/位置/手势密码校验/enc）
+    // 全部走克隆会话；逐用户签到仍用各自 cookies（hostCookies 由此承载会话 cookies）
+    this.hostCookies = this.cloneSessionCookies !== ''
+      ? this.cloneSessionCookies
+      : currentUser.cookies;
     this.commonQueryParams.activeId = this.activityInfo.ActivityId
 
     // 获取活动完整详情（验证码/人脸/拍照要求）
     try {
-      this.signDetail = await Sign.GetActiveDetail(currentUser.cookies, this.activityInfo.ActivityId)
+      this.signDetail = await Sign.GetActiveDetail(this.hostCookies, this.activityInfo.ActivityId)
       this.faceRequired = this.signDetail.openCheckFaceFlag === 1
       this.ifPhoto = this.signDetail.ifphoto
     } catch (e) {
@@ -688,7 +693,7 @@ export struct SignPage {
     if (this.activityInfo.signType === SignType.LOCATION) {
       try {
         const locName =
-          (await Sign.GetLocationSignInfo(currentUser.cookies, this.activityInfo.ActivityId))['locationText'] as string
+          (await Sign.GetLocationSignInfo(this.hostCookies, this.activityInfo.ActivityId))['locationText'] as string
         this.DestinationLocationName = locName ? locName : '该签到无要求位置'
       } catch (e) {
         this.DestinationLocationName = '位置信息获取失败'

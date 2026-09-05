@@ -24,6 +24,10 @@ AppStorage.setOrCreate('userHostName', $r('app.string.defaultUname'))
 AppStorage.setOrCreate('userHostPhone', $r('app.string.defaultPhone'))
 AppStorage.setOrCreate('userUrl', '')
 AppStorage.setOrCreate('userQRValue', '')
+// 克隆登录会话（对齐上游 cloneInstance：仅内存有效，重启即失效；cookies 为空串表示不在克隆状态）
+AppStorage.setOrCreate('cloneSessionCookies', '')
+AppStorage.setOrCreate('cloneSessionName', '')
+AppStorage.setOrCreate('cloneSessionPhone', '')
 
 interface UserInfoComponentInterface {
   hostName: Resource | string
@@ -345,6 +349,9 @@ export default struct HomePage {
   @StorageLink('userHostPhone') userHostPhone: Resource | string = $r('app.string.defaultPhone')
   @StorageLink('userUrl') userUrl: string = ''
   @StorageLink('userQRValue') userQRValue: string = ''
+  @StorageLink('cloneSessionCookies') cloneSessionCookies: string = ''
+  @StorageLink('cloneSessionName') cloneSessionName: string = ''
+  @StorageLink('cloneSessionPhone') cloneSessionPhone: string = ''
   private pageInfos: NavPathStack = new NavPathStack();
   private classListLoading: boolean = false;
   private controller: HdsTabsController = new HdsTabsController();
@@ -476,6 +483,36 @@ export default struct HomePage {
         TabContent() {
           Refresh({ refreshing: $$this.isClassListRefreshing }) {
             List({ space: 0 }) {
+              if (this.cloneSessionCookies !== '') {
+                ListItem() {
+                  Row() {
+                    Image($r('app.media.person_2'))
+                      .width(18).height(18)
+                      .fillColor($r('app.color.selected'))
+                    Column() {
+                      Text(`当前克隆登录用户：${this.cloneSessionName}`)
+                        .fontSize(14).fontWeight(FontWeight.Medium)
+                        .fontColor($r('app.color.primary_text'))
+                        .maxLines(1)
+                        .textOverflow({ overflow: TextOverflow.Ellipsis })
+                      Text(this.cloneSessionPhone)
+                        .fontSize(12)
+                        .fontColor($r('app.color.secondary_text'))
+                    }
+                    .layoutWeight(1).alignItems(HorizontalAlign.Start).margin({ left: 8 })
+                    Text('退出克隆')
+                      .fontSize(14)
+                      .fontColor($r('app.color.selected'))
+                      .padding({ left: 12, right: 4, top: 10, bottom: 10 })
+                      .onClick(() => { this.exitCloneSession() })
+                  }
+                  .width('100%').padding({ left: 16, right: 12, top: 10, bottom: 10 })
+                  .backgroundColor($r('app.color.card_background'))
+                  .border({ width: { left: 3 }, color: { left: $r('app.color.selected') } })
+                  .borderRadius(8).margin({ top: 8 })
+                }.width('100%').padding({ left: 16, right: 16 })
+              }
+
               ListItem() {
                 Search({ placeholder: '搜索课程...' })
                   .height(44).borderRadius(20)
@@ -524,7 +561,10 @@ export default struct HomePage {
                   List({ space: 0 }) {
                     ForEach(this.otherUserList, (item: UserDataAndId, index) => {
                       ListItem() {
-                        OtherUserItem({ userData: item, otherUserList: this.otherUserList, index: index })
+                        OtherUserItem({
+                          userData: item, otherUserList: this.otherUserList, index: index,
+                          onCloneLogin: () => { this.enterCloneSession() }
+                        })
                       }.width('100%')
                     }, (item: UserDataAndId) => item.id.toString())
                   }
@@ -679,7 +719,10 @@ export default struct HomePage {
     }
     this.classListLoading = true
     try {
-      const cookies = (await this.getHostUser()).cookies
+      // 克隆登录时浏览的是克隆用户的课程，课程列表请求走克隆会话
+      const cookies = this.cloneSessionCookies !== ''
+        ? this.cloneSessionCookies
+        : (await this.getHostUser()).cookies
       const result = await CourseAndActivity.getClassList(cookies)
       if (result.msg) {
         this.classList = result.classList
@@ -739,6 +782,28 @@ export default struct HomePage {
         }
       }
     })
+  }
+
+  /**
+   * 克隆登录：切到克隆会话后清空旧课程列表再按克隆用户拉取，避免残留主用户课程
+   */
+  private async enterCloneSession(): Promise<void> {
+    this.classList = null
+    await this.loadClassList()
+    this.switchTab(0)
+    promptAction.showToast({ message: `已克隆登录：${this.cloneSessionName}`, duration: 2000 })
+  }
+
+  /**
+   * 退出克隆：清空克隆会话并恢复主用户课程列表
+   */
+  private async exitCloneSession(): Promise<void> {
+    AppStorage.setOrCreate('cloneSessionCookies', '')
+    AppStorage.setOrCreate('cloneSessionName', '')
+    AppStorage.setOrCreate('cloneSessionPhone', '')
+    this.classList = null
+    await this.loadClassList()
+    promptAction.showToast({ message: '已退出克隆登录', duration: 2000 })
   }
 
   private async getHostUser(): Promise<UserDataAndId> {
