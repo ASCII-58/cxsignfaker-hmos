@@ -4,7 +4,7 @@ import image from '@ohos.multimedia.image';
 import { ClassInfo, CourseAndActivity } from '../utils/classFun';
 import { scanBarcode, scanCore } from '@kit.ScanKit';
 import { curves, UIContext } from '@kit.ArkUI';
-import { hdsEffect, hdsMaterial, HdsTabs, HdsTabsController, HdsTabsBackgroundStyle, HdsTabsFloatingStyle } from '@kit.UIDesignKit';
+import { hdsEffect, hdsMaterial, HdsNavDestination, HdsTabs, HdsTabsController, HdsTabsBackgroundStyle, HdsTabsFloatingStyle, ScrollEffectType, TextStyleMode } from '@kit.UIDesignKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BusinessError, deviceInfo } from '@kit.BasicServicesKit';
 import promptAction from '@ohos.promptAction';
@@ -359,13 +359,15 @@ export default struct HomePage {
   // 低版本系统自动退化为沉浸式页签（build 内两条分支共用 HdsTabContents 构建器）。
   // 注意：不能用 canIUse('apis: 23')——实测 6.1(API 24) 真机返回 false，与文档不符
   private readonly supportFloatingBar: boolean = deviceInfo.sdkApiVersion >= 23;
+  @StorageLink('naviIndicatorHeight') naviIndicatorHeight: number = 0; // EntryAbility 实测的系统手势条高度
+  private listScroller: Scroller = new Scroller(); // 标题栏渐变模糊的滚动绑定源
   private readonly tabBarMask: HdsTabsBackgroundStyle = { maskColor: $r('app.color.page_background') };
   // 应用市场同款沉浸悬浮页签：系统沉浸材质（毛玻璃）+ 响应式栏宽。
-  // barBottomMargin 置 0：不避让系统底部手势横条，胶囊贴底；内容全穿透。
+  // barBottomMargin 取实测手势条高度：胶囊落在手势条区域内而非其上方，不额外避让。
   // 注意 gradientMask 必须显式置透明：默认值自带黑色渐变遮罩，会在胶囊下方糊出一条黑边
   private readonly floatingBarStyle: HdsTabsFloatingStyle = {
     barWidth: { smallWidth: 280, mediumWidth: 400, largeWidth: 560 },
-    barBottomMargin: 0,
+    barBottomMargin: this.naviIndicatorHeight > 0 ? this.naviIndicatorHeight : 0,
     gradientMask: { maskColor: Color.Transparent },
     systemMaterialEffect: {
       materialType: hdsMaterial.MaterialType.IMMERSIVE,
@@ -499,7 +501,9 @@ export default struct HomePage {
   }
 
   build() {
-    NavDestination() {
+    // HdsNavDestination（官方 Spatialization 示例同款）：ignoreLayoutSafeArea 让内容铺满状态栏和
+    // 手势条之下；titleBar 的 scrollEffect 由系统渲染无级渐变模糊，随滚动量连续变化
+    HdsNavDestination() {
       // 6.1(23) 起支持悬浮页签：底栏胶囊化悬浮于内容之上；低版本系统退化为沉浸式页签
       if (this.supportFloatingBar) {
         HdsTabs({ barPosition: BarPosition.End, index: this.currentIndex, controller: this.controller }) {
@@ -509,8 +513,7 @@ export default struct HomePage {
         .barMode(BarMode.Fixed)
         .animationDuration(350) // 平滑内容过渡
         .barOverlap(true) // 内容穿透：列表从悬浮胶囊下方滚动穿过
-        .barFloatingStyle(this.floatingBarStyle) // 6.1(23) 悬浮页签：gradientMask 保留底部渐隐遮罩
-        .overlay(this.TitleGradientBlur(), { align: Alignment.Top })
+        .barFloatingStyle(this.floatingBarStyle) // 6.1(23) 悬浮页签：沉浸材质 + 贴实测手势条高度
         .onTabBarClick(() => {
           this.popCurrentTabLabel();
         })
@@ -520,7 +523,6 @@ export default struct HomePage {
           this.titleName = index === 0 ? '首页' : '用户中心'
           this.currentIndex = index
         })
-        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
       } else {
         HdsTabs({ barPosition: BarPosition.End, index: this.currentIndex, controller: this.controller }) {
           this.HdsTabContents()
@@ -530,7 +532,6 @@ export default struct HomePage {
         .animationDuration(350) // 平滑内容过渡
         .barOverlap(true) // 内容穿透：列表从页签栏下滚动穿过
         .barBackgroundStyle(this.tabBarMask) // 页签栏下渐隐遮罩
-        .overlay(this.TitleGradientBlur(), { align: Alignment.Top })
         .onTabBarClick(() => {
           this.popCurrentTabLabel();
         })
@@ -540,32 +541,42 @@ export default struct HomePage {
           this.titleName = index === 0 ? '首页' : '用户中心'
           this.currentIndex = index
         })
-        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
       }
     }
     .backgroundColor($r('app.color.page_background'))
-    .title(this.HomeTitle, { barStyle: BarStyle.STACK }) // 标题+搜索框自定义标题栏；背景交给 TitleGradientBlur 渐进模糊
+    .titleBar({
+      content: {
+        title: { mainTitle: this.titleName },
+        menu: this.currentIndex === 0 ? {
+          value: [{
+            content: {
+              label: '搜索课程',
+              icon: $r('sys.symbol.magnifyingglass'),
+              type: TextStyleMode.NORMAL,
+              action: () => { this.showSearchPage(); }
+            }
+          }]
+        } : undefined // 搜索入口仅课程 Tab 有，用户中心不显示
+      },
+      style: {
+        scrollEffectOpts: { // 系统级无级渐变模糊：模糊量随列表滚动连续变化（6.0 起支持）
+          enableScrollEffect: true,
+          scrollEffectType: this.supportFloatingBar ? ScrollEffectType.IMMERSIVE_GRADIENT_BLUR : ScrollEffectType.GRADIENT_BLUR
+        },
+        systemMaterialEffect: this.supportFloatingBar ? { // 标题栏沉浸材质（6.1+），6.0 走 GRADIENT_BLUR 默认样式
+          materialType: hdsMaterial.MaterialType.IMMERSIVE,
+          materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
+        } : undefined
+      }
+    })
+    .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM]) // 内容铺满状态栏和手势条之下
+    .bindToScrollable([this.listScroller]) // 标题栏模糊绑定课程列表滚动
     .hideBackButton(true).backgroundImageSize({ width: '100%', height: '100%' })
     .borderRadius($r('sys.float.corner_radius_level8')).height('100%').width('100%')
-    .onReady((ctx: NavDestinationContext) => { this.pageInfos = ctx.pathStack; })
-    .onAppear(async () => {
-      try {
-        const dbManager = DatabaseManager.getInstance()
-        const hostUser = await this.getHostUser()
-        const HostUser = await loginFunction.getUserInfo(hostUser.cookies)
-        if (HostUser.msg !== 'successful') {
-          hilog.error(DOMAIN, TAG, `Failed to fetch host user info: ${HostUser.msg}`);
-          this.pageInfos.replacePath({ name: "LoginPage" }, false); return;
-        }
-        this.otherUserList = await dbManager.getAllUsers()
-        this.userHostName = HostUser.uname
-        this.userHostPhone = hostUser.phone
-        this.userUrl = HostUser.pic
-        this.userQRValue = `http://cdn.aquamarine5.fun/?phone=${hostUser.phone}&pwd=${encodeURIComponent(hostUser.pwd)}&name=${encodeURIComponent(HostUser.uname)}`
-      } catch (e) { hilog.error(DOMAIN, TAG, `Error in onAppear: ${e.message}`); }
-      await this.loadInstallInfo();
+    .onReady((ctx: NavDestinationContext) => {
+      this.pageInfos = ctx.pathStack;
+      this.initPageData(); // HdsNavDestination 无 onAppear，初始化挂在 onReady
     })
-
     .onBackPressed(() => {
       if (this.currentIndex === 1) { this.currentIndex = 0; this.controller.changeIndex(0); return true; }
       this.openLinkContext.moveAbilityToBackground(); // 首页返回：退回桌面（应用移至后台）
@@ -573,46 +584,25 @@ export default struct HomePage {
     })
   }
 
-  // 自定义标题栏：标题 + 搜索框。搜索框移入标题栏后，课程列表可全屏贯穿到状态栏之下（不避让）
-  @Builder
-  HomeTitle() {
-    Row() {
-      Text(this.titleName)
-        .fontSize(24)
-        .fontWeight(FontWeight.Bold)
-        .fontColor($r('app.color.primary_text'))
-      if (this.currentIndex === 0) { // 搜索框仅课程 Tab 需要，用户中心不显示
-        Search({ placeholder: '搜索课程...' })
-          .layoutWeight(1).height(40).margin({ left: 16 }).borderRadius(20)
-          .backgroundColor($r('sys.color.ohos_id_color_component_normal'))
-          .placeholderColor($r('sys.color.ohos_id_color_text_secondary'))
-          .geometryTransition('SEARCH_ONE_SHOT_DEMO_TRANSITION_ID', { follow: true })
-          .shadow({ radius: 6, color: '#00000020', offsetX: 0, offsetY: 2 })
-          .onTouch((event: TouchEvent) => { if (event.type === TouchType.Up) this.showSearchPage(); })
+  /**
+   * 页面数据初始化（由 onReady 触发）：校验主用户登录态，拉取其他用户与使用时长
+   */
+  private async initPageData(): Promise<void> {
+    try {
+      const dbManager = DatabaseManager.getInstance()
+      const hostUser = await this.getHostUser()
+      const HostUser = await loginFunction.getUserInfo(hostUser.cookies)
+      if (HostUser.msg !== 'successful') {
+        hilog.error(DOMAIN, TAG, `Failed to fetch host user info: ${HostUser.msg}`);
+        this.pageInfos.replacePath({ name: "LoginPage" }, false); return;
       }
-    }
-    .width('100%').height('100%')
-    .padding({ left: 16, right: 16 })
-  }
-
-  // 渐进模糊半径序列（等差递减），段数越多过渡越接近无级
-  private readonly titleBlurRadii: number[] = [24, 22, 20, 18, 16, 14, 12, 10, 8, 6, 4, 2];
-
-  // 顶部无级渐变模糊：12 段 8vp 细横条按半径等差递减叠出近似连续的渐进模糊，
-  // 替代 STACK 标题栏原生的硬边模糊横带；HitTestMode.None 让触摸穿透到下方列表
-  @Builder
-  TitleGradientBlur() {
-    Stack() {
-      Column() {
-        ForEach(this.titleBlurRadii, (radius: number) => {
-          Column().width('100%').height(8).backgroundEffect({ radius: radius, color: Color.Transparent })
-        }, (radius: number) => `blurStrip${radius}`)
-      }.width('100%')
-      Column().width('100%').height(96)
-        .linearGradient({ angle: 180, colors: [['#2E000000', 0], ['#0F000000', 0.55], ['#00000000', 1]] })
-    }
-    .width('100%')
-    .hitTestBehavior(HitTestMode.None)
+      this.otherUserList = await dbManager.getAllUsers()
+      this.userHostName = HostUser.uname
+      this.userHostPhone = hostUser.phone
+      this.userUrl = HostUser.pic
+      this.userQRValue = `http://cdn.aquamarine5.fun/?phone=${hostUser.phone}&pwd=${encodeURIComponent(hostUser.pwd)}&name=${encodeURIComponent(HostUser.uname)}`
+    } catch (e) { hilog.error(DOMAIN, TAG, `Error in initPageData: ${e.message}`); }
+    await this.loadInstallInfo();
   }
 
   // 课程/用户中心两个 TabContent：悬浮页签与退化分支共用，保证内容只有一份
@@ -620,7 +610,7 @@ export default struct HomePage {
   HdsTabContents() {
     TabContent() {
       Refresh({ refreshing: $$this.isClassListRefreshing }) {
-        List({ space: 0 }) {
+        List({ space: 0, scroller: this.listScroller }) {
           if (this.cloneSessionCookies !== '') {
             ListItem() {
               CloneSessionBanner({ onExit: () => { this.exitCloneSession() } })
@@ -637,7 +627,6 @@ export default struct HomePage {
         .padding({ top: 56 }) // 首行须让出标题栏：标题栏图层会吞掉其覆盖区的触摸，压在底下会难点；滚动时内容仍穿透到状态栏之下
       }
       .width('100%').height('100%')
-      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM]) // 滚动视口延伸进底部手势条区域：行内容渲染到屏幕物理底边
       .onRefreshing(async () => { await this.loadClassList(); }) // 仅下滑刷新：下拉触发课程列表重新拉取
     }
     .height('100%').width('100%')
@@ -730,7 +719,6 @@ export default struct HomePage {
         // 底部不再留避让垫条：内容一贯到底，末项随滚动沉入悬浮胶囊之下（应用市场同款沉浸）
       }
       .width('100%').height('100%')
-      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
       .bindSheet($$this.loginSheetVisible, this.loginSheetContent, {
         height: 'auto', detents: [SheetSize.MEDIUM, SheetSize.LARGE],
         backgroundColor: $r('sys.color.ohos_id_color_sub_background')
