@@ -3,8 +3,8 @@ import { loginFunction } from '../utils/Login';
 import image from '@ohos.multimedia.image';
 import { ClassInfo, CourseAndActivity } from '../utils/classFun';
 import { scanBarcode, scanCore } from '@kit.ScanKit';
-import { curves, UIContext } from '@kit.ArkUI';
-import { hdsEffect, hdsMaterial, HdsNavDestination, HdsTabs, HdsTabsController, HdsTabsBackgroundStyle, HdsTabsFloatingStyle, ScrollEffectType } from '@kit.UIDesignKit';
+import { curves, LengthMetrics, UIContext } from '@kit.ArkUI';
+import { hdsEffect, hdsMaterial, HideMode, HdsNavDestination, HdsTabs, HdsTabsController, HdsTabsBackgroundStyle, HdsTabsFloatingStyle, ScrollEffectType } from '@kit.UIDesignKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BusinessError, deviceInfo } from '@kit.BasicServicesKit';
 import promptAction from '@ohos.promptAction';
@@ -363,15 +363,17 @@ export default struct HomePage {
   @StorageLink('statusBarHeight') statusBarHeight: number = 0; // EntryAbility 实测的状态栏高度
   private listScroller: Scroller = new Scroller(); // 标题栏渐变模糊的滚动绑定源
   private readonly tabBarMask: HdsTabsBackgroundStyle = { maskColor: $r('app.color.page_background') };
-  // 应用市场同款沉浸悬浮页签：系统沉浸材质（毛玻璃）+ 响应式栏宽。
-  // barBottomMargin 取实测手势条高度：胶囊落在手势条区域内而非其上方，不额外避让。
+  // 沉浸光感悬浮页签（官方 Spatialization 示例同款）：材质类型跟随系统策略（ADAPTIVE，随壁纸/深浅色自适应光感），
+  // adaptToHandedness 让胶囊按持机手自动左右换位。barBottomMargin 取实测手势条高度：胶囊落在手势条区域内
+  // 而非其上方，不额外避让；无实测值时退回系统级 8vp 内边距（示例同款兜底）。
   // 注意 gradientMask 必须显式置透明：默认值自带黑色渐变遮罩，会在胶囊下方糊出一条黑边
   private readonly floatingBarStyle: HdsTabsFloatingStyle = {
     barWidth: { smallWidth: 280, mediumWidth: 400, largeWidth: 560 },
-    barBottomMargin: this.naviIndicatorHeight > 0 ? this.naviIndicatorHeight : 0,
+    barBottomMargin: this.naviIndicatorHeight > 0 ? this.naviIndicatorHeight : $r('sys.float.padding_level8'),
     gradientMask: { maskColor: Color.Transparent },
+    adaptToHandedness: true,
     systemMaterialEffect: {
-      materialType: hdsMaterial.MaterialType.IMMERSIVE,
+      materialType: hdsMaterial.MaterialType.ADAPTIVE,
       materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
     }
   };
@@ -553,13 +555,23 @@ export default struct HomePage {
       style: {
         scrollEffectOpts: { // 系统级无级渐变模糊：模糊量随列表滚动连续变化（6.0 起支持）
           enableScrollEffect: true,
-          scrollEffectType: this.supportFloatingBar ? ScrollEffectType.IMMERSIVE_GRADIENT_BLUR : ScrollEffectType.GRADIENT_BLUR
+          scrollEffectType: this.supportFloatingBar ? ScrollEffectType.IMMERSIVE_GRADIENT_BLUR : ScrollEffectType.GRADIENT_BLUR,
+          // 渐变模糊终止线对齐标题栏底边（状态栏+56，示例同款）：模糊量铺满整个标题区高度连续过渡，
+          // 而非默认 vp(8) 就饱和；6.0(20) 起支持
+          blurEffectiveEndOffset: LengthMetrics.vp(this.statusBarHeight + 56)
         },
-        systemMaterialEffect: this.supportFloatingBar ? { // 标题栏沉浸材质（6.1+），6.0 走 GRADIENT_BLUR 默认样式
-          materialType: hdsMaterial.MaterialType.IMMERSIVE,
+        systemMaterialEffect: this.supportFloatingBar ? { // 标题栏材质跟随系统策略（示例沉浸光感同款），6.0 走 GRADIENT_BLUR 默认样式
+          materialType: hdsMaterial.MaterialType.ADAPTIVE,
           materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
         } : undefined
       }
+    })
+    // 上滑隐没标题区与状态栏文字、下滑回顶恢复（官方沉浸光感场景同款，内容获得全屏沉浸）；
+    // 仅响应 bindToScrollable 绑定的课程列表，用户中心 Tab 不受影响。6.0(20) 起支持
+    .dynamicHideTitleBar({
+      hideTitleArea: true,
+      hideStatusBar: true,
+      mode: HideMode.SCROLL_UP_TO
     })
     .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM]) // 内容铺满状态栏和手势条之下
     .bindToScrollable([this.listScroller]) // 标题栏模糊绑定课程列表滚动
