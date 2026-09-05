@@ -4,7 +4,7 @@ import image from '@ohos.multimedia.image';
 import { ClassInfo, CourseAndActivity } from '../utils/classFun';
 import { scanBarcode, scanCore } from '@kit.ScanKit';
 import { curves, UIContext } from '@kit.ArkUI';
-import { hdsEffect, HdsTabs, HdsTabsController, HdsTabsBackgroundStyle, HdsTabsFloatingStyle } from '@kit.UIDesignKit';
+import { hdsEffect, hdsMaterial, HdsTabs, HdsTabsController, HdsTabsBackgroundStyle, HdsTabsFloatingStyle } from '@kit.UIDesignKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BusinessError, deviceInfo } from '@kit.BasicServicesKit';
 import promptAction from '@ohos.promptAction';
@@ -360,25 +360,38 @@ export default struct HomePage {
   // 注意：不能用 canIUse('apis: 23')——实测 6.1(API 24) 真机返回 false，与文档不符
   private readonly supportFloatingBar: boolean = deviceInfo.sdkApiVersion >= 23;
   private readonly tabBarMask: HdsTabsBackgroundStyle = { maskColor: $r('app.color.page_background') };
-  private readonly floatingBarStyle: HdsTabsFloatingStyle = { gradientMask: this.tabBarMask };
+  // 应用市场同款沉浸悬浮页签：系统沉浸材质（毛玻璃）+ 标准悬浮间距 + 响应式栏宽；
+  // 勿配 gradientMask——不透明 maskColor 会把胶囊下方糊成实色，毁掉沉浸感
+  private readonly floatingBarStyle: HdsTabsFloatingStyle = {
+    barWidth: { smallWidth: 280, mediumWidth: 400, largeWidth: 560 },
+    barBottomMargin: 28,
+    systemMaterialEffect: {
+      materialType: hdsMaterial.MaterialType.IMMERSIVE,
+      materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
+    }
+  };
   private openLinkContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
 
-  @Builder tabBuilder(title: string, targetIndex: number) {
+  // 页签项：图标+文字（应用市场风格），选中态主题蓝
+  @Builder
+  TabBarItem(targetIndex: number, title: Resource, symbol: Resource) {
     Column() {
+      SymbolGlyph(symbol)
+        .fontSize(22)
+        .fontColor([this.currentIndex === targetIndex ? $r('app.color.selected') : $r('app.color.unselected')])
       Text(title)
-        .fontColor(this.currentIndex === targetIndex ? $r('sys.color.font_emphasize') : $r('sys.color.font_primary'))
-        .fontWeight(this.currentIndex === targetIndex ? FontWeight.Bold : FontWeight.Regular)
-        .fontSize(this.currentIndex === targetIndex ? $r('sys.float.Caption_L') : $r('sys.float.Caption_M'))
-        .scale({
-          x: this.tabLabelScale[targetIndex] ?? 1,
-          y: this.tabLabelScale[targetIndex] ?? 1
-        })
-        .onClick(() => { this.switchTab(targetIndex); })
-      if (this.currentIndex === targetIndex) {
-        Divider().strokeWidth(2).color($r('sys.color.icon_emphasize')).width(20).margin({ top: 4 })
-      }
+        .fontSize(12)
+        .margin({ top: 2 })
+        .fontWeight(this.currentIndex === targetIndex ? FontWeight.Medium : FontWeight.Regular)
+        .fontColor(this.currentIndex === targetIndex ? $r('app.color.selected') : $r('app.color.unselected'))
+        .maxLines(1)
     }
-    .width('25%').height(20).justifyContent(FlexAlign.Center)
+    .width('100%').height('100%').justifyContent(FlexAlign.Center)
+    .scale({
+      x: this.tabLabelScale[targetIndex] ?? 1,
+      y: this.tabLabelScale[targetIndex] ?? 1
+    })
+    .onClick(() => { this.switchTab(targetIndex); })
   }
 
   @Builder loginSheetContent() {
@@ -530,7 +543,7 @@ export default struct HomePage {
     .title(this.titleName, {
       backgroundBlurStyle: BlurStyle.BACKGROUND_THIN, barStyle: BarStyle.STACK,
       backgroundBlurStyleOptions: {
-        colorMode: ThemeColorMode.LIGHT, adaptiveColor: AdaptiveColor.DEFAULT,
+        adaptiveColor: AdaptiveColor.DEFAULT,
         blurOptions: { grayscale: [8, 8] }, scale: 1
       }
     })
@@ -597,7 +610,7 @@ export default struct HomePage {
       .onRefreshing(async () => { await this.loadClassList(); }) // 仅下滑刷新：下拉触发课程列表重新拉取
     }
     .height('100%').width('100%')
-    .tabBar($r('app.string.class_list'))
+    .tabBar(this.TabBarItem(0, $r('app.string.class_list'), $r('sys.symbol.book')))
     .onAppear(async () => {
       await this.loadClassList();
     })
@@ -693,7 +706,7 @@ export default struct HomePage {
         backgroundColor: $r('sys.color.ohos_id_color_sub_background')
       })
     }
-    .tabBar($r('app.string.user'))
+    .tabBar(this.TabBarItem(1, $r('app.string.user'), $r('sys.symbol.person')))
   }
 
   /**
