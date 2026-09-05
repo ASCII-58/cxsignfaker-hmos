@@ -605,7 +605,6 @@ export default struct HomePage {
         }
         .divider({ strokeWidth: 0.5, color: $r('sys.color.comp_divider'), startMargin: 72, endMargin: 16 })
         .width('100%').height('100%').scrollBar(BarState.Off) // 高度占满:课程未加载/数量过少时列表不收缩居中,搜索框保持在悬浮标题栏下方
-        .padding({ bottom: 12 }) // 沉浸穿透：末项允许半沉入悬浮胶囊之下（应用市场同款），仅留少量余量
       }
       .width('100%').height('100%')
       .onRefreshing(async () => { await this.loadClassList(); }) // 仅下滑刷新：下拉触发课程列表重新拉取
@@ -697,8 +696,7 @@ export default struct HomePage {
           .borderRadius(16)
           .padding({ left: 4, right: 4 })
         }
-
-        Row().height(12).width('100%').backgroundColor($r('app.color.page_background')) // 沉浸穿透：末项可半沉入悬浮胶囊
+        // 底部不再留避让垫条：内容一贯到底，末项随滚动沉入悬浮胶囊之下（应用市场同款沉浸）
       }
       .width('100%').height('100%')
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
