@@ -752,7 +752,6 @@ export default struct HomePage {
         .bindSheet($$this.locationsSheetVisible, this.LocationsSheetBuilder, {
           height: 'auto', detents: [SheetSize.MEDIUM, SheetSize.LARGE],
           backgroundColor: $r('sys.color.ohos_id_color_sub_background'),
-          // 系统右上角 ✕ 会压住组件自绘的「添加」按钮，改用下拉/点蒙层关闭
           showClose: false
         })
 

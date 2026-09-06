@@ -3,14 +3,10 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { promptAction } from '@kit.ArkUI';
 import { DatabaseManager, SavedLocation } from '../utils/DataBase';
 import { ChaoxingUtils } from '../utils/utils';
-
+import { staticMap } from '@kit.MapKit';
 const TAG = 'LocationFavorites';
 const DOMAIN = 0x0008;
 
-/**
- * 收藏位置管理 sheet 内容：列表展示 + 添加/编辑（备注 + 地图选点）/删除
- * 由用户中心「管理收藏的位置」按钮以独立 bindSheet 打开，不复用设置 sheet
- */
 @Component
 export struct LocationFavoritesComponent {
   @State locations: SavedLocation[] = []
