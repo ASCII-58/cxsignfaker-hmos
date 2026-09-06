@@ -1,5 +1,6 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { promptAction } from '@kit.ArkUI';
+import { promptAction, componentSnapshot } from '@kit.ArkUI';
+import { image } from '@kit.ImageKit';
 import { geoLocationManager } from '@kit.LocationKit';
 import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
@@ -46,6 +47,8 @@ export struct LocationFavoritesComponent {
   private favoriteMarkers: map.Marker[] = []
   private geocodeTimer: number = -1
   private geocodeSeq: number = 0
+  /** 图标库定位针的 PixelMap 缓存（key 为颜色字符串） */
+  private pinIconCache: Map<string, image.PixelMap> = new Map()
   private mapOptions: mapCommon.MapOptions = {
     position: {
       target: { latitude: DEFAULT_CENTER.latitude, longitude: DEFAULT_CENTER.longitude },
@@ -80,6 +83,33 @@ export struct LocationFavoritesComponent {
   bd09Display(): string {
     const bd = ChaoxingUtils.gcj02_to_bd09(this.gcjLat, this.gcjLon)
     return `经度 ${bd.lon.toFixed(6)}  纬度 ${bd.lat.toFixed(6)}`
+  }
+
+  @Builder
+  PinIconBuilder(color: ResourceColor) {
+    Column() {
+      SymbolGlyph($r('sys.symbol.pin_fill'))
+        .fontSize(64)
+        .fontColor([color])
+    }
+  }
+
+  /** 把图标库的定位针符号离屏渲染成 marker 图标；失败时回退到内置 PNG */
+  private async getPinIcon(color: string): Promise<image.PixelMap | Resource> {
+    const cached = this.pinIconCache.get(color)
+    if (cached) {
+      return cached
+    }
+    try {
+      const pixelMap = await componentSnapshot.createFromBuilder(() => {
+        this.PinIconBuilder(color)
+      })
+      this.pinIconCache.set(color, pixelMap)
+      return pixelMap
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, `Render symbol pin failed: ${e.message}`);
+      return $r('app.media.map_pin')
+    }
   }
 
   // ---------- 地图 ----------
@@ -121,7 +151,7 @@ export struct LocationFavoritesComponent {
   }
 
   /** 把收藏位置画成琥珀色定位针；任何收藏数据变化后重画 */
-  private renderFavoriteMarkers() {
+  private async renderFavoriteMarkers() {
     const controller = this.mapController
     if (!controller) {
       return
@@ -130,13 +160,14 @@ export struct LocationFavoritesComponent {
       old.remove()
     }
     this.favoriteMarkers = []
+    const icon = await this.getPinIcon('#E5A200')
     for (const loc of this.locations) {
       const gcj = ChaoxingUtils.bd09_to_gcj02(
         ChaoxingUtils.parseStoredCoord(loc.latitude),
         ChaoxingUtils.parseStoredCoord(loc.longitude))
       controller.addMarker({
         position: { latitude: gcj.lat, longitude: gcj.lon },
-        icon: $r('app.media.map_pin'),
+        icon: icon,
         anchorU: 0.5,
         anchorV: 1,
         draggable: false,
@@ -169,9 +200,10 @@ export struct LocationFavoritesComponent {
     }
     if (!this.marker) {
       try {
+        const icon = await this.getPinIcon('#EA4335')
         this.marker = await controller.addMarker({
           position: { latitude: this.gcjLat, longitude: this.gcjLon },
-          icon: $r('app.media.map_pin_select'),
+          icon: icon,
           anchorU: 0.5,
           anchorV: 1,
           draggable: true,
@@ -286,7 +318,12 @@ export struct LocationFavoritesComponent {
 
   // ---------- 增删改 ----------
 
+  /** 取消选点：同步移除地图上的选点针 */
   clearSelection() {
+    if (this.marker) {
+      this.marker.remove()
+      this.marker = undefined
+    }
     this.editingId = -1
     this.noteInput = ''
     this.hasPicked = false
@@ -465,7 +502,7 @@ export struct LocationFavoritesComponent {
             .maxLength(30)
 
           Row({ space: 12 }) {
-            Button('清空')
+            Button('取消')
               .layoutWeight(1)
               .height(40)
               .borderRadius(20)
