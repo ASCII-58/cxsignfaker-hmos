@@ -59,12 +59,23 @@ export class Http {
    * GET 二进制内容，非 200 抛错
    */
   static async getBuffer(url: string, extraHeaders?: Record<string, string>): Promise<ArrayBuffer> {
+    const header: Record<string, string> = {};
+    if (extraHeaders) {
+      const headerKeys = Object.keys(extraHeaders);
+      for (let i = 0; i < headerKeys.length; i++) {
+        header[headerKeys[i]] = extraHeaders[headerKeys[i]];
+      }
+    }
+    if (!header['User-Agent']) {
+      // cldisk 等云盘 CDN 校验 UA：无 UA 或浏览器 UA 均返回 403（对齐上游全局 OkHttpClient 拦截器行为）
+      header['User-Agent'] = CHAOXING_APP_UA;
+    }
     const httpRequest = http.createHttp();
     try {
       const result = await httpRequest.request(url, {
         method: http.RequestMethod.GET,
         expectDataType: http.HttpDataType.ARRAY_BUFFER,
-        header: extraHeaders,
+        header: header,
         connectTimeout: 30000,
         readTimeout: 30000
       });
