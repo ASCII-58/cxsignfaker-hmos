@@ -151,6 +151,24 @@ struct UserInfoComponent {
     this.pathInfos.pushPath({ name: 'DebugPanel' })
   }
 
+  /** 图钉按钮按压触控：按下进入按压态并保持到抬手/移出按钮(40x40)边界。
+   *  不能用"非 Down 即 200ms 定时复位"的写法：按住时手指微抖会持续产生 Move
+   *  事件被误判成抬手，按压动画(~300ms)刚播完就被复位，看起来"一按完就弹回" */
+  private pressTouch(pressedKey: number): (event: TouchEvent) => void {
+    return (event: TouchEvent) => {
+      if (event.type === TouchType.Down) {
+        this.iconPressed = pressedKey
+      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+        this.iconPressed = -1
+      } else if (event.type === TouchType.Move && this.iconPressed === pressedKey) {
+        const t = event.touches[0]
+        if (t.x < 0 || t.y < 0 || t.x > 40 || t.y > 40) {
+          this.iconPressed = -1
+        }
+      }
+    }
+  }
+
   @Builder UnifiedSheet() {
     if (this.activeSheet === 0) {
       SettingsComponent()
@@ -244,13 +262,7 @@ struct UserInfoComponent {
             illuminatedType: hdsEffect.PointLightIlluminatedType.BORDER
           })
           .buildEffect())
-        .onTouch((event: TouchEvent) => {
-          if (event.type === TouchType.Down) {
-            this.iconPressed = 0
-          } else {
-            setTimeout(() => { this.iconPressed = -1 }, 200)
-          }
-        })
+        .onTouch(this.pressTouch(0))
         .onClick(() => {
           this.activeSheet = 0
           this.sheetVisible = true
@@ -272,13 +284,7 @@ struct UserInfoComponent {
             illuminatedType: hdsEffect.PointLightIlluminatedType.BORDER
           })
           .buildEffect())
-        .onTouch((event: TouchEvent) => {
-          if (event.type === TouchType.Down) {
-            this.iconPressed = 1
-          } else {
-            setTimeout(() => { this.iconPressed = -1 }, 200)
-          }
-        })
+        .onTouch(this.pressTouch(1))
         .onClick(() => {
           this.activeSheet = 1
           this.sheetVisible = true
@@ -300,13 +306,7 @@ struct UserInfoComponent {
             illuminatedType: hdsEffect.PointLightIlluminatedType.BORDER
           })
           .buildEffect())
-        .onTouch((event: TouchEvent) => {
-          if (event.type === TouchType.Down) {
-            this.iconPressed = 2
-          } else {
-            setTimeout(() => { this.iconPressed = -1 }, 200)
-          }
-        })
+        .onTouch(this.pressTouch(2))
         .onClick(() => { this.onLogout() })
       }
     }
