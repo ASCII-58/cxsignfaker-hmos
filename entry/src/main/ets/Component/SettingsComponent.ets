@@ -22,8 +22,6 @@ const KEY_EXPORT_DB = 12;
 const KEY_IMPORT_DB = 13;
 const KEY_CHANGELOG = 14;
 const KEY_GITHUB = 15;
-// 按压态最短保持时长：保证按下动画(约300ms)播完后才开始回弹
-const MIN_PRESS_HOLD_MS = 320;
 
 // 应用内更新日志数据结构（来源：rawfile/changelog.json，更新日志只需编辑该文件）
 interface ChangelogSection {
@@ -57,11 +55,11 @@ export struct SettingsComponent {
   @State thumbPressed: boolean = false;
   // 拖拽跟手果冻量：0 无形变，>0 按横向速度拉伸(横向拉长、纵向压缩)
   @State thumbStretch: number = 0;
-  // 通用按压 Q 弹：当前按下的按钮标识，-1 表示无
+  // 通用按压 Q 弹：当前按下的按钮标识，-1 表示无；按压态保持至抬手或移出按钮区域
   @State pressedKey: number = -1;
-  // 本次按压的开始时间与代次：代次用于丢弃快速连按时上一次的恢复定时器
-  private pressStartAt: number = 0;
-  private pressToken: number = 0;
+  // 各按压目标的尺寸缓存 key->[宽,高]：触控按下后 Move/Up 持续派发给该组件，
+  // 移出判定需要组件自身尺寸(onAreaChange 采集)
+  private pressAreas: Map<number, number[]> = new Map();
   private panActive: boolean = false;
   private dragStartThumbX: number = 0;
   private touchStartX: number = 0;
@@ -435,23 +433,32 @@ export struct SettingsComponent {
     });
   }
 
-  /** 通用按压 Q 弹触控：按下记 pressedKey，离手后最短保持 MIN_PRESS_HOLD_MS 再弹回，
-   *  保证按下动画完整播完，不会一按完立刻恢复；回弹由 interpolatingSpring 完成，
-   *  阻尼增大后只带一次轻微过冲(与首页图钉按钮同刚度) */
+  /** 采集按压目标自身尺寸，供"移出按钮区域"命中检测 */
+  private pressAreaHandler(key: number): (_old: Area, area: Area) => void {
+    return (_old: Area, area: Area) => {
+      this.pressAreas.set(key, [area.width as number, area.height as number]);
+    };
+  }
+
+  /** 通用按压 Q 弹触控：按下进入按压态，保持至抬手(Up/Cancel)或手指移出按钮区域
+   *  (Move 中按组件尺寸做命中检测)；不用定时器，按压态严格跟随触摸本身 */
   private pressTouchHandler(key: number): (event: TouchEvent) => void {
     return (event: TouchEvent) => {
       if (event.type === TouchType.Down) {
         this.pressedKey = key;
-        this.pressStartAt = Date.now();
-        this.pressToken++;
       } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-        const token = this.pressToken;
-        const remain = Math.max(0, MIN_PRESS_HOLD_MS - (Date.now() - this.pressStartAt));
-        setTimeout(() => {
-          if (this.pressedKey === key && this.pressToken === token) {
-            this.pressedKey = -1;
-          }
-        }, remain);
+        if (this.pressedKey === key) {
+          this.pressedKey = -1;
+        }
+      } else if (event.type === TouchType.Move && this.pressedKey === key) {
+        const size = this.pressAreas.get(key);
+        if (!size) {
+          return;
+        }
+        const t = event.touches[0];
+        if (t.x < 0 || t.y < 0 || t.x > size[0] || t.y > size[1]) {
+          this.pressedKey = -1;
+        }
       }
     };
   }
@@ -602,6 +609,7 @@ export struct SettingsComponent {
                         y: this.pressedKey === idx ? 0.92 : 1
                       })
                       .animation({ duration: 300, curve: curves.interpolatingSpring(0, 1, 328, 38) })
+                      .onAreaChange(this.pressAreaHandler(idx))
                       .onTouch(this.pressTouchHandler(idx))
                       .onClick(() => {
                         this.commitIndex(idx);
@@ -698,6 +706,7 @@ export struct SettingsComponent {
                       y: this.pressedKey === KEY_MODEL_TEST ? 0.95 : 1
                     })
                     .animation({ duration: 300, curve: curves.interpolatingSpring(0, 1, 328, 38) })
+                    .onAreaChange(this.pressAreaHandler(KEY_MODEL_TEST))
                     .onTouch(this.pressTouchHandler(KEY_MODEL_TEST))
                     .onClick(() => {
                       this.runModelTest()
@@ -745,6 +754,7 @@ export struct SettingsComponent {
                 y: this.pressedKey === KEY_CLEAR_CACHE ? 0.97 : 1
               })
               .animation({ duration: 300, curve: curves.interpolatingSpring(0, 1, 328, 38) })
+              .onAreaChange(this.pressAreaHandler(KEY_CLEAR_CACHE))
               .onTouch(this.pressTouchHandler(KEY_CLEAR_CACHE))
               .onClick(() => {
                 this.confirmClearCache()
@@ -762,6 +772,7 @@ export struct SettingsComponent {
                 y: this.pressedKey === KEY_EXPORT_DB ? 0.97 : 1
               })
               .animation({ duration: 300, curve: curves.interpolatingSpring(0, 1, 328, 38) })
+              .onAreaChange(this.pressAreaHandler(KEY_EXPORT_DB))
               .onTouch(this.pressTouchHandler(KEY_EXPORT_DB))
               .onClick(() => {
                 this.exportDatabase()
@@ -779,6 +790,7 @@ export struct SettingsComponent {
                 y: this.pressedKey === KEY_IMPORT_DB ? 0.97 : 1
               })
               .animation({ duration: 300, curve: curves.interpolatingSpring(0, 1, 328, 38) })
+              .onAreaChange(this.pressAreaHandler(KEY_IMPORT_DB))
               .onTouch(this.pressTouchHandler(KEY_IMPORT_DB))
               .onClick(() => {
                 this.importDatabase()
@@ -796,6 +808,7 @@ export struct SettingsComponent {
                 y: this.pressedKey === KEY_CHANGELOG ? 0.97 : 1
               })
               .animation({ duration: 300, curve: curves.interpolatingSpring(0, 1, 328, 38) })
+              .onAreaChange(this.pressAreaHandler(KEY_CHANGELOG))
               .onTouch(this.pressTouchHandler(KEY_CHANGELOG))
               .onClick(() => {
                 this.showChangelog()
@@ -816,6 +829,7 @@ export struct SettingsComponent {
                 y: this.pressedKey === KEY_GITHUB ? 0.97 : 1
               })
               .animation({ duration: 300, curve: curves.interpolatingSpring(0, 1, 328, 38) })
+              .onAreaChange(this.pressAreaHandler(KEY_GITHUB))
               .onTouch(this.pressTouchHandler(KEY_GITHUB))
               .onClick(() => {
                 this.openUrl('https://github.com/ASCII-58/chaoxingsignfacker')
