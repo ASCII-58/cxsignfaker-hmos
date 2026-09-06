@@ -86,30 +86,58 @@ export struct LocationFavoritesComponent {
   }
 
   @Builder
-  PinIconBuilder(color: ResourceColor) {
+  PinIconBuilder(color: ResourceColor, isFavorite: boolean) {
     Column() {
-      SymbolGlyph($r('sys.symbol.pin_fill'))
-        .fontSize(64)
-        .fontColor([color])
+      Stack({ alignContent: Alignment.Center }) {
+        Column()
+          .width(30)
+          .height(30)
+          .borderRadius(15)
+          .backgroundColor(color)
+          .border({ width: 2, color: '#FFFFFF' })
+          .shadow({ radius: 4, color: 'rgba(0,0,0,0.25)', offsetY: 1 })
+        if (isFavorite) {
+          SymbolGlyph($r('sys.symbol.star_fill'))
+            .fontSize(14)
+            .fontColor(['#FFFFFF'])
+        } else {
+          Column()
+            .width(10)
+            .height(10)
+            .borderRadius(5)
+            .backgroundColor('#FFFFFF')
+        }
+      }
+      Polygon({ width: 10, height: 7 })
+        .points([[0, 0], [10, 0], [5, 7]])
+        .fill(color)
+        .margin({ top: -1 })
     }
+    .alignItems(HorizontalAlign.Center)
   }
 
-  /** 把图标库的定位针符号离屏渲染成 marker 图标；失败时回退到内置 PNG */
-  private async getPinIcon(color: string): Promise<image.PixelMap | Resource> {
-    const cached = this.pinIconCache.get(color)
+  /** 把小号水滴针离屏渲染成 marker 图标；失败时回退到内置 PNG */
+  private async getPinIcon(color: string, isFavorite: boolean): Promise<image.PixelMap | Resource> {
+    const cacheKey = `${color}_${isFavorite}`
+    const cached = this.pinIconCache.get(cacheKey)
     if (cached) {
       return cached
     }
     try {
       const pixelMap = await componentSnapshot.createFromBuilder(() => {
-        this.PinIconBuilder(color)
+        this.PinIconBuilder(color, isFavorite)
       })
-      this.pinIconCache.set(color, pixelMap)
+      this.pinIconCache.set(cacheKey, pixelMap)
       return pixelMap
     } catch (e) {
-      hilog.error(DOMAIN, TAG, `Render symbol pin failed: ${e.message}`);
+      hilog.error(DOMAIN, TAG, `Render pin icon failed: ${e.message}`);
       return $r('app.media.map_pin')
     }
+  }
+
+  /** 标记上方的标签文案：备注 + 地点 */
+  private markerLabel(note: string, address: string): string {
+    return note !== '' ? `${note} · ${address}` : address
   }
 
   // ---------- 地图 ----------
@@ -160,7 +188,7 @@ export struct LocationFavoritesComponent {
       old.remove()
     }
     this.favoriteMarkers = []
-    const icon = await this.getPinIcon('#E5A200')
+    const icon = await this.getPinIcon('#E5A200', true)
     for (const loc of this.locations) {
       const gcj = ChaoxingUtils.bd09_to_gcj02(
         ChaoxingUtils.parseStoredCoord(loc.latitude),
@@ -171,7 +199,15 @@ export struct LocationFavoritesComponent {
         anchorU: 0.5,
         anchorV: 1,
         draggable: false,
-        title: this.locationTitle(loc)
+        title: this.locationTitle(loc),
+        annotations: [{
+          content: this.markerLabel(loc.note, loc.address),
+          color: 0xFF333333,
+          fontSize: 12,
+          strokeColor: 0xFFFFFFFF,
+          strokeWidth: 2
+        }],
+        annotationPosition: mapCommon.TextPosition.TOP
       }).then((m: map.Marker) => {
         m.setTag(loc.id)
         this.favoriteMarkers.push(m)
@@ -192,29 +228,37 @@ export struct LocationFavoritesComponent {
     }
   }
 
-  /** 选点针（红色定位针），始终可拖动 */
+  /** 选点针（红色水滴针 + 上方地点标签）；位置或标签变化时重建 */
   private async ensureSelectionPin() {
     const controller = this.mapController
     if (!controller) {
       return
     }
-    if (!this.marker) {
-      try {
-        const icon = await this.getPinIcon('#EA4335')
-        this.marker = await controller.addMarker({
-          position: { latitude: this.gcjLat, longitude: this.gcjLon },
-          icon: icon,
-          anchorU: 0.5,
-          anchorV: 1,
-          draggable: true,
-          title: '选点'
-        })
-      } catch (e) {
-        hilog.error(DOMAIN, TAG, `Add selection marker failed: ${e.message}`);
-      }
-      return
+    if (this.marker) {
+      this.marker.remove()
+      this.marker = undefined
     }
-    this.marker.setPosition({ latitude: this.gcjLat, longitude: this.gcjLon })
+    try {
+      const icon = await this.getPinIcon('#EA4335', false)
+      this.marker = await controller.addMarker({
+        position: { latitude: this.gcjLat, longitude: this.gcjLon },
+        icon: icon,
+        anchorU: 0.5,
+        anchorV: 1,
+        draggable: true,
+        title: '选点',
+        annotations: [{
+          content: this.pickedAddress !== '' ? this.pickedAddress : '选点',
+          color: 0xFF333333,
+          fontSize: 12,
+          strokeColor: 0xFFFFFFFF,
+          strokeWidth: 2
+        }],
+        annotationPosition: mapCommon.TextPosition.TOP
+      })
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, `Add selection marker failed: ${e.message}`);
+    }
   }
 
   /** 选点统一入口：地图点按、POI 点按、拖动针、定位按钮；addressOverride 非空时直接作为地址 */
@@ -307,6 +351,8 @@ export struct LocationFavoritesComponent {
       } else {
         this.pickedAddress = `${this.gcjLat.toFixed(6)}, ${this.gcjLon.toFixed(6)}`
       }
+      // 地址回填后刷新选点针上方的标签
+      this.ensureSelectionPin()
     } catch (e) {
       hilog.error(DOMAIN, TAG, `Reverse geocode failed: ${e.message}`);
       if (seq !== this.geocodeSeq) {
