@@ -4,16 +4,11 @@ import { preferences } from '@kit.ArkData';
 import { image } from '@kit.ImageKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { DatabaseManager, UserDataAndId } from '../utils/DataBase';
+import { DatabaseManager } from '../utils/DataBase';
 import { MsCaptchaDetector } from '../utils/detector/MsCaptchaDetector';
 import { CaptchaComponent, CaptchaUserParam } from './Captcha';
-import { Sign } from '../utils/sign';
-import { CaptchaApi, CaptchaPhotosParam } from '../utils/captchaApi';
-import { FaceApi } from '../utils/faceApi';
-import { uploadImageForObject } from '../utils/upload';
-import { Http, writeBufferToFile } from '../utils/httpClient';
-import { loginFunction } from '../utils/Login';
-import fs from '@ohos.file.fs';
+import { Sign, parseSignResult } from '../utils/sign';
+import { FaceApi, FaceResultParam } from '../utils/faceApi';
 
 const ONNX_TEST_TAG = 'OnnxTest';
 
@@ -23,6 +18,23 @@ const SIGN_EXPIRY_MS = 12 * 30 * 24 * 60 * 60 * 1000;
 const BACKUP_REMINDER_MS = 11 * 30 * 24 * 60 * 60 * 1000;
 
 const IMAGE_RAWFILE = 'models/test.jpg';
+
+/** 本地解析用例：签到接口原始返回文本 → 期望解析出的 SignOutcome.kind */
+interface ParseCase {
+  raw: string;
+  expectKind: string;
+}
+
+const PARSE_CASES: ParseCase[] = [
+  { raw: 'success', expectKind: 'success' },
+  { raw: '[face]检测到非本人', expectKind: 'face' },
+  { raw: 'success2', expectKind: 'ended' },
+  { raw: '签到失败，请重新扫描。', expectKind: 'qrcodeExpired' },
+  { raw: 'errorLocation_512', expectKind: 'wrongPosition' },
+  { raw: '您已签到过了', expectKind: 'already' },
+  { raw: 'validate:abcdef123456', expectKind: 'captcha' },
+  { raw: '<html>500 Internal Server Error</html>', expectKind: 'error' }
+];
 
 @Component
 export struct DebugPage {
@@ -36,11 +48,8 @@ export struct DebugPage {
   @State captchaDemoShow: boolean = false;
   @State demoSession: number = 1;
   @State demoLog: string = '尚未触发回调';
-  // 签到验证链路测试（真实网络，走主用户登录态）
-  @State testActiveId: string = '';
-  @State testCourseId: string = '';
-  @State testClassId: string = '';
-  @State testSignCode: string = '1234';
+  // 签到验证本地校验（不访问网络）
+  @State testClientId: string = '';
   @State testLog: string = '尚未运行任何测试';
   @State testRunning: boolean = false;
 
@@ -241,22 +250,6 @@ export struct DebugPage {
     .width('100%')
   }
 
-  /** 签到验证链路测试：统一取主用户登录态（getUserById(0) = 主用户） */
-  private async getHostUser(): Promise<UserDataAndId> {
-    const host = await DatabaseManager.getInstance().getUserById(0);
-    if (!host || !host.cookies) {
-      throw new Error('未找到主用户登录信息，请先登录');
-    }
-    return host;
-  }
-
-  private requireActiveId(): string {
-    if (!this.testActiveId.trim()) {
-      throw new Error('请先填写活动ID(activeId)');
-    }
-    return this.testActiveId.trim();
-  }
-
   private logLine(line: string) {
     this.testLog = `${line}\n${this.testLog}`;
   }
@@ -278,136 +271,62 @@ export struct DebugPage {
     }
   }
 
-  /** 1. 活动详情解析：验证码/人脸/拍照/位置等验证开关 */
-  private async testActiveDetail() {
-    const host = await this.getHostUser();
-    const activeId = this.requireActiveId();
-    const d = await Sign.GetActiveDetail(host.cookies, activeId);
-    this.logLine(`otherId=${d.otherId}(0拍照/2二维码/3手势/4位置/5签到码) ` +
-      `验证码=${d.ifNeedVCode} 人脸=${d.openCheckFaceFlag} 需拍照=${d.ifphoto}`);
-    this.logLine(`位置范围=${d.locationRange} lat=${d.locationLatitude} lng=${d.locationLongitude} ` +
-      `二维码带定位=${d.ifopenAddress} 二维码刷新=${d.ifrefreshewm}`);
+  /** 1. 签到结果解析 parseSignResult 全分支（success/face/ended/二维码过期/位置/重复/验证码/错误） */
+  private async testParseSignResult() {
+    let pass = 0;
+    for (const c of PARSE_CASES) {
+      const outcome = parseSignResult(c.raw);
+      const ok = outcome.kind === c.expectKind;
+      if (ok) {
+        pass++;
+      }
+      this.logLine(`${ok ? '✔' : '✘'} "${c.raw.substring(0, 16)}" → ${outcome.kind}` +
+        `${ok ? '' : `（期望 ${c.expectKind}）`}`);
+    }
+    if (pass !== PARSE_CASES.length) {
+      throw new Error(`${PARSE_CASES.length - pass} 个分支不符`);
+    }
   }
 
-  /** 2. 预签到检测：截止/已签到/可签到/无权限 */
-  private async testPreSignIn() {
-    const host = await this.getHostUser();
-    const activeId = this.requireActiveId();
-    if (!this.testClassId.trim() || !this.testCourseId.trim()) {
-      throw new Error('请先填写课程ID和班级ID');
+  /** 2. 设备码生成（88 位 Base64，全部签到请求共用） */
+  private async testDeviceCode() {
+    const code = await Sign.generateDeviceCode();
+    if (code.length !== 88) {
+      throw new Error(`deviceCode 长度 ${code.length}，预期 88`);
     }
-    const r = await Sign.PreSignIn(activeId, this.testClassId.trim(), this.testCourseId.trim(), host.uid,
-      host.cookies);
-    let desc = '未知';
-    if (r === -1) {
-      desc = '-1=无权限/不在班级';
-    } else if (r === 0) {
-      desc = '0=已签到';
-    } else if (r === 1) {
-      desc = '1=可签到';
-    } else if (r === 2) {
-      desc = '2=已截止';
-    }
-    this.logLine(`preSign=${r}（${desc}），页面enc=${Sign.lastPreSignEnc || '(无)'}`);
+    this.logLine(`deviceCode 长度=88 ✔ ${code.substring(0, 16)}...`);
   }
 
-  /** 3. 滑块验证码全流程：拉图→模型识别→提交校验→validate */
-  private async testCaptchaFlow() {
-    const host = await this.getHostUser();
-    const activeId = this.requireActiveId();
-    if (!this.testClassId.trim() || !this.testCourseId.trim()) {
-      throw new Error('请先填写课程ID和班级ID');
-    }
-    const params: CaptchaPhotosParam = {
-      courseId: this.testCourseId.trim(),
-      classId: this.testClassId.trim(),
-      activePrimaryId: activeId,
-      uid: `${host.uid}`
-    };
-    const photos = await CaptchaApi.getCaptchaPhotos(params, host.cookies);
-    this.logLine(`验证码拉取成功 token=${photos.token.substring(0, 12)}...`);
-    await MsCaptchaDetector.load(this.context);
-    const buf = await Http.getBuffer(photos.imageVerificationVo.shadeImage);
-    const source = image.createImageSource(buf);
-    let pixelMap: image.PixelMap | undefined = undefined;
-    try {
-      pixelMap = await source.createPixelMap({ desiredPixelFormat: image.PixelMapFormat.RGBA_8888 });
-    } finally {
-      source.release();
-    }
-    const xOffset = await MsCaptchaDetector.detect(pixelMap);
-    pixelMap.release();
-    if (xOffset < 0) {
-      throw new Error('模型未检测到滑块位置');
-    }
-    this.logLine(`模型识别 x=${xOffset}，提交校验…`);
-    const validate = await CaptchaApi.checkCaptchaResult(photos, xOffset, params, host.cookies);
-    if (!validate) {
-      throw new Error('校验未通过（返回空 validate）');
-    }
-    this.logLine(`validate=${validate.substring(0, 24)}...`);
-  }
-
-  /** 4. 签到码/手势预校验（共用 checkSignCode 接口） */
-  private async testCheckSignCode() {
-    const host = await this.getHostUser();
-    const activeId = this.requireActiveId();
-    const ok = await Sign.CheckSignCode(host.cookies, activeId, this.testSignCode.trim());
-    this.logLine(`签到码 ${this.testSignCode.trim()} 校验结果: ${ok ? '正确' : '错误'}`);
-  }
-
-  /** 5. clientId 解密（人脸 signToken 依赖的 cid/sc） */
+  /** 3. clientId 解密（人脸 signToken 依赖的 cid/sc，纯本地 RSA 还原） */
   private async testDecryptClientId() {
-    const host = await this.getHostUser();
-    const loginInfo = await loginFunction.getUserInfo(host.cookies);
-    if (!loginInfo.clientId) {
-      throw new Error('用户信息未返回 clientId');
+    if (!this.testClientId.trim()) {
+      throw new Error('请先在输入框粘贴 clientId');
     }
-    const info = FaceApi.decryptClientId(loginInfo.clientId);
+    const info = FaceApi.decryptClientId(this.testClientId.trim());
     if (!info) {
-      throw new Error('clientId 解密失败');
+      throw new Error('clientId 解密失败（格式非法或公钥不匹配）');
     }
-    this.logLine(`clientId 解密成功 cid=${info.cid.substring(0, 16)}... sc=${info.sc.substring(0, 8)}...`);
+    this.logLine(`cid=${info.cid.substring(0, 16)}... sc=${info.sc.substring(0, 8)}...`);
   }
 
-  /** 6. 人脸流程：默认底图 objectId→下载→faceEnc */
-  private async testFaceFlow() {
-    const host = await this.getHostUser();
-    const activeId = this.requireActiveId();
-    const objectId = await FaceApi.GetProfileFaceObjectId(host.cookies);
-    this.logLine(`默认人脸照片 objectId=${objectId}`);
-    const filePath = this.context.cacheDir + '/debug_face_test.jpg';
-    await FaceApi.DownloadFaceImage(objectId, filePath);
-    this.logLine(`底图已下载: ${filePath}`);
-    const loginInfo = await loginFunction.getUserInfo(host.cookies);
-    const enc = await FaceApi.CheckFaceResultAndGetEnc(host.cookies, activeId, objectId, loginInfo.clientId);
-    this.logLine(`faceEnc=${enc.substring(0, 24)}...`);
-  }
-
-  /** 7. 云盘上传：token 获取 + multipart 上传（拍照/人脸共用链路） */
-  private async testCloudUpload() {
-    const host = await this.getHostUser();
-    const loginInfo = await loginFunction.getUserInfo(host.cookies);
-    if (!loginInfo.puid) {
-      throw new Error('用户信息未返回 puid');
+  /** 4. 人脸 faceResult 构造（buildFaceResult + signToken MD5，纯本地） */
+  private async testBuildFaceResult() {
+    const clientId = this.testClientId.trim();
+    const r = JSON.parse(FaceApi.buildFaceResult('debugObjectId', clientId || undefined)) as FaceResultParam;
+    if (r.currentFaceId !== 'debugObjectId' || r.LiveDetectionStatus !== 1 || r.collectStatus !== 1) {
+      throw new Error('faceResult 基础字段不符');
     }
-    const buf = this.context.resourceManager.getRawFileContentSync(IMAGE_RAWFILE);
-    const filePath = this.context.cacheDir + '/debug_upload_test.jpg';
-    writeBufferToFile(filePath, buf.buffer as ArrayBuffer);
-    const objectId = await uploadImageForObject(this.context, host.cookies, loginInfo.puid, filePath);
-    this.logLine(`云盘上传成功 objectId=${objectId}`);
+    if (r.signToken) {
+      if (r.signToken.length !== 32) {
+        throw new Error(`signToken 长度 ${r.signToken.length}，预期 32 位 MD5`);
+      }
+      this.logLine(`faceResult ✔ signToken=${r.signToken.substring(0, 12)}...（含 clientId 签名）`);
+    } else {
+      this.logLine('faceResult ✔ 基础字段正确（未填 clientId，跳过 signToken 签名）');
+    }
   }
 
-  /** 8. 签退信息解析：signInId/signOutId/发布时间戳 */
-  private async testSignOutInfo() {
-    const host = await this.getHostUser();
-    const activeId = this.requireActiveId();
-    const info = await Sign.GetSignInfo(host.cookies, activeId);
-    this.logLine(`signInId=${info.signInId} signOutId=${info.signOutId} ` +
-      `签退时间戳=${info.signOutPublishTimeStamp || '(无签退)'}`);
-  }
-
-  /** 签到验证链路测试按钮见 build() 中「签到验证链路测试」卡片 */
+  /** 签到验证本地校验按钮见 build() 中「签到验证（本地校验）」卡片 */
 
   build() {
     Column() {
@@ -606,62 +525,28 @@ export struct DebugPage {
 
         ListItem() {
           Column() {
-            Text('签到验证链路测试')
+            Text('签到验证（本地校验）')
               .fontSize(14)
               .fontColor($r('sys.color.ohos_id_color_text_secondary'))
               .width('100%')
               .margin({ bottom: 8, left: 4 })
 
             Column({ space: 8 }) {
-              Row({ space: 8 }) {
-                TextInput({ placeholder: '活动ID activeId', text: $$this.testActiveId })
-                  .layoutWeight(2)
-                  .height(40)
-                  .fontSize(13)
-                  .backgroundColor($r('sys.color.ohos_id_color_text_field_sub_bg'))
-                TextInput({ placeholder: '课程ID', text: $$this.testCourseId })
-                  .layoutWeight(1)
-                  .height(40)
-                  .fontSize(13)
-                  .backgroundColor($r('sys.color.ohos_id_color_text_field_sub_bg'))
-                TextInput({ placeholder: '班级ID', text: $$this.testClassId })
-                  .layoutWeight(1)
-                  .height(40)
-                  .fontSize(13)
-                  .backgroundColor($r('sys.color.ohos_id_color_text_field_sub_bg'))
-              }
-              .width('100%')
+              TextInput({ placeholder: 'clientId（选填，用户信息接口返回值）', text: $$this.testClientId })
+                .width('100%')
+                .height(40)
+                .fontSize(13)
+                .backgroundColor($r('sys.color.ohos_id_color_text_field_sub_bg'))
 
               Row({ space: 8 }) {
-                TextInput({ placeholder: '签到码/手势编码', text: $$this.testSignCode })
-                  .layoutWeight(1)
-                  .height(40)
-                  .fontSize(13)
-                  .backgroundColor($r('sys.color.ohos_id_color_text_field_sub_bg'))
-              }
-              .width('100%')
-
-              Row({ space: 8 }) {
-                Button('活动详情解析')
+                Button('签到结果解析')
                   .layoutWeight(1).fontSize(13).height(36)
                   .enabled(!this.testRunning)
-                  .onClick(() => { this.runTest('活动详情解析', (): Promise<void> => this.testActiveDetail()) })
-                Button('预签到检测')
+                  .onClick(() => { this.runTest('签到结果解析', (): Promise<void> => this.testParseSignResult()) })
+                Button('设备码生成')
                   .layoutWeight(1).fontSize(13).height(36)
                   .enabled(!this.testRunning)
-                  .onClick(() => { this.runTest('预签到检测', (): Promise<void> => this.testPreSignIn()) })
-              }
-              .width('100%')
-
-              Row({ space: 8 }) {
-                Button('验证码全流程')
-                  .layoutWeight(1).fontSize(13).height(36)
-                  .enabled(!this.testRunning)
-                  .onClick(() => { this.runTest('验证码全流程', (): Promise<void> => this.testCaptchaFlow()) })
-                Button('签到码预校验')
-                  .layoutWeight(1).fontSize(13).height(36)
-                  .enabled(!this.testRunning)
-                  .onClick(() => { this.runTest('签到码预校验', (): Promise<void> => this.testCheckSignCode()) })
+                  .onClick(() => { this.runTest('设备码生成', (): Promise<void> => this.testDeviceCode()) })
               }
               .width('100%')
 
@@ -670,26 +555,14 @@ export struct DebugPage {
                   .layoutWeight(1).fontSize(13).height(36)
                   .enabled(!this.testRunning)
                   .onClick(() => { this.runTest('clientId解密', (): Promise<void> => this.testDecryptClientId()) })
-                Button('人脸底图+faceEnc')
+                Button('faceResult构造')
                   .layoutWeight(1).fontSize(13).height(36)
                   .enabled(!this.testRunning)
-                  .onClick(() => { this.runTest('人脸底图+faceEnc', (): Promise<void> => this.testFaceFlow()) })
+                  .onClick(() => { this.runTest('faceResult构造', (): Promise<void> => this.testBuildFaceResult()) })
               }
               .width('100%')
 
-              Row({ space: 8 }) {
-                Button('云盘上传')
-                  .layoutWeight(1).fontSize(13).height(36)
-                  .enabled(!this.testRunning)
-                  .onClick(() => { this.runTest('云盘上传', (): Promise<void> => this.testCloudUpload()) })
-                Button('签退信息解析')
-                  .layoutWeight(1).fontSize(13).height(36)
-                  .enabled(!this.testRunning)
-                  .onClick(() => { this.runTest('签退信息解析', (): Promise<void> => this.testSignOutInfo()) })
-              }
-              .width('100%')
-
-              Text('说明：全部走主用户真实登录态；前4项需要有效活动ID（预签到/验证码另需课程与班级ID）。')
+              Text('说明：全部本地计算，不访问网络。clientId 选填，填入后可校验解密与 signToken 签名；滑块模型检测见上方独立卡片。')
                 .fontSize(11)
                 .fontColor($r('sys.color.ohos_id_color_text_tertiary'))
                 .width('100%')
