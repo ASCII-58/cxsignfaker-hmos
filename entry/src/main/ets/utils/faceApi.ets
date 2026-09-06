@@ -3,6 +3,8 @@ import { Http, writeBufferToFile } from './httpClient';
 import { JSON, util } from '@kit.ArkTS';
 import CryptoJS from '@ohos/crypto-js';
 import { systemDateTime } from '@kit.BasicServicesKit';
+import { image } from '@kit.ImageKit';
+import fs from '@ohos.file.fs';
 
 /** clientId 解密结果，用于计算人脸 signToken */
 export interface ClientIdInfo {
@@ -151,4 +153,28 @@ export class FaceApi {
       return null;
     }
   }
+}
+
+/**
+ * 随机裁剪人脸图片（对齐上游 randomizeStylizeFaceImage 的随机裁剪，规避风控）
+ * 独立导出，FacePicker 与 Debug 本地模拟测试共用同一实现
+ */
+export async function randomizeFaceImage(srcPath: string, dstPath: string): Promise<void> {
+  const imageSource = image.createImageSource(srcPath);
+  const pixelMap = await imageSource.createPixelMap();
+  const imageInfo = await pixelMap.getImageInfo();
+  const scale = 0.9 + Math.random() * 0.09;
+  const cropWidth = Math.floor(imageInfo.size.width * scale);
+  const cropHeight = Math.floor(imageInfo.size.height * scale);
+  const cropX = Math.floor(Math.random() * (imageInfo.size.width - cropWidth));
+  const cropY = Math.floor(Math.random() * (imageInfo.size.height - cropHeight));
+  await pixelMap.crop({ x: cropX, y: cropY, size: { width: cropWidth, height: cropHeight } });
+  const imagePacker = image.createImagePacker();
+  const packedBuffer = await imagePacker.packToData(pixelMap, { format: 'image/jpeg', quality: 90 });
+  const file = fs.openSync(dstPath, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+  fs.writeSync(file.fd, packedBuffer);
+  fs.closeSync(file);
+  pixelMap.release();
+  imagePacker.release();
+  imageSource.release();
 }
