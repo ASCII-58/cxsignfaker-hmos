@@ -212,6 +212,7 @@ export struct LocationFavoritesComponent {
     this.pickPosition(gcj.lat, gcj.lon, true, loc.address)
   }
 
+  /** 定位到当前位置：仅移动镜头，不打标记、不选点 */
   private async locateCurrent() {
     try {
       const atManager = abilityAccessCtrl.createAtManager()
@@ -232,7 +233,10 @@ export struct LocationFavoritesComponent {
     try {
       const location = await geoLocationManager.getCurrentLocation()
       const gcj = ChaoxingUtils.wgs84_to_gcj02(location.latitude, location.longitude)
-      this.pickPosition(gcj.lat, gcj.lon, true, '')
+      if (this.mapController) {
+        this.mapController.animateCamera(
+          map.newLatLng({ latitude: gcj.lat, longitude: gcj.lon }, 16), 500)
+      }
     } catch (e) {
       hilog.error(DOMAIN, TAG, `Get current location failed: ${e.message}`);
       promptAction.showToast({ message: '定位失败，请检查定位服务' })
@@ -373,7 +377,8 @@ export struct LocationFavoritesComponent {
         .width('100%')
         .height('100%')
 
-      // 悬浮层：顶部提示 + 右下角图标按钮（容器不拦截地图手势，仅按钮可点）
+      // 悬浮层：顶部提示 + 右下角图标按钮
+      // 容器与所有非交互子元素必须 hitTestBehavior(None)，否则会挡住地图的触摸
       Column() {
         Row() {
           Text(this.hasPicked ? this.pickedAddress : '点按地图选点，点按定位针选中收藏')
@@ -390,14 +395,16 @@ export struct LocationFavoritesComponent {
         .width('100%')
         .justifyContent(FlexAlign.End)
         .padding({ right: 12, top: 10 })
+        .hitTestBehavior(HitTestMode.None)
 
         Blank()
+          .hitTestBehavior(HitTestMode.None)
 
         Column({ space: 10 }) {
           Button() {
-            Image($r('app.media.ic_map_manage'))
-              .width(22).height(22)
-              .fillColor($r('app.color.primary_text'))
+            SymbolGlyph($r('sys.symbol.star_badge_list'))
+              .fontSize(20)
+              .fontColor([$r('app.color.primary_text')])
           }
           .type(ButtonType.Circle)
           .width(42).height(42)
@@ -408,9 +415,9 @@ export struct LocationFavoritesComponent {
           })
 
           Button() {
-            Image($r('app.media.ic_map_locate'))
-              .width(22).height(22)
-              .fillColor($r('app.color.primary_text'))
+            SymbolGlyph($r('sys.symbol.scope'))
+              .fontSize(20)
+              .fontColor([$r('app.color.primary_text')])
           }
           .type(ButtonType.Circle)
           .width(42).height(42)
@@ -423,6 +430,7 @@ export struct LocationFavoritesComponent {
           })
         }
         .padding({ right: 12, bottom: 12 })
+        .hitTestBehavior(HitTestMode.None)
       }
       .width('100%')
       .height('100%')
