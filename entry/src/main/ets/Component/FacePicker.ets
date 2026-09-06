@@ -1,6 +1,4 @@
 import { userMenu } from './SignerUsers';
-import { image } from '@kit.ImageKit';
-import fs from '@ohos.file.fs';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { DatabaseManager } from '../utils/DataBase';
 import { loginFunction } from '../utils/Login';
@@ -9,7 +7,7 @@ import { Context } from '@kit.AbilityKit';
 import { promptAction } from '@kit.ArkUI';
 import { picker } from '@kit.CoreFileKit';
 import { JSON } from '@kit.ArkTS';
-import { FaceApi } from '../utils/faceApi';
+import { FaceApi, randomizeFaceImage } from '../utils/faceApi';
 import { uploadImageForObject } from '../utils/upload';
 
 const TAG = 'FacePicker';
@@ -58,29 +56,6 @@ export struct facePicker {
     return true
   }
 
-  /**
-   * 随机裁剪人脸图片（对齐上游 randomizeStylizeFaceImage 的随机裁剪，规避风控）
-   */
-  private async randomizeFaceImage(srcPath: string, dstPath: string): Promise<void> {
-    const imageSource = image.createImageSource(srcPath)
-    const pixelMap = await imageSource.createPixelMap()
-    const imageInfo = await pixelMap.getImageInfo()
-    const scale = 0.9 + Math.random() * 0.09
-    const cropWidth = Math.floor(imageInfo.size.width * scale)
-    const cropHeight = Math.floor(imageInfo.size.height * scale)
-    const cropX = Math.floor(Math.random() * (imageInfo.size.width - cropWidth))
-    const cropY = Math.floor(Math.random() * (imageInfo.size.height - cropHeight))
-    await pixelMap.crop({ x: cropX, y: cropY, size: { width: cropWidth, height: cropHeight } })
-    const imagePacker = image.createImagePacker()
-    const packedBuffer = await imagePacker.packToData(pixelMap, { format: 'image/jpeg', quality: 90 })
-    const file = fs.openSync(dstPath, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC)
-    fs.writeSync(file.fd, packedBuffer)
-    fs.closeSync(file)
-    pixelMap.release()
-    imagePacker.release()
-    imageSource.release()
-  }
-
   /** 自动获取每个用户的账号默认人脸（对齐上游 UseProfileImage 流程） */
   private async useProfileFaces() {
     if (!this.requireUsersSelected()) {
@@ -102,7 +77,7 @@ export struct facePicker {
           const rawPath = context.cacheDir + '/' + ChaoxingUtils.generatePhotoName() + '_raw.jpg'
           await FaceApi.DownloadFaceImage(profileObjectId, rawPath)
           const processedPath = context.cacheDir + '/' + ChaoxingUtils.generatePhotoName() + '.jpg'
-          await this.randomizeFaceImage(rawPath, processedPath)
+          await randomizeFaceImage(rawPath, processedPath)
           const puid = (await loginFunction.getUserInfo(userInfo.cookies)).puid
           this.faceObjectIdArr[index] = await uploadImageForObject(context, userInfo.cookies, puid, processedPath)
         } catch (e) {

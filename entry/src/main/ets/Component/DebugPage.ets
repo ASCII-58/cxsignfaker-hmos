@@ -4,11 +4,13 @@ import { preferences } from '@kit.ArkData';
 import { image } from '@kit.ImageKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import fs from '@ohos.file.fs';
 import { DatabaseManager } from '../utils/DataBase';
 import { MsCaptchaDetector } from '../utils/detector/MsCaptchaDetector';
 import { CaptchaComponent, CaptchaUserParam } from './Captcha';
 import { Sign, parseSignResult } from '../utils/sign';
-import { FaceApi, FaceResultParam } from '../utils/faceApi';
+import { writeBufferToFile } from '../utils/httpClient';
+import { FaceApi, FaceResultParam, randomizeFaceImage } from '../utils/faceApi';
 
 const ONNX_TEST_TAG = 'OnnxTest';
 
@@ -52,6 +54,9 @@ export struct DebugPage {
   @State testClientId: string = '';
   @State testLog: string = '尚未运行任何测试';
   @State testRunning: boolean = false;
+  // 人脸识别全流程本地模拟（不访问网络）
+  @State faceLog: string = '尚未运行';
+  @State faceImagePath: string = '';
 
   async aboutToAppear() {
     await this.loadInfo();
@@ -254,18 +259,20 @@ export struct DebugPage {
     this.testLog = `${line}\n${this.testLog}`;
   }
 
-  private async runTest(name: string, fn: () => Promise<void>) {
+  private async runTest(name: string, fn: () => Promise<void>, sink?: (line: string) => void) {
     if (this.testRunning) {
       promptAction.showToast({ message: '测试运行中，请稍候' });
       return;
     }
     this.testRunning = true;
-    this.logLine(`▶ [${name}] 开始`);
+    const log: (line: string) => void =
+      sink !== undefined ? sink : (line: string): void => { this.logLine(line); };
+    log(`▶ [${name}] 开始`);
     try {
       await fn();
-      this.logLine(`✔ [${name}] 完成`);
+      log(`✔ [${name}] 完成`);
     } catch (e) {
-      this.logLine(`✘ [${name}] 失败: ${(e as Error).message}`);
+      log(`✘ [${name}] 失败: ${(e as Error).message}`);
     } finally {
       this.testRunning = false;
     }
@@ -323,6 +330,88 @@ export struct DebugPage {
       this.logLine(`faceResult ✔ signToken=${r.signToken.substring(0, 12)}...（含 clientId 签名）`);
     } else {
       this.logLine('faceResult ✔ 基础字段正确（未填 clientId，跳过 signToken 签名）');
+    }
+  }
+
+  /** 5. 人脸识别全流程本地模拟：默认人脸(模拟)→随机化裁剪(真实)→faceResult(真实)→签到解析(真实) */
+  private async testFaceFlow() {
+    this.faceLog = '';
+    const rawPath = `${this.context.cacheDir}/debug_face_raw.jpg`;
+    const processedPath = `${this.context.cacheDir}/debug_face_processed.jpg`;
+    this.cleanupFile(rawPath);
+    this.cleanupFile(processedPath);
+    try {
+      // ① 模拟 DownloadFaceImage：内置测试图充当云端默认人脸
+      const buf = this.context.resourceManager.getRawFileContentSync(IMAGE_RAWFILE);
+      writeBufferToFile(rawPath, buf.buffer as ArrayBuffer);
+      const rawSize = await this.readImageSize(rawPath);
+      this.faceLogLine(`① 模拟默认人脸 ${rawSize.width}×${rawSize.height}`);
+
+      // ② 随机化裁剪（与 FacePicker 共用同一实现）
+      await randomizeFaceImage(rawPath, processedPath);
+      const stat = fs.statSync(processedPath);
+      const head = new Uint8Array(2);
+      const fd = fs.openSync(processedPath, fs.OpenMode.READ_ONLY);
+      try {
+        fs.readSync(fd.fd, head.buffer as ArrayBuffer);
+      } finally {
+        fs.closeSync(fd);
+      }
+      if (head[0] !== 0xFF || head[1] !== 0xD8) {
+        throw new Error('输出不是有效 JPEG');
+      }
+      const outSize = await this.readImageSize(processedPath);
+      if (outSize.width > rawSize.width || outSize.width < Math.floor(rawSize.width * 0.9) ||
+        outSize.height > rawSize.height || outSize.height < Math.floor(rawSize.height * 0.9)) {
+        throw new Error(`裁剪尺寸异常 ${outSize.width}×${outSize.height}`);
+      }
+      this.faceImagePath = processedPath;
+      this.faceLogLine(`② 随机化裁剪 ✔ ${outSize.width}×${outSize.height}（${stat.size}B）`);
+
+      // ③ 模拟上传得到 objectId，构造 faceResult（真实 buildFaceResult，clientId 选填验签名）
+      const objectId = `mock${Date.now()}`;
+      const clientId = this.testClientId.trim();
+      const r = JSON.parse(FaceApi.buildFaceResult(objectId, clientId || undefined)) as FaceResultParam;
+      if (r.currentFaceId !== objectId) {
+        throw new Error('faceResult 字段不符');
+      }
+      if (r.signToken) {
+        this.faceLogLine(`③ faceResult ✔ signToken=${r.signToken.substring(0, 8)}...（含 clientId 签名）`);
+      } else {
+        this.faceLogLine('③ faceResult ✔ 字段正确（未填 clientId，跳过签名）');
+      }
+
+      // ④ 模拟签到接口返回非本人（真实 parseSignResult）
+      const outcome = parseSignResult('[face]检测到非本人');
+      if (outcome.kind !== 'face') {
+        throw new Error(`解析为 ${outcome.kind}，预期 face`);
+      }
+      this.faceLogLine('④ 签到响应解析 ✔ face 分支（检测到非本人）');
+    } finally {
+      this.cleanupFile(rawPath);
+      // processedPath 保留供预览，下次运行时覆盖
+    }
+  }
+
+  private faceLogLine(line: string) {
+    this.faceLog = `${line}\n${this.faceLog}`;
+  }
+
+  private async readImageSize(path: string): Promise<image.Size> {
+    const source = image.createImageSource(path);
+    try {
+      const info = await source.getImageInfo();
+      return info.size;
+    } finally {
+      source.release();
+    }
+  }
+
+  private cleanupFile(path: string) {
+    try {
+      fs.unlinkSync(path);
+    } catch {
+      // 文件不存在等场景忽略
     }
   }
 
@@ -576,6 +665,58 @@ export struct DebugPage {
                 .backgroundColor($r('sys.color.ohos_id_color_sub_background'))
             }
             .backgroundColor($r('sys.color.ohos_id_color_list_card_bg'))
+            .borderRadius(16)
+            .padding(12)
+          }
+        }
+
+        ListItem() {
+          Column() {
+            Text('人脸识别（本地模拟）')
+              .fontSize(14)
+              .fontColor($r('app.color.secondary_text'))
+              .width('100%')
+              .margin({ bottom: 8, left: 4 })
+
+            Column({ space: 8 }) {
+              Row({ space: 12 }) {
+                if (this.faceImagePath !== '') {
+                  Image(`file://${this.faceImagePath}`)
+                    .draggable(false)
+                    .height(64)
+                    .borderRadius(8)
+                    .objectFit(ImageFit.Contain)
+                } else {
+                  Text('运行后显示随机化结果')
+                    .fontSize(12)
+                    .fontColor($r('app.color.secondary_text'))
+                }
+                Blank()
+                Button(this.testRunning ? '运行中...' : '运行人脸流程模拟')
+                  .fontSize(13)
+                  .height(36)
+                  .enabled(!this.testRunning)
+                  .onClick(() => {
+                    this.runTest('人脸流程模拟', (): Promise<void> => this.testFaceFlow(),
+                      (line: string): void => { this.faceLogLine(line); })
+                  })
+              }
+              .width('100%')
+
+              Text(this.faceLog)
+                .fontSize(12)
+                .fontColor($r('app.color.primary_text'))
+                .width('100%')
+                .padding(8)
+                .borderRadius(8)
+                .backgroundColor($r('app.color.page_background'))
+
+              Text('说明：默认人脸下载/上传/enc 校验用本地数据模拟（不访问网络）；随机裁剪、faceResult 构造、签到响应解析为真实实现。clientId 选填（上方输入框），填入后校验 signToken 签名。')
+                .fontSize(11)
+                .fontColor($r('app.color.secondary_text'))
+                .width('100%')
+            }
+            .backgroundColor($r('app.color.card_background'))
             .borderRadius(16)
             .padding(12)
           }
