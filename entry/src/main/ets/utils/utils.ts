@@ -121,6 +121,39 @@ export class ChaoxingUtils {
   }
 
   /**
+   * 收藏位置坐标入库辅助
+   * 库中坐标按 ×1e6 存整数（避免浮点字符串精度问题）；
+   * 读取时兼容旧版小数格式（含小数点按旧格式解析）
+   */
+  static readonly LOCATION_INT_SCALE: number = 1000000;
+
+  static toLocationInt(latOrLon: number): number {
+    return Math.round(latOrLon * ChaoxingUtils.LOCATION_INT_SCALE);
+  }
+
+  static parseStoredCoord(value: string): number {
+    return value.includes('.') ? Number(value) : Number(value) / ChaoxingUtils.LOCATION_INT_SCALE;
+  }
+
+  /**
+   * 将BD-09坐标系（百度坐标系）转换为GCJ-02坐标系（火星坐标系）
+   *
+   * 收藏位置在数据库中存的是签到用的 BD-09 坐标，
+   * 而内置地图（高德瓦片）按 GCJ-02 定位，展示前需转回 GCJ-02
+   *
+   * @param bd_lat BD-09坐标系的纬度值，单位为度
+   * @param bd_lon BD-09坐标系的经度值，单位为度
+   * @returns 转换后的GCJ-02坐标 { lat, lon }
+   */
+  static bd09_to_gcj02(bd_lat: number, bd_lon: number): { lat: number, lon: number } {
+    const x = bd_lon - 0.0065;
+    const y = bd_lat - 0.006;
+    const z = Math.sqrt(x * x + y * y) - 0.00002 * Math.sin(y * ChaoxingUtils.x_pi);
+    const theta = Math.atan2(y, x) - 0.000003 * Math.cos(x * ChaoxingUtils.x_pi);
+    return { lat: z * Math.sin(theta), lon: z * Math.cos(theta) };
+  }
+
+  /**
    * 将WGS-84坐标系（GPS设备原始坐标）转换为GCJ-02坐标系（火星坐标）
    *
    * geoLocationManager 定位返回 WGS-84，而地图选点返回 GCJ-02；

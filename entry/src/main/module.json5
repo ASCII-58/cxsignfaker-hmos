@@ -13,6 +13,12 @@
     "deliveryWithInstall": true,
     "installationFree": false,
     "pages": "$profile:main_pages",
+    "metadata": [
+      {
+        "name": "client_id",
+        "value": "6917588900117322116"
+      }
+    ],
     "abilities": [
       {
         "name": "EntryAbility",
