@@ -57,6 +57,9 @@ export struct DebugPage {
   // 人脸识别全流程本地模拟（不访问网络）
   @State faceLog: string = '尚未运行';
   @State faceImagePath: string = '';
+  // 默认人脸查看（联网：主用户 cookie 拉取云盘默认人脸，仅查看）
+  @State profileLog: string = '尚未获取';
+  @State profileImagePath: string = '';
 
   async aboutToAppear() {
     await this.loadInfo();
@@ -397,6 +400,27 @@ export struct DebugPage {
     this.faceLog = `${line}\n${this.faceLog}`;
   }
 
+  /** 6. 默认人脸查看（联网：主用户 cookie → 云盘默认人脸 objectId → 下载显示，仅查看不上传） */
+  private async fetchProfileFace() {
+    this.profileLog = '';
+    const path = `${this.context.cacheDir}/debug_face_profile.jpg`;
+    this.cleanupFile(path);
+    const user = await DatabaseManager.getInstance().getUserById(0);
+    if (!user) {
+      throw new Error('主用户未登录');
+    }
+    const objectId = await FaceApi.GetProfileFaceObjectId(user.cookies);
+    this.profileLogLine(`① objectId=${objectId}`);
+    await FaceApi.DownloadFaceImage(objectId, path);
+    const size = await this.readImageSize(path);
+    this.profileImagePath = path;
+    this.profileLogLine(`② 已下载 ${size.width}×${size.height}（仅本地显示，未上传未签到）`);
+  }
+
+  private profileLogLine(line: string) {
+    this.profileLog = `${line}\n${this.profileLog}`;
+  }
+
   private async readImageSize(path: string): Promise<image.Size> {
     const source = image.createImageSource(path);
     try {
@@ -712,6 +736,58 @@ export struct DebugPage {
                 .backgroundColor($r('app.color.page_background'))
 
               Text('说明：默认人脸下载/上传/enc 校验用本地数据模拟（不访问网络）；随机裁剪、faceResult 构造、签到响应解析为真实实现。clientId 选填（上方输入框），填入后校验 signToken 签名。')
+                .fontSize(11)
+                .fontColor($r('app.color.secondary_text'))
+                .width('100%')
+            }
+            .backgroundColor($r('app.color.card_background'))
+            .borderRadius(16)
+            .padding(12)
+          }
+        }
+
+        ListItem() {
+          Column() {
+            Text('默认人脸查看（联网）')
+              .fontSize(14)
+              .fontColor($r('app.color.secondary_text'))
+              .width('100%')
+              .margin({ bottom: 8, left: 4 })
+
+            Column({ space: 8 }) {
+              Row({ space: 12 }) {
+                if (this.profileImagePath !== '') {
+                  Image(`file://${this.profileImagePath}`)
+                    .draggable(false)
+                    .height(64)
+                    .borderRadius(8)
+                    .objectFit(ImageFit.Contain)
+                } else {
+                  Text('获取后显示云盘默认人脸')
+                    .fontSize(12)
+                    .fontColor($r('app.color.secondary_text'))
+                }
+                Blank()
+                Button(this.testRunning ? '运行中...' : '获取默认人脸')
+                  .fontSize(13)
+                  .height(36)
+                  .enabled(!this.testRunning)
+                  .onClick(() => {
+                    this.runTest('默认人脸获取', (): Promise<void> => this.fetchProfileFace(),
+                      (line: string): void => { this.profileLogLine(line); })
+                  })
+              }
+              .width('100%')
+
+              Text(this.profileLog)
+                .fontSize(12)
+                .fontColor($r('app.color.primary_text'))
+                .width('100%')
+                .padding(8)
+                .borderRadius(8)
+                .backgroundColor($r('app.color.page_background'))
+
+              Text('说明：用主用户 cookie 只读拉取云盘账号默认人脸，仅本地显示，不随机化、不上传、不签到。上游提示：拿原始默认人脸去签到可能被风控识别，影响账号安全。')
                 .fontSize(11)
                 .fontColor($r('app.color.secondary_text'))
                 .width('100%')
