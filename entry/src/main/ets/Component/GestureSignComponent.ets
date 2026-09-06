@@ -70,8 +70,15 @@ export struct GestureSignComponent {
     this.addPoint(index + 1);
   }
 
-  /** 滑动/按下时按触摸点命中圆点；TouchObject.x/y 相对当前组件 */
+  /** 滑动/按下时按触摸点命中圆点，抬手自动校验；TouchObject.x/y 相对当前组件 */
   private onTouchPoint(event: TouchEvent) {
+    if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+      // 抬手自动校验；校验失败会在 submitGesture 内自动重置
+      if (this.gesturePattern.length > 0 && !this.codeReady && !this.isValidating) {
+        this.submitGesture();
+      }
+      return;
+    }
     if (event.type !== TouchType.Down && event.type !== TouchType.Move) {
       return;
     }
@@ -105,7 +112,7 @@ export struct GestureSignComponent {
       const isCorrect = await Sign.CheckSignCode(this.hostCookies, this.activityId, gestureCode);
 
       if (!isCorrect) {
-        this.resultMsg = '手势错误，请重新绘制';
+        promptAction.showToast({ message: '手势错误，请重新绘制' });
         this.resetGesture();
         return;
       }
