@@ -4,9 +4,16 @@ import { preferences } from '@kit.ArkData';
 import { image } from '@kit.ImageKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { DatabaseManager } from '../utils/DataBase';
+import { DatabaseManager, UserDataAndId } from '../utils/DataBase';
 import { MsCaptchaDetector } from '../utils/detector/MsCaptchaDetector';
 import { CaptchaComponent, CaptchaUserParam } from './Captcha';
+import { Sign } from '../utils/sign';
+import { CaptchaApi, CaptchaPhotosParam } from '../utils/captchaApi';
+import { FaceApi } from '../utils/faceApi';
+import { uploadImageForObject } from '../utils/upload';
+import { Http, writeBufferToFile } from '../utils/httpClient';
+import { loginFunction } from '../utils/Login';
+import fs from '@ohos.file.fs';
 
 const ONNX_TEST_TAG = 'OnnxTest';
 
@@ -29,6 +36,13 @@ export struct DebugPage {
   @State captchaDemoShow: boolean = false;
   @State demoSession: number = 1;
   @State demoLog: string = '尚未触发回调';
+  // 签到验证链路测试（真实网络，走主用户登录态）
+  @State testActiveId: string = '';
+  @State testCourseId: string = '';
+  @State testClassId: string = '';
+  @State testSignCode: string = '1234';
+  @State testLog: string = '尚未运行任何测试';
+  @State testRunning: boolean = false;
 
   async aboutToAppear() {
     await this.loadInfo();
@@ -227,6 +241,174 @@ export struct DebugPage {
     .width('100%')
   }
 
+  /** 签到验证链路测试：统一取主用户登录态（getUserById(0) = 主用户） */
+  private async getHostUser(): Promise<UserDataAndId> {
+    const host = await DatabaseManager.getInstance().getUserById(0);
+    if (!host || !host.cookies) {
+      throw new Error('未找到主用户登录信息，请先登录');
+    }
+    return host;
+  }
+
+  private requireActiveId(): string {
+    if (!this.testActiveId.trim()) {
+      throw new Error('请先填写活动ID(activeId)');
+    }
+    return this.testActiveId.trim();
+  }
+
+  private logLine(line: string) {
+    this.testLog = `${line}\n${this.testLog}`;
+  }
+
+  private async runTest(name: string, fn: () => Promise<void>) {
+    if (this.testRunning) {
+      promptAction.showToast({ message: '测试运行中，请稍候' });
+      return;
+    }
+    this.testRunning = true;
+    this.logLine(`▶ [${name}] 开始`);
+    try {
+      await fn();
+      this.logLine(`✔ [${name}] 完成`);
+    } catch (e) {
+      this.logLine(`✘ [${name}] 失败: ${(e as Error).message}`);
+    } finally {
+      this.testRunning = false;
+    }
+  }
+
+  /** 1. 活动详情解析：验证码/人脸/拍照/位置等验证开关 */
+  private async testActiveDetail() {
+    const host = await this.getHostUser();
+    const activeId = this.requireActiveId();
+    const d = await Sign.GetActiveDetail(host.cookies, activeId);
+    this.logLine(`otherId=${d.otherId}(0拍照/2二维码/3手势/4位置/5签到码) ` +
+      `验证码=${d.ifNeedVCode} 人脸=${d.openCheckFaceFlag} 需拍照=${d.ifphoto}`);
+    this.logLine(`位置范围=${d.locationRange} lat=${d.locationLatitude} lng=${d.locationLongitude} ` +
+      `二维码带定位=${d.ifopenAddress} 二维码刷新=${d.ifrefreshewm}`);
+  }
+
+  /** 2. 预签到检测：截止/已签到/可签到/无权限 */
+  private async testPreSignIn() {
+    const host = await this.getHostUser();
+    const activeId = this.requireActiveId();
+    if (!this.testClassId.trim() || !this.testCourseId.trim()) {
+      throw new Error('请先填写课程ID和班级ID');
+    }
+    const r = await Sign.PreSignIn(activeId, this.testClassId.trim(), this.testCourseId.trim(), host.uid,
+      host.cookies);
+    let desc = '未知';
+    if (r === -1) {
+      desc = '-1=无权限/不在班级';
+    } else if (r === 0) {
+      desc = '0=已签到';
+    } else if (r === 1) {
+      desc = '1=可签到';
+    } else if (r === 2) {
+      desc = '2=已截止';
+    }
+    this.logLine(`preSign=${r}（${desc}），页面enc=${Sign.lastPreSignEnc || '(无)'}`);
+  }
+
+  /** 3. 滑块验证码全流程：拉图→模型识别→提交校验→validate */
+  private async testCaptchaFlow() {
+    const host = await this.getHostUser();
+    const activeId = this.requireActiveId();
+    if (!this.testClassId.trim() || !this.testCourseId.trim()) {
+      throw new Error('请先填写课程ID和班级ID');
+    }
+    const params: CaptchaPhotosParam = {
+      courseId: this.testCourseId.trim(),
+      classId: this.testClassId.trim(),
+      activePrimaryId: activeId,
+      uid: `${host.uid}`
+    };
+    const photos = await CaptchaApi.getCaptchaPhotos(params, host.cookies);
+    this.logLine(`验证码拉取成功 token=${photos.token.substring(0, 12)}...`);
+    await MsCaptchaDetector.load(this.context);
+    const buf = await Http.getBuffer(photos.imageVerificationVo.shadeImage);
+    const source = image.createImageSource(buf);
+    let pixelMap: image.PixelMap | undefined = undefined;
+    try {
+      pixelMap = await source.createPixelMap({ desiredPixelFormat: image.PixelMapFormat.RGBA_8888 });
+    } finally {
+      source.release();
+    }
+    const xOffset = await MsCaptchaDetector.detect(pixelMap);
+    pixelMap.release();
+    if (xOffset < 0) {
+      throw new Error('模型未检测到滑块位置');
+    }
+    this.logLine(`模型识别 x=${xOffset}，提交校验…`);
+    const validate = await CaptchaApi.checkCaptchaResult(photos, xOffset, params, host.cookies);
+    if (!validate) {
+      throw new Error('校验未通过（返回空 validate）');
+    }
+    this.logLine(`validate=${validate.substring(0, 24)}...`);
+  }
+
+  /** 4. 签到码/手势预校验（共用 checkSignCode 接口） */
+  private async testCheckSignCode() {
+    const host = await this.getHostUser();
+    const activeId = this.requireActiveId();
+    const ok = await Sign.CheckSignCode(host.cookies, activeId, this.testSignCode.trim());
+    this.logLine(`签到码 ${this.testSignCode.trim()} 校验结果: ${ok ? '正确' : '错误'}`);
+  }
+
+  /** 5. clientId 解密（人脸 signToken 依赖的 cid/sc） */
+  private async testDecryptClientId() {
+    const host = await this.getHostUser();
+    const loginInfo = await loginFunction.getUserInfo(host.cookies);
+    if (!loginInfo.clientId) {
+      throw new Error('用户信息未返回 clientId');
+    }
+    const info = FaceApi.decryptClientId(loginInfo.clientId);
+    if (!info) {
+      throw new Error('clientId 解密失败');
+    }
+    this.logLine(`clientId 解密成功 cid=${info.cid.substring(0, 16)}... sc=${info.sc.substring(0, 8)}...`);
+  }
+
+  /** 6. 人脸流程：默认底图 objectId→下载→faceEnc */
+  private async testFaceFlow() {
+    const host = await this.getHostUser();
+    const activeId = this.requireActiveId();
+    const objectId = await FaceApi.GetProfileFaceObjectId(host.cookies);
+    this.logLine(`默认人脸照片 objectId=${objectId}`);
+    const filePath = this.context.cacheDir + '/debug_face_test.jpg';
+    await FaceApi.DownloadFaceImage(objectId, filePath);
+    this.logLine(`底图已下载: ${filePath}`);
+    const loginInfo = await loginFunction.getUserInfo(host.cookies);
+    const enc = await FaceApi.CheckFaceResultAndGetEnc(host.cookies, activeId, objectId, loginInfo.clientId);
+    this.logLine(`faceEnc=${enc.substring(0, 24)}...`);
+  }
+
+  /** 7. 云盘上传：token 获取 + multipart 上传（拍照/人脸共用链路） */
+  private async testCloudUpload() {
+    const host = await this.getHostUser();
+    const loginInfo = await loginFunction.getUserInfo(host.cookies);
+    if (!loginInfo.puid) {
+      throw new Error('用户信息未返回 puid');
+    }
+    const buf = this.context.resourceManager.getRawFileContentSync(IMAGE_RAWFILE);
+    const filePath = this.context.cacheDir + '/debug_upload_test.jpg';
+    writeBufferToFile(filePath, buf.buffer as ArrayBuffer);
+    const objectId = await uploadImageForObject(this.context, host.cookies, loginInfo.puid, filePath);
+    this.logLine(`云盘上传成功 objectId=${objectId}`);
+  }
+
+  /** 8. 签退信息解析：signInId/signOutId/发布时间戳 */
+  private async testSignOutInfo() {
+    const host = await this.getHostUser();
+    const activeId = this.requireActiveId();
+    const info = await Sign.GetSignInfo(host.cookies, activeId);
+    this.logLine(`signInId=${info.signInId} signOutId=${info.signOutId} ` +
+      `签退时间戳=${info.signOutPublishTimeStamp || '(无签退)'}`);
+  }
+
+  /** 签到验证链路测试按钮见 build() 中「签到验证链路测试」卡片 */
+
   build() {
     Column() {
       Text('Debug 调试面板')
@@ -419,6 +601,110 @@ export struct DebugPage {
             }
             .backgroundColor($r('sys.color.ohos_id_color_list_card_bg'))
             .borderRadius(16)
+          }
+        }
+
+        ListItem() {
+          Column() {
+            Text('签到验证链路测试')
+              .fontSize(14)
+              .fontColor($r('sys.color.ohos_id_color_text_secondary'))
+              .width('100%')
+              .margin({ bottom: 8, left: 4 })
+
+            Column({ space: 8 }) {
+              Row({ space: 8 }) {
+                TextInput({ placeholder: '活动ID activeId', text: $$this.testActiveId })
+                  .layoutWeight(2)
+                  .height(40)
+                  .fontSize(13)
+                  .backgroundColor($r('sys.color.ohos_id_color_text_field_sub_bg'))
+                TextInput({ placeholder: '课程ID', text: $$this.testCourseId })
+                  .layoutWeight(1)
+                  .height(40)
+                  .fontSize(13)
+                  .backgroundColor($r('sys.color.ohos_id_color_text_field_sub_bg'))
+                TextInput({ placeholder: '班级ID', text: $$this.testClassId })
+                  .layoutWeight(1)
+                  .height(40)
+                  .fontSize(13)
+                  .backgroundColor($r('sys.color.ohos_id_color_text_field_sub_bg'))
+              }
+              .width('100%')
+
+              Row({ space: 8 }) {
+                TextInput({ placeholder: '签到码/手势编码', text: $$this.testSignCode })
+                  .layoutWeight(1)
+                  .height(40)
+                  .fontSize(13)
+                  .backgroundColor($r('sys.color.ohos_id_color_text_field_sub_bg'))
+              }
+              .width('100%')
+
+              Row({ space: 8 }) {
+                Button('活动详情解析')
+                  .layoutWeight(1).fontSize(13).height(36)
+                  .enabled(!this.testRunning)
+                  .onClick(() => { this.runTest('活动详情解析', (): Promise<void> => this.testActiveDetail()) })
+                Button('预签到检测')
+                  .layoutWeight(1).fontSize(13).height(36)
+                  .enabled(!this.testRunning)
+                  .onClick(() => { this.runTest('预签到检测', (): Promise<void> => this.testPreSignIn()) })
+              }
+              .width('100%')
+
+              Row({ space: 8 }) {
+                Button('验证码全流程')
+                  .layoutWeight(1).fontSize(13).height(36)
+                  .enabled(!this.testRunning)
+                  .onClick(() => { this.runTest('验证码全流程', (): Promise<void> => this.testCaptchaFlow()) })
+                Button('签到码预校验')
+                  .layoutWeight(1).fontSize(13).height(36)
+                  .enabled(!this.testRunning)
+                  .onClick(() => { this.runTest('签到码预校验', (): Promise<void> => this.testCheckSignCode()) })
+              }
+              .width('100%')
+
+              Row({ space: 8 }) {
+                Button('clientId解密')
+                  .layoutWeight(1).fontSize(13).height(36)
+                  .enabled(!this.testRunning)
+                  .onClick(() => { this.runTest('clientId解密', (): Promise<void> => this.testDecryptClientId()) })
+                Button('人脸底图+faceEnc')
+                  .layoutWeight(1).fontSize(13).height(36)
+                  .enabled(!this.testRunning)
+                  .onClick(() => { this.runTest('人脸底图+faceEnc', (): Promise<void> => this.testFaceFlow()) })
+              }
+              .width('100%')
+
+              Row({ space: 8 }) {
+                Button('云盘上传')
+                  .layoutWeight(1).fontSize(13).height(36)
+                  .enabled(!this.testRunning)
+                  .onClick(() => { this.runTest('云盘上传', (): Promise<void> => this.testCloudUpload()) })
+                Button('签退信息解析')
+                  .layoutWeight(1).fontSize(13).height(36)
+                  .enabled(!this.testRunning)
+                  .onClick(() => { this.runTest('签退信息解析', (): Promise<void> => this.testSignOutInfo()) })
+              }
+              .width('100%')
+
+              Text('说明：全部走主用户真实登录态；前4项需要有效活动ID（预签到/验证码另需课程与班级ID）。')
+                .fontSize(11)
+                .fontColor($r('sys.color.ohos_id_color_text_tertiary'))
+                .width('100%')
+
+              Text(this.testLog)
+                .fontSize(12)
+                .fontColor($r('sys.color.ohos_id_color_text_secondary'))
+                .width('100%')
+                .padding(8)
+                .borderRadius(8)
+                .backgroundColor($r('sys.color.ohos_id_color_sub_background'))
+            }
+            .backgroundColor($r('sys.color.ohos_id_color_list_card_bg'))
+            .borderRadius(16)
+            .padding(12)
           }
         }
       }
