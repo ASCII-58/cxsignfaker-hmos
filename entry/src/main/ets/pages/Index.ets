@@ -752,8 +752,9 @@ export default struct HomePage {
         }
         .backgroundColor($r('app.color.card_background'))
         .bindSheet($$this.locationsSheetVisible, this.LocationsSheetBuilder, {
-          height: 'auto', detents: [SheetSize.MEDIUM, SheetSize.LARGE],
+          height: SheetSize.LARGE,
           backgroundColor: $r('sys.color.ohos_id_color_sub_background'),
+          // 系统右上角 ✕ 会压住组件自绘的关闭按钮，改用按钮/下拉关闭
           showClose: false
         })
 
