@@ -421,7 +421,9 @@ export default struct HomePage {
 
   // 收藏位置管理 sheet（独立于 UnifiedSheet/设置 sheet）
   @Builder LocationsSheetBuilder() {
-    LocationFavoritesComponent()
+    LocationFavoritesComponent({ onClose: () => {
+      this.locationsSheetVisible = false
+    } })
   }
 
   @Builder AddUserMenu() {

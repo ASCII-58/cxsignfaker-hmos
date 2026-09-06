@@ -144,7 +144,7 @@ export struct SignPage {
                   .maxLines(2)
                   .textOverflow({ overflow: TextOverflow.Ellipsis })
                   .margin({ top: 3 })
-                Text(`经度 ${loc.longitude.substring(0, 10)}  纬度 ${loc.latitude.substring(0, 10)}`)
+                Text(`经度 ${ChaoxingUtils.parseStoredCoord(loc.longitude).toFixed(6)}  纬度 ${ChaoxingUtils.parseStoredCoord(loc.latitude).toFixed(6)}`)
                   .fontSize(11).fontColor($r('sys.color.ohos_id_color_text_tertiary'))
                   .margin({ top: 3 })
               }
@@ -178,11 +178,11 @@ export struct SignPage {
     this.locationPickerShow = true
   }
 
-  /** 应用收藏位置：库里存的是提交用终值，直接赋给签到参数即可 */
+  /** 应用收藏位置：库里按 ×1e6 整数存 BD-09 坐标，转回小数赋给签到参数 */
   private applySavedLocation(loc: SavedLocation) {
     this.commonQueryParams.address = loc.address
-    this.commonQueryParams.longitude = loc.longitude
-    this.commonQueryParams.latitude = loc.latitude
+    this.commonQueryParams.longitude = ChaoxingUtils.parseStoredCoord(loc.longitude).toString()
+    this.commonQueryParams.latitude = ChaoxingUtils.parseStoredCoord(loc.latitude).toString()
     this.locationPickerShow = false
     promptAction.showToast({ message: `已选择：${loc.note !== '' ? loc.note : loc.address}`, duration: 1500 })
   }
