@@ -1,7 +1,7 @@
 import { curves, promptAction } from '@kit.ArkUI';
 import { bundleManager, common, Want, ConfigurationConstant } from '@kit.AbilityKit';
 import { fileIo as fs, picker, fileUri } from '@kit.CoreFileKit';
-import { BusinessError } from '@kit.BasicServicesKit';
+import { BusinessError, deviceInfo } from '@kit.BasicServicesKit';
 import { preferences, uniformTypeDescriptor as utd } from '@kit.ArkData';
 import { util } from '@kit.ArkTS';
 import { systemShare } from '@kit.ShareKit';
@@ -15,6 +15,23 @@ const MODEL_TEST_IDLE = 0;
 const MODEL_TEST_PASSED = 1;
 const MODEL_TEST_FAILED = 2;
 const COLOR_MODE_LABELS = ['自动', '浅色', '深色'];
+// 沉浸光感材质档位（数值与 SDK 6.1 d.ts 一致，6.0 无 hdsMaterial 模块只能以常量书写）：
+// EXQUISITE=0 强 / GENTLE=1 均衡 / SMOOTH=2 弱；6.1(23) 起对首页底部页签与标题栏生效
+const HDS_LEVEL_EXQUISITE = 0;
+const HDS_LEVEL_GENTLE = 1;
+const HDS_LEVEL_SMOOTH = 2;
+const PREF_HDS_LEVEL_KEY = 'hds_material_level';
+
+interface MaterialLevelOption {
+  level: number;
+  label: string;
+}
+
+const HDS_MATERIAL_LEVEL_OPTIONS: MaterialLevelOption[] = [
+  { level: HDS_LEVEL_EXQUISITE, label: '强' },
+  { level: HDS_LEVEL_GENTLE, label: '均衡' },
+  { level: HDS_LEVEL_SMOOTH, label: '弱' }
+];
 // 通用按压 Q 弹的按键标识(外观三档标签用 0/1/2，其余按钮用以下常量)
 const KEY_MODEL_TEST = 10;
 const KEY_CLEAR_CACHE = 11;
@@ -46,12 +63,101 @@ const COLOR_MODE_SYMBOLS: Resource[] = [
   $r('sys.symbol.moon_fill')
 ];
 
+// 更新日志卡片弹窗：版本徽标 + 分区条目列表 + 底部主按钮，内容超长时滚动
+@CustomDialog
+struct ChangelogDialog {
+  controller?: CustomDialogController
+  latest?: ChangelogRelease
+
+  build() {
+    Column() {
+      Row({ space: 8 }) {
+        Text('更新日志')
+          .fontSize(20)
+          .fontWeight(FontWeight.Bold)
+          .fontColor($r('app.color.primary_text'))
+        Text(`v${this.latest?.version ?? ''}`)
+          .fontSize(12)
+          .fontColor($r('app.color.selected'))
+          .backgroundColor($r('app.color.accent_soft_bg'))
+          .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+          .borderRadius(10)
+      }
+      .width('100%')
+      Text(this.latest?.date ?? '')
+        .fontSize(13)
+        .fontColor($r('app.color.secondary_text'))
+        .width('100%')
+        .margin({ top: 4 })
+
+      Divider()
+        .color($r('sys.color.comp_divider'))
+        .margin({ top: 12, bottom: 4 })
+
+      Scroll() {
+        Column() {
+          ForEach(this.latest?.sections ?? [], (section: ChangelogSection) => {
+            Column() {
+              Text(section.title)
+                .fontSize(14)
+                .fontWeight(FontWeight.Medium)
+                .fontColor($r('app.color.selected'))
+                .width('100%')
+                .margin({ top: 10, bottom: 4 })
+              ForEach(section.items, (item: string) => {
+                Row() {
+                  Text('•')
+                    .fontSize(14)
+                    .fontColor($r('app.color.selected'))
+                    .margin({ right: 6 })
+                  Text(item)
+                    .fontSize(14)
+                    .fontColor($r('app.color.primary_text'))
+                    .lineHeight(20)
+                    .layoutWeight(1)
+                }
+                .alignItems(VerticalAlign.Top)
+                .width('100%')
+                .margin({ bottom: 4 })
+              }, (item: string) => item)
+            }
+            .width('100%')
+          }, (section: ChangelogSection) => section.title)
+        }
+        .width('100%')
+      }
+      .width('100%')
+      .constraintSize({ maxHeight: '56%' })
+      .scrollBar(BarState.Off)
+      .margin({ top: 8 })
+
+      Button('知道了')
+        .width('100%')
+        .height(46)
+        .borderRadius(23)
+        .fontSize(16)
+        .backgroundColor($r('app.color.class_button'))
+        .fontColor($r('app.color.text_on_primary'))
+        .margin({ top: 16 })
+        .onClick(() => { this.controller?.close() })
+    }
+    .width('88%')
+    .padding(20)
+    .backgroundColor($r('app.color.dialog'))
+    .borderRadius(24)
+    .alignItems(HorizontalAlign.Start)
+  }
+}
+
 @Component
 export struct SettingsComponent {
   @State version: string = '';
   @State colorModeIndex: number = 0;
   @State thumbX: number = 0;
   @State trackWidth: number = 0;
+  @State isDragging: boolean = false; // 横向拖动进行中：滑块关闭跟手动画，1:1 跟随手指
+  private dragStartThumbX: number = 0; // Pan 起手时的滑块位置，onActionUpdate 以此累加偏移
+  private sliderTouchMoved: boolean = false; // 按下后是否出现过移动：区分原地点击与转成滚动
   // 通用按压 Q 弹：当前按下的按钮标识，-1 表示无；按压态保持至抬手或移出按钮区域
   @State pressedKey: number = -1;
   // 各按压目标的尺寸缓存 key->[宽,高]：触控按下后 Move/Up 持续派发给该组件，
@@ -60,14 +166,20 @@ export struct SettingsComponent {
   @State modelCaptchaEnabled: boolean = false;
   @State modelTestRunning: boolean = false;
   @State modelTestState: number = MODEL_TEST_IDLE;
+  @State hdsMaterialLevel: number = HDS_LEVEL_GENTLE;
+  // 沉浸光感为 6.1(23) 特性：低版本系统无该材质，设置项随之隐藏
+  private readonly supportFloatingBar: boolean = deviceInfo.sdkApiVersion >= 23;
   onImportDone: () => void = () => {};
   private context = getContext(this) as common.UIAbilityContext;
+  // 更新日志弹窗控制器：showChangelog 里按需重建（builder 参数在创建时捕获）
+  private changelogDialog: CustomDialogController | undefined = undefined;
 
   async aboutToAppear() {
     this.getVersion();
     await this.loadColorMode();
     this.syncThumb();
     await this.loadModelCaptcha();
+    await this.loadHdsMaterialLevel();
   }
 
   async getVersion() {
@@ -102,6 +214,32 @@ export struct SettingsComponent {
       this.modelCaptchaEnabled = await pref.get(PREF_MODEL_CAPTCHA_KEY, false) as boolean;
     } catch (e) {
       this.modelCaptchaEnabled = false;
+    }
+  }
+
+  async loadHdsMaterialLevel() {
+    try {
+      let pref = await preferences.getPreferences(this.context, 'settings');
+      this.hdsMaterialLevel = await pref.get(PREF_HDS_LEVEL_KEY, HDS_LEVEL_GENTLE) as number;
+    } catch (e) {
+      this.hdsMaterialLevel = HDS_LEVEL_GENTLE;
+    }
+    // 同步到全局：首页页签/标题栏材质实时跟随（@StorageLink 消费同名 key）
+    AppStorage.setOrCreate('hdsMaterialLevel', this.hdsMaterialLevel);
+  }
+
+  async setHdsMaterialLevel(level: number) {
+    if (level === this.hdsMaterialLevel) {
+      return;
+    }
+    this.hdsMaterialLevel = level;
+    AppStorage.setOrCreate('hdsMaterialLevel', level);
+    try {
+      let pref = await preferences.getPreferences(this.context, 'settings');
+      await pref.put(PREF_HDS_LEVEL_KEY, level);
+      await pref.flush();
+    } catch (e) {
+      console.error('Failed to save hds material level', e);
     }
   }
 
@@ -365,7 +503,7 @@ export struct SettingsComponent {
   }
 
   /**
-   * 从 rawfile/changelog.json 加载更新日志并展示最新版本
+   * 从 rawfile/changelog.json 加载更新日志并以卡片弹窗展示最新版本
    * 新增版本时只需在 changelog.json 的 releases 数组头部追加一条，无需改代码
    */
   async showChangelog() {
@@ -378,19 +516,12 @@ export struct SettingsComponent {
         throw new Error('changelog.json has no releases');
       }
       const latest = file.releases[0];
-      let message = '';
-      for (const section of latest.sections) {
-        message += `${section.title}：\n`;
-        for (const item of section.items) {
-          message += `• ${item}\n`;
-        }
-        message += '\n';
-      }
-      AlertDialog.show({
-        title: `更新日志 v${latest.version} (${latest.date})`,
-        message: message.trim(),
-        confirm: { value: '知道了', action: () => {} }
+      this.changelogDialog = new CustomDialogController({
+        builder: ChangelogDialog({ latest: latest }),
+        autoCancel: true,
+        customStyle: true
       });
+      this.changelogDialog.open();
     } catch (error) {
       console.error('Failed to load changelog', JSON.stringify(error));
       AlertDialog.show({
@@ -444,6 +575,35 @@ export struct SettingsComponent {
 
   private getSegWidth(): number {
     return this.trackWidth / 3;
+  }
+
+  /** 拖动中滑块的横向范围：0 ~ 末档起点 */
+  private clampThumbX(x: number): number {
+    return Math.min(Math.max(x, 0), this.getSegWidth() * 2);
+  }
+
+  /** 由滑块当前位置换算档位（四舍五入到最近档） */
+  private indexFromThumb(): number {
+    return Math.min(2, Math.max(0, Math.round(this.thumbX / this.getSegWidth())));
+  }
+
+  /** 悬浮页签式交互：按下滑块即弹至手指处（滑块中心对准手指），后续拖动从该位置继续；
+   *  原地点击交给文字 onClick 提交；起手后转成列表滚动等未构成点击的，滑块弹回生效档位 */
+  private onSliderTouch(event: TouchEvent) {
+    const segW = this.getSegWidth();
+    if (segW <= 0) {
+      return;
+    }
+    if (event.type === TouchType.Down) {
+      this.sliderTouchMoved = false;
+      this.thumbX = this.clampThumbX(event.touches[0].x - segW / 2);
+    } else if (event.type === TouchType.Move) {
+      this.sliderTouchMoved = true;
+    } else if ((event.type === TouchType.Up || event.type === TouchType.Cancel) && !this.isDragging) {
+      if (this.sliderTouchMoved) {
+        this.syncThumb();
+      }
+    }
   }
 
   /** 点选提交：滑块直接落位，必要时应用颜色模式 */
@@ -550,7 +710,7 @@ export struct SettingsComponent {
                   .border({ width: 0.8, color: $r('app.color.glass_border') })
                   .margin({ left: 3 })
                   .translate({ x: this.thumbX })
-                  .animation({ duration: 200, curve: Curve.EaseOut })
+                  .animation({ duration: this.isDragging ? 0 : 200, curve: Curve.EaseOut })
                 Row() {
                   ForEach([0, 1, 2], (idx: number) => {
                     Text(COLOR_MODE_LABELS[idx])
@@ -574,12 +734,63 @@ export struct SettingsComponent {
                 this.trackWidth = newArea.width as number;
                 this.syncThumb();
               })
+              .onTouch((event: TouchEvent) => this.onSliderTouch(event))
+              .gesture(
+                // 横向 Pan 与 List 纵向滚动按轴向竞争：横向拖动独占触控，纵向漂移由列表滚动；
+                // 起手位移 < distance 的点按不会触发 Pan，文字 onClick 点选不受影响
+                PanGesture({ fingers: 1, direction: PanDirection.Horizontal, distance: 5 })
+                  .onActionStart(() => {
+                    this.isDragging = true;
+                    this.dragStartThumbX = this.thumbX;
+                  })
+                  .onActionUpdate((event: GestureEvent) => {
+                    this.thumbX = this.clampThumbX(this.dragStartThumbX + event.offsetX);
+                  })
+                  .onActionEnd(() => {
+                    this.isDragging = false;
+                    this.commitIndex(this.indexFromThumb());
+                  })
+                  .onActionCancel(() => {
+                    this.isDragging = false;
+                    this.commitIndex(this.indexFromThumb());
+                  })
+              )
             }
             .width('100%')
             .alignItems(VerticalAlign.Center)
             .padding({ left: 12, right: 12, top: 10, bottom: 10 })
             .backgroundColor($r('app.color.card_background'))
             .borderRadius(16)
+
+            if (this.supportFloatingBar) {
+              // 沉浸光感（官方 Spatialization 示例同款）：档位经 AppStorage 实时下发到首页页签与标题栏
+              Column() {
+                Row() {
+                  this.SettingTexts('沉浸光感', '页签与标题栏的光感材质强弱')
+                  Row({ space: 6 }) {
+                    ForEach(HDS_MATERIAL_LEVEL_OPTIONS, (item: MaterialLevelOption) => {
+                      Text(item.label)
+                        .fontSize(13)
+                        .fontColor(this.hdsMaterialLevel === item.level
+                          ? $r('app.color.text_on_primary') : $r('app.color.secondary_text'))
+                        .backgroundColor(this.hdsMaterialLevel === item.level
+                          ? $r('app.color.selected') : $r('app.color.text_field_bg'))
+                        .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+                        .borderRadius(15)
+                        .animation({ duration: 150, curve: Curve.EaseOut })
+                        .onClick(() => {
+                          this.setHdsMaterialLevel(item.level);
+                        })
+                    }, (item: MaterialLevelOption) => item.level.toString())
+                  }
+                }
+                .width('100%')
+                .padding({ left: 16, right: 16, top: 13, bottom: 13 })
+              }
+              .width('100%').margin({ top: 12 })
+              .backgroundColor($r('app.color.card_background'))
+              .borderRadius(16)
+            }
           }
         }
 

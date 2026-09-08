@@ -65,6 +65,10 @@
       "value": "#0969DA"
     },
     {
+      "name": "accent_soft_bg",
+      "value": "#E7F1FF"
+    },
+    {
       "name": "unsignable",
       "value": "#CF222E"
     },
