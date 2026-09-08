@@ -1,10 +1,11 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { promptAction, componentSnapshot } from '@kit.ArkUI';
-import { image } from '@kit.ImageKit';
+import { promptAction } from '@kit.ArkUI';
 import { geoLocationManager } from '@kit.LocationKit';
 import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { map, mapCommon, MapComponent } from '@kit.MapKit';
+import { fileIo as fs } from '@kit.CoreFileKit';
+import { webview } from '@kit.ArkWeb';
+import { http } from '@kit.NetworkKit';
 import { DatabaseManager, SavedLocation } from '../utils/DataBase';
 import { ChaoxingUtils } from '../utils/utils';
 
@@ -12,17 +13,45 @@ const TAG = 'LocationFavorites';
 const DOMAIN = 0x0008;
 
 /** 地图初始中心（定位不可用时的默认视野） */
-const DEFAULT_CENTER: mapCommon.LatLng = { latitude: 39.90923, longitude: 116.39743 };
+const DEFAULT_CENTER: MapLatLng = { latitude: 39.90923, longitude: 116.39743 };
 /** 地图下方选点卡片的预留高度，保证地图视口不随选点状态变化跳动 */
 const SELECTION_CARD_HEIGHT = 200;
+/** 高德在线瓦片（GCJ-02，与本项目坐标换算一致）；style=7 为带注记路网图 */
+const TILE_URL = 'https://wprd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&style=7&x={x}&y={y}&z={z}';
+/** 瓦片磁盘缓存上限（字节）：按文件字节 LRU 淘汰；1.5MB 时连文件系统块对齐开销也计入后，
+ *  系统设置里显示的"用户数据"仍稳定低于 5MB 占用预算 */
+const TILE_DISK_CACHE_BYTES = 1536 * 1024;
+
+/** Leaflet 地图坐标 */
+interface MapLatLng {
+  latitude: number
+  longitude: number
+}
+
+/** 推给 H5 的收藏针数据 */
+interface FavoritePin {
+  id: number
+  lat: number
+  lng: number
+  label: string
+}
+
+/** 瓦片缓存文件元信息（LRU 用） */
+interface TileStat {
+  name: string
+  mtime: number
+  size: number
+}
 
 /**
- * 收藏位置管理 sheet 内容，参考上游 Android 版（百度地图星标方案）的地图优先交互：
- * - 打开时自动定位到当前位置，所有收藏以定位针标记直接铺在地图上
- * - 点击空白地图 / POI 放置或移动红色选点针（可拖动），自动逆地理编码取地址
- * - 点击收藏针 = 选中该收藏（选点针移过去并填充备注），保存即修改
- * - 右下角纯图标按钮：管理收藏（弹出列表 sheet）、定位当前位置
- * 数据库存签到用的 BD-09 坐标（×1e6 整数）；MapKit（高德底图）为 GCJ-02，进出库时转换
+ * 收藏位置管理 sheet 内容（地图优先交互）：
+ * - 底图：ArkWeb + Leaflet + 高德在线瓦片（GCJ-02）。华为 MapKit 底图引擎无论 mapType 都会
+ *   下载约 118MB 样式资源（filesDir/map-style），为把占用控制在 5MB 内改用瓦片自实现。
+ * - 瓦片磁盘缓存（Map Kit 瓦片数据缓存管理的自管版）：
+ *   onInterceptRequest 拦截瓦片请求，命中 cacheDir/maptiles 直接回本地；
+ *   未命中放行网络并异步落盘，总量超 4MB 按 mtime LRU 淘汰，可在设置页一键清空。
+ * - 交互：点按地图/拖动红针选点（自动逆地理编码），点琥珀星针选中收藏，右下角管理/定位
+ * - 数据库存签到用的 BD-09 坐标（×1e6 整数）；Web 瓦片为 GCJ-02，进出库时转换
  */
 @Component
 export struct LocationFavoritesComponent {
@@ -32,7 +61,7 @@ export struct LocationFavoritesComponent {
   /** 正在编辑的位置 id；-1 表示新增 */
   @State editingId: number = -1
   @State noteInput: string = ''
-  /** 当前选点坐标（GCJ-02，与地图一致） */
+  /** 当前选点坐标（GCJ-02，与瓦片投影一致） */
   @State gcjLat: number = DEFAULT_CENTER.latitude
   @State gcjLon: number = DEFAULT_CENTER.longitude
   @State hasPicked: boolean = false
@@ -40,23 +69,26 @@ export struct LocationFavoritesComponent {
   @State gpsLocating: boolean = false
   @State manageVisible: boolean = false
   private dbManager: DatabaseManager = DatabaseManager.getInstance()
-  private mapController: map.MapComponentController | undefined = undefined
-  /** 选点标记（红色定位针，可拖动） */
-  private marker: map.Marker | undefined = undefined
-  /** 收藏针（琥珀色，不可拖动，tag 存位置 id） */
-  private favoriteMarkers: map.Marker[] = []
+  private webController: webview.WebviewController = new webview.WebviewController()
+  /** H5 地图就绪握手；就绪后才允许 runJavaScript 推送状态 */
+  private webReady: boolean = false
+  /** 瓦片磁盘缓存目录（cacheDir/maptiles，卸载/清理缓存时随系统回收） */
+  private tileCacheDir: string = ''
+  /** 在途瓦片下载去重 */
+  private tileInflight: Set<string> = new Set()
   private geocodeTimer: number = -1
   private geocodeSeq: number = 0
-  /** 图标库定位针的 PixelMap 缓存（key 为颜色字符串） */
-  private pinIconCache: Map<string, image.PixelMap> = new Map()
-  private mapOptions: mapCommon.MapOptions = {
-    position: {
-      target: { latitude: DEFAULT_CENTER.latitude, longitude: DEFAULT_CENTER.longitude },
-      zoom: 11
-    },
-    zoomControlsEnabled: false,
-    scaleControlsEnabled: false,
-    language: 'zh'
+
+  aboutToAppear(): void {
+    const context = getContext(this) as common.UIAbilityContext
+    this.tileCacheDir = `${context.cacheDir}/maptiles`
+    try {
+      if (!fs.accessSync(this.tileCacheDir)) {
+        fs.mkdirSync(this.tileCacheDir, true)
+      }
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, `Prepare tile cache dir failed: ${e.message}`);
+    }
   }
 
   // ---------- 数据 ----------
@@ -64,7 +96,7 @@ export struct LocationFavoritesComponent {
   async loadLocations() {
     try {
       this.locations = await this.dbManager.getAllSavedLocations()
-      this.renderFavoriteMarkers()
+      this.syncFavorites()
     } catch (e) {
       hilog.error(DOMAIN, TAG, `Failed to load saved locations: ${e.message}`);
       promptAction.showToast({ message: '加载收藏位置失败' })
@@ -85,296 +117,51 @@ export struct LocationFavoritesComponent {
     return `经度 ${bd.lon.toFixed(6)}  纬度 ${bd.lat.toFixed(6)}`
   }
 
-  @Builder
-  PinIconBuilder(color: ResourceColor, isFavorite: boolean) {
-    Column() {
-      Stack({ alignContent: Alignment.Center }) {
-        Column()
-          .width(30)
-          .height(30)
-          .borderRadius(15)
-          .backgroundColor(color)
-          .border({ width: 2, color: '#FFFFFF' })
-          .shadow({ radius: 4, color: 'rgba(0,0,0,0.25)', offsetY: 1 })
-        if (isFavorite) {
-          SymbolGlyph($r('sys.symbol.star_fill'))
-            .fontSize(14)
-            .fontColor(['#FFFFFF'])
-        } else {
-          Column()
-            .width(10)
-            .height(10)
-            .borderRadius(5)
-            .backgroundColor('#FFFFFF')
-        }
-      }
-      Polygon({ width: 10, height: 7 })
-        .points([[0, 0], [10, 0], [5, 7]])
-        .fill(color)
-        .margin({ top: -1 })
-    }
-    .alignItems(HorizontalAlign.Center)
-  }
+  // ---------- H5 地图状态同步 ----------
 
-  /** 把小号水滴针离屏渲染成 marker 图标；失败时回退到内置 PNG */
-  private async getPinIcon(color: string, isFavorite: boolean): Promise<image.PixelMap | Resource> {
-    const cacheKey = `${color}_${isFavorite}`
-    const cached = this.pinIconCache.get(cacheKey)
-    if (cached) {
-      return cached
-    }
-    try {
-      const pixelMap = await componentSnapshot.createFromBuilder(() => {
-        this.PinIconBuilder(color, isFavorite)
-      })
-      this.pinIconCache.set(cacheKey, pixelMap)
-      return pixelMap
-    } catch (e) {
-      hilog.error(DOMAIN, TAG, `Render pin icon failed: ${e.message}`);
-      return $r('app.media.map_pin')
-    }
-  }
-
-  /** 标记上方的标签文案：备注 + 地点 */
-  private markerLabel(note: string, address: string): string {
-    return note !== '' ? `${note} · ${address}` : address
-  }
-
-  // ---------- 地图 ----------
-
-  private onMapCreated = (err: BusinessError<void>, controller: map.MapComponentController) => {
-    if (err) {
-      hilog.error(DOMAIN, TAG, `Map create failed: ${err.message}`);
-      promptAction.showToast({ message: '地图初始化失败' })
-      return
-    }
-    // 地图组件随 sheet 重建，旧实例上的标记引用一并失效
-    this.marker = undefined
-    this.favoriteMarkers = []
-    this.mapController = controller
-    controller.on('mapClick', (point: mapCommon.LatLng) => {
-      this.pickPosition(point.latitude, point.longitude, false, '')
-    })
-    controller.on('poiClick', (poi: mapCommon.Poi) => {
-      this.pickPosition(poi.position.latitude, poi.position.longitude, false, poi.name)
-    })
-    controller.on('markerClick', (clicked: map.Marker) => {
-      const id = clicked.getTag() as number
-      const loc = this.locations.find((l: SavedLocation) => l.id === id)
-      if (loc) {
-        this.selectFavorite(loc)
-      }
-    })
-    controller.on('markerDragEnd', (dragged: map.Marker) => {
-      const pos = dragged.getPosition()
-      this.pickPosition(pos.latitude, pos.longitude, false, '')
-    })
-    this.renderFavoriteMarkers()
+  /** H5 地图加载完成：补推当前收藏与选点状态，未选点则自动定位 */
+  onMapReady() {
+    this.webReady = true
+    this.syncFavorites()
     if (this.hasPicked) {
-      this.applySelectionToMap()
+      this.syncPin()
+      this.flyTo(this.gcjLat, this.gcjLon, 16)
     } else {
-      // 打开即定位到当前位置
       this.locateCurrent()
     }
   }
 
-  /** 把收藏位置画成琥珀色定位针；任何收藏数据变化后重画 */
-  private async renderFavoriteMarkers() {
-    const controller = this.mapController
-    if (!controller) {
-      return
-    }
-    for (const old of this.favoriteMarkers) {
-      old.remove()
-    }
-    this.favoriteMarkers = []
-    const icon = await this.getPinIcon('#E5A200', true)
-    for (const loc of this.locations) {
-      const gcj = ChaoxingUtils.bd09_to_gcj02(
-        ChaoxingUtils.parseStoredCoord(loc.latitude),
-        ChaoxingUtils.parseStoredCoord(loc.longitude))
-      controller.addMarker({
-        position: { latitude: gcj.lat, longitude: gcj.lon },
-        icon: icon,
-        anchorU: 0.5,
-        anchorV: 1,
-        draggable: false,
-        title: this.locationTitle(loc),
-        annotations: [{
-          content: this.markerLabel(loc.note, loc.address),
-          color: 0xFF333333,
-          fontSize: 12,
-          strokeColor: 0xFFFFFFFF,
-          strokeWidth: 2
-        }],
-        annotationPosition: mapCommon.TextPosition.TOP
-      }).then((m: map.Marker) => {
-        m.setTag(loc.id)
-        this.favoriteMarkers.push(m)
-      }).catch((e: BusinessError<void>) => {
-        hilog.error(DOMAIN, TAG, `Add favorite marker failed: ${e.message}`);
-      })
-    }
+  /** 点按地图选点 */
+  onMapClick(lat: number, lon: number) {
+    this.pickPosition(lat, lon, false, '')
   }
 
-  /** 按当前选点状态同步选点针与镜头 */
-  private applySelectionToMap() {
-    if (!this.hasPicked) {
-      return
-    }
-    this.ensureSelectionPin()
-    if (this.mapController) {
-      this.mapController.moveCamera(map.newLatLng({ latitude: this.gcjLat, longitude: this.gcjLon }, 16))
-    }
-  }
-
-  /** 选点针（红色水滴针 + 上方地点标签）；位置或标签变化时重建 */
-  private async ensureSelectionPin() {
-    const controller = this.mapController
-    if (!controller) {
-      return
-    }
-    if (this.marker) {
-      this.marker.remove()
-      this.marker = undefined
-    }
-    try {
-      const icon = await this.getPinIcon('#EA4335', false)
-      this.marker = await controller.addMarker({
-        position: { latitude: this.gcjLat, longitude: this.gcjLon },
-        icon: icon,
-        anchorU: 0.5,
-        anchorV: 1,
-        draggable: true,
-        title: '选点',
-        annotations: [{
-          content: this.pickedAddress !== '' ? this.pickedAddress : '选点',
-          color: 0xFF333333,
-          fontSize: 12,
-          strokeColor: 0xFFFFFFFF,
-          strokeWidth: 2
-        }],
-        annotationPosition: mapCommon.TextPosition.TOP
-      })
-    } catch (e) {
-      hilog.error(DOMAIN, TAG, `Add selection marker failed: ${e.message}`);
-    }
-  }
-
-  /** 选点统一入口：地图点按、POI 点按、拖动针、定位按钮；addressOverride 非空时直接作为地址 */
-  private pickPosition(lat: number, lon: number, flyTo: boolean, addressOverride: string) {
+  /** 拖动/点按选点针后同步位置 */
+  onPinDragEnd(lat: number, lon: number) {
     this.gcjLat = lat
     this.gcjLon = lon
     this.hasPicked = true
-    this.ensureSelectionPin()
-    if (flyTo && this.mapController) {
-      this.mapController.animateCamera(map.newLatLng({ latitude: lat, longitude: lon }, 16), 400)
-    }
-    if (addressOverride !== '') {
-      this.pickedAddress = addressOverride
-    } else {
-      this.scheduleGeocode()
-    }
+    this.scheduleGeocode()
   }
 
   /** 点击收藏针 = 选中该收藏（选点针移过去并填充备注，保存即修改） */
-  private selectFavorite(loc: SavedLocation) {
-    this.editingId = loc.id
-    this.noteInput = loc.note
-    this.pickedAddress = loc.address
-    const gcj = ChaoxingUtils.bd09_to_gcj02(
-      ChaoxingUtils.parseStoredCoord(loc.latitude),
-      ChaoxingUtils.parseStoredCoord(loc.longitude))
-    this.pickPosition(gcj.lat, gcj.lon, true, loc.address)
-  }
-
-  /** 定位到当前位置：仅移动镜头，不打标记、不选点 */
-  private async locateCurrent() {
-    try {
-      const atManager = abilityAccessCtrl.createAtManager()
-      const permissions: Array<Permissions> =
-        ['ohos.permission.APPROXIMATELY_LOCATION', 'ohos.permission.LOCATION']
-      const context = getContext(this) as common.UIAbilityContext
-      const result = await atManager.requestPermissionsFromUser(context, permissions)
-      if (!result.authResults.every((r: number) => r === 0)) {
-        promptAction.showToast({ message: '未获得定位权限，请在系统设置中开启', duration: 1500 })
-        return
-      }
-    } catch (e) {
-      hilog.error(DOMAIN, TAG, `Request location permission failed: ${e.message}`);
-      promptAction.showToast({ message: '定位权限请求失败' })
-      return
-    }
-    this.gpsLocating = true
-    try {
-      const location = await geoLocationManager.getCurrentLocation()
-      const gcj = ChaoxingUtils.wgs84_to_gcj02(location.latitude, location.longitude)
-      if (this.mapController) {
-        this.mapController.animateCamera(
-          map.newLatLng({ latitude: gcj.lat, longitude: gcj.lon }, 16), 500)
-      }
-    } catch (e) {
-      hilog.error(DOMAIN, TAG, `Get current location failed: ${e.message}`);
-      promptAction.showToast({ message: '定位失败，请检查定位服务' })
-    } finally {
-      this.gpsLocating = false
+  onFavoriteClick(id: number) {
+    const loc = this.locations.find((l: SavedLocation) => l.id === id)
+    if (loc) {
+      this.selectFavorite(loc)
     }
   }
-
-  // ---------- 逆地理编码 ----------
-
-  private scheduleGeocode() {
-    if (this.geocodeTimer >= 0) {
-      clearTimeout(this.geocodeTimer)
-    }
-    this.geocodeSeq++
-    const seq = this.geocodeSeq
-    this.geocodeTimer = setTimeout(() => {
-      this.geocodeTimer = -1
-      this.reverseGeocode(seq)
-    }, 500)
-  }
-
-  /** 选点后取地址；getAddressesFromLocation 中国境内按 GCJ-02 请求 */
-  private async reverseGeocode(seq: number) {
-    try {
-      const addresses = await geoLocationManager.getAddressesFromLocation({
-        latitude: this.gcjLat,
-        longitude: this.gcjLon,
-        maxItems: 1
-      })
-      if (seq !== this.geocodeSeq) {
-        return
-      }
-      if (addresses.length > 0 && addresses[0].placeName) {
-        this.pickedAddress = addresses[0].placeName
-      } else {
-        this.pickedAddress = `${this.gcjLat.toFixed(6)}, ${this.gcjLon.toFixed(6)}`
-      }
-      // 地址回填后刷新选点针上方的标签
-      this.ensureSelectionPin()
-    } catch (e) {
-      hilog.error(DOMAIN, TAG, `Reverse geocode failed: ${e.message}`);
-      if (seq !== this.geocodeSeq) {
-        return
-      }
-      this.pickedAddress = `${this.gcjLat.toFixed(6)}, ${this.gcjLon.toFixed(6)}`
-    }
-  }
-
-  // ---------- 增删改 ----------
 
   /** 取消选点：同步移除地图上的选点针 */
   clearSelection() {
-    if (this.marker) {
-      this.marker.remove()
-      this.marker = undefined
-    }
     this.editingId = -1
     this.noteInput = ''
     this.hasPicked = false
     this.pickedAddress = ''
+    this.syncPin()
   }
+
+  // ---------- H5 → ArkTS 回调（registerJavaScriptProxy 注册） ----------
 
   async saveLocation() {
     if (!this.hasPicked) {
@@ -382,24 +169,27 @@ export struct LocationFavoritesComponent {
       return
     }
     const note = this.noteInput.trim()
-    // 以针尖最终停留位置为准（拖动后状态可能未同步）
-    let lat = this.gcjLat
-    let lon = this.gcjLon
-    if (this.marker) {
-      const pos = this.marker.getPosition()
-      lat = pos.latitude
-      lon = pos.longitude
-    }
-    const bd = ChaoxingUtils.gcj02_to_bd09(lat, lon)
+    // 选点针拖动结束时坐标已同步到 gcjLat/gcjLon
+    const bd = ChaoxingUtils.gcj02_to_bd09(this.gcjLat, this.gcjLon)
     const latitude = ChaoxingUtils.toLocationInt(bd.lat).toString()
     const longitude = ChaoxingUtils.toLocationInt(bd.lon).toString()
     const address = this.pickedAddress
     try {
       let result: number
       if (this.editingId === -1) {
-        result = await this.dbManager.insertSavedLocation({ note, latitude, longitude, address })
+        result = await this.dbManager.insertSavedLocation({
+          note,
+          latitude,
+          longitude,
+          address
+        })
       } else {
-        result = await this.dbManager.updateSavedLocation(this.editingId, { note, latitude, longitude, address })
+        result = await this.dbManager.updateSavedLocation(this.editingId, {
+          note,
+          latitude,
+          longitude,
+          address
+        })
       }
       if (result !== 1) {
         promptAction.showToast({ message: '保存失败' })
@@ -448,15 +238,22 @@ export struct LocationFavoritesComponent {
     }
   }
 
-  // ---------- UI ----------
-
   @Builder
   MapPanel() {
     Stack({ alignContent: Alignment.TopStart }) {
-      MapComponent({
-        mapOptions: this.mapOptions,
-        mapCallback: this.onMapCreated
-      })
+      Web({ src: $rawfile('map/map.html'), controller: this.webController })
+        .javaScriptAccess(true)
+        .zoomAccess(false)
+        .backgroundColor('#E9EDF0')
+        .onControllerAttached(() => {
+          this.webController.registerJavaScriptProxy(this, 'arkBridge',
+            ['onMapReady', 'onMapClick', 'onPinDragEnd', 'onFavoriteClick'])
+          this.webController.refresh()
+        })
+        .onInterceptRequest((event?: OnInterceptRequestEvent): ESObject => {
+          // 未拦截时返回 undefined（运行时等价 null）：Web 继续走默认网络加载
+          return this.onInterceptTile(event) as ESObject
+        })
         .width('100%')
         .height('100%')
 
@@ -470,13 +267,16 @@ export struct LocationFavoritesComponent {
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .constraintSize({ maxWidth: '70%' })
-            .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+            .padding({
+              left: 10,
+              right: 10,
+              top: 5,
+              bottom: 5
+            })
             .borderRadius(12)
             .backgroundColor($r('app.color.text_field_bg'))
             .opacity(this.hasPicked && this.pickedAddress === '' ? 0 : 1)
-        }
-        .width('100%')
-        .justifyContent(FlexAlign.End)
+        }.justifyContent(FlexAlign.End)
         .padding({ right: 12, top: 10 })
         .hitTestBehavior(HitTestMode.None)
 
@@ -490,7 +290,8 @@ export struct LocationFavoritesComponent {
               .fontColor([$r('app.color.primary_text')])
           }
           .type(ButtonType.Circle)
-          .width(42).height(42)
+          .width(42)
+          .height(42)
           .backgroundColor($r('app.color.card_background'))
           .shadow({ radius: 6, color: 'rgba(0,0,0,0.2)', offsetY: 2 })
           .onClick(() => {
@@ -503,7 +304,8 @@ export struct LocationFavoritesComponent {
               .fontColor([$r('app.color.primary_text')])
           }
           .type(ButtonType.Circle)
-          .width(42).height(42)
+          .width(42)
+          .height(42)
           .backgroundColor($r('app.color.card_background'))
           .shadow({ radius: 6, color: 'rgba(0,0,0,0.2)', offsetY: 2 })
           .enabled(!this.gpsLocating)
@@ -523,6 +325,8 @@ export struct LocationFavoritesComponent {
     .width('100%')
     .layoutWeight(1)
   }
+
+  // ---------- 瓦片磁盘缓存（LRU） ----------
 
   /** 底部选点卡（固定预留高度）：新增/编辑共用 */
   @Builder
@@ -588,7 +392,12 @@ export struct LocationFavoritesComponent {
     }
     .width('100%')
     .height(SELECTION_CARD_HEIGHT)
-    .padding({ left: 20, right: 20, top: 10, bottom: 12 })
+    .padding({
+      left: 20,
+      right: 20,
+      top: 10,
+      bottom: 12
+    })
     .alignItems(HorizontalAlign.Start)
   }
 
@@ -609,7 +418,12 @@ export struct LocationFavoritesComponent {
           .fontSize(13).fontColor($r('app.color.secondary_text'))
       }
       .width('100%')
-      .padding({ left: 20, right: 20, top: 12, bottom: 12 })
+      .padding({
+        left: 20,
+        right: 20,
+        top: 12,
+        bottom: 12
+      })
 
       if (this.locations.length === 0) {
         Column() {
@@ -628,16 +442,19 @@ export struct LocationFavoritesComponent {
               Row() {
                 Column() {
                   Text(this.locationTitle(loc))
-                    .fontSize(15).fontWeight(FontWeight.Medium)
+                    .fontSize(15)
+                    .fontWeight(FontWeight.Medium)
                     .fontColor($r('app.color.primary_text'))
                     .maxLines(1)
                     .textOverflow({ overflow: TextOverflow.Ellipsis })
                   Text(loc.address)
-                    .fontSize(12).fontColor($r('app.color.secondary_text'))
+                    .fontSize(12)
+                    .fontColor($r('app.color.secondary_text'))
                     .maxLines(1)
                     .textOverflow({ overflow: TextOverflow.Ellipsis })
                     .margin({ top: 3 })
-                  Text(`经度 ${(ChaoxingUtils.parseStoredCoord(loc.longitude)).toFixed(6)}  纬度 ${(ChaoxingUtils.parseStoredCoord(loc.latitude)).toFixed(6)}`)
+                  Text(`经度 ${(ChaoxingUtils.parseStoredCoord(loc.longitude)).toFixed(
+                    6)}  纬度 ${(ChaoxingUtils.parseStoredCoord(loc.latitude)).toFixed(6)}`)
                     .fontSize(11).fontColor($r('app.color.icon'))
                     .margin({ top: 3 })
                 }
@@ -649,7 +466,9 @@ export struct LocationFavoritesComponent {
                 })
 
                 Button('编辑')
-                  .fontSize(13).height(28).borderRadius(14)
+                  .fontSize(13)
+                  .height(28)
+                  .borderRadius(14)
                   .backgroundColor($r('app.color.text_field_bg'))
                   .fontColor($r('app.color.selected'))
                   .margin({ right: 8 })
@@ -658,7 +477,9 @@ export struct LocationFavoritesComponent {
                     this.manageVisible = false
                   })
                 Button('删除')
-                  .fontSize(13).height(28).borderRadius(14)
+                  .fontSize(13)
+                  .height(28)
+                  .borderRadius(14)
                   .backgroundColor($r('app.color.text_field_bg'))
                   .fontColor($r('app.color.unsignable'))
                   .onClick(() => {
@@ -697,7 +518,8 @@ export struct LocationFavoritesComponent {
         Text('✕')
           .fontSize(18)
           .fontColor($r('app.color.secondary_text'))
-          .width(32).height(32)
+          .width(32)
+          .height(32)
           .textAlign(TextAlign.Center)
           .borderRadius(16)
           .backgroundColor($r('app.color.text_field_bg'))
@@ -708,7 +530,12 @@ export struct LocationFavoritesComponent {
           })
       }
       .width('100%')
-      .padding({ left: 20, right: 20, top: 12, bottom: 12 })
+      .padding({
+        left: 20,
+        right: 20,
+        top: 12,
+        bottom: 12
+      })
 
       this.MapPanel()
 
@@ -716,7 +543,8 @@ export struct LocationFavoritesComponent {
 
       // 管理收藏列表（嵌套半屏 sheet）
     }
-    .width('100%').height('100%')
+    .width('100%')
+    .height('100%')
     .backgroundColor($r('sys.color.ohos_id_color_sub_background'))
     .borderRadius({ topLeft: 20, topRight: 20 })
     .bindSheet($$this.manageVisible, this.ManageSheet(), {
@@ -727,5 +555,257 @@ export struct LocationFavoritesComponent {
     .onAppear(() => {
       this.loadLocations()
     })
+  }
+
+  // ---------- 选点 ----------
+
+  /** 安全执行 H5 脚本；页面未就绪或执行失败时静默（状态会在 onMapReady 握手时补推） */
+  private runJs(expr: string) {
+    if (!this.webReady) {
+      return
+    }
+    try {
+      this.webController.runJavaScript(expr)
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, `Run JS failed: ${e.message}`);
+    }
+  }
+
+  /** 收藏针全量重画（琥珀色星形针 + 备注标签） */
+  private syncFavorites() {
+    const pins: FavoritePin[] = this.locations.map((loc: SavedLocation): FavoritePin => {
+      const gcj = ChaoxingUtils.bd09_to_gcj02(
+        ChaoxingUtils.parseStoredCoord(loc.latitude),
+        ChaoxingUtils.parseStoredCoord(loc.longitude))
+      return {
+        id: loc.id,
+        lat: gcj.lat,
+        lng: gcj.lon,
+        label: this.markerLabel(loc)
+      }
+    })
+    this.runJs(`window.setFavorites(${JSON.stringify(JSON.stringify(pins))})`)
+  }
+
+  /** 收藏针上方的标签文案：有备注时"备注 · 地点"，否则只显示地点 */
+  private markerLabel(loc: SavedLocation): string {
+    return loc.note !== '' ? `${loc.note} · ${loc.address}` : loc.address
+  }
+
+  /** 选点针（红色水滴针 + 地址标签）；位置或标签变化时同步 */
+  private syncPin() {
+    if (this.hasPicked) {
+      const label = this.pickedAddress !== '' ? this.pickedAddress : '选点'
+      this.runJs(`window.setPin(${this.gcjLat},${this.gcjLon},${JSON.stringify(label)},true)`)
+    } else {
+      this.runJs('window.clearPin()')
+    }
+  }
+
+  // ---------- 逆地理编码 ----------
+
+  /** 镜头飞行到指定点 */
+  private flyTo(lat: number, lon: number, zoom: number) {
+    this.runJs(`window.flyTo(${lat},${lon},${zoom})`)
+  }
+
+  /**
+   * 拦截瓦片请求：命中缓存直接回本地文件；未命中放行网络并异步落盘。
+   * 对应 Map Kit 瓦片缓存管理中 diskCacheEnabled/diskCachePath 的自管实现。
+   */
+  private onInterceptTile(event?: OnInterceptRequestEvent): WebResourceResponse | undefined {
+    if (!event) {
+      return undefined
+    }
+    const url = event.request.getRequestUrl()
+    if (!url.includes('appmaptile')) {
+      return undefined
+    }
+    const m = url.match(/[?&]x=(\d+)&y=(\d+)&z=(\d+)/)
+    if (!m || this.tileCacheDir === '') {
+      return undefined
+    }
+    const key = `${m[3]}_${m[1]}_${m[2]}.png`
+    const filePath = `${this.tileCacheDir}/${key}`
+    try {
+      if (fs.accessSync(filePath)) {
+        const file = fs.openSync(filePath, fs.OpenMode.READ_ONLY)
+        const resp = new WebResourceResponse()
+        resp.setResponseData(file.fd)
+        resp.setResponseEncoding('utf-8')
+        resp.setResponseMimeType('image/png')
+        return resp
+      }
+    } catch (e) {
+      // 缓存读取失败则走网络
+    }
+    this.cacheTileAsync(url, filePath, key)
+    return undefined
+  }
+
+  // ---------- 增删改 ----------
+
+  /** 未命中的瓦片异步拉取落盘；完成后做 LRU 容量检查（上限 4MB） */
+  private cacheTileAsync(url: string, filePath: string, key: string) {
+    if (this.tileInflight.has(key)) {
+      return
+    }
+    this.tileInflight.add(key)
+    const req = http.createHttp()
+    req.request(url, {
+      method: http.RequestMethod.GET,
+      expectDataType: http.HttpDataType.ARRAY_BUFFER,
+      connectTimeout: 8000,
+      readTimeout: 8000
+    }).then((res: http.HttpResponse) => {
+      if (res.responseCode === 200) {
+        const ab = res.result as ArrayBuffer
+        if (ab.byteLength > 0) {
+          const file = fs.openSync(filePath, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC)
+          fs.writeSync(file.fd, ab)
+          fs.closeSync(file.fd)
+          this.evictTileCache()
+        }
+      }
+    }).catch((e: BusinessError<void>) => {
+      hilog.error(DOMAIN, TAG, `Fetch tile failed: ${e.message}`);
+    }).finally(() => {
+      req.destroy()
+      this.tileInflight.delete(key)
+    })
+  }
+
+  /** 缓存总量超上限时按修改时间从旧到新淘汰 */
+  private evictTileCache() {
+    try {
+      const names: string[] = fs.listFileSync(this.tileCacheDir)
+      const stats: TileStat[] = []
+      let total = 0
+      for (const name of names) {
+        const st = fs.statSync(`${this.tileCacheDir}/${name}`)
+        total += st.size
+        stats.push({ name, mtime: st.mtime, size: st.size })
+      }
+      if (total <= TILE_DISK_CACHE_BYTES) {
+        return
+      }
+      stats.sort((a: TileStat, b: TileStat) => a.mtime - b.mtime)
+      for (const st of stats) {
+        if (total <= TILE_DISK_CACHE_BYTES) {
+          break
+        }
+        fs.unlinkSync(`${this.tileCacheDir}/${st.name}`)
+        total -= st.size
+      }
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, `Evict tile cache failed: ${e.message}`);
+    }
+  }
+
+  /** 选点统一入口：地图点按、拖动针、定位；addressOverride 非空时直接作为地址 */
+  private pickPosition(lat: number, lon: number, fly: boolean, addressOverride: string) {
+    this.gcjLat = lat
+    this.gcjLon = lon
+    this.hasPicked = true
+    this.syncPin()
+    if (fly) {
+      this.flyTo(lat, lon, 16)
+    }
+    if (addressOverride !== '') {
+      this.pickedAddress = addressOverride
+    } else {
+      this.scheduleGeocode()
+    }
+  }
+
+  /** 按当前选点状态同步针与镜头 */
+  private applySelectionToMap() {
+    if (!this.hasPicked) {
+      return
+    }
+    this.syncPin()
+    this.flyTo(this.gcjLat, this.gcjLon, 16)
+  }
+
+  // ---------- UI ----------
+
+  /** 点击收藏针/列表项 = 选中该收藏 */
+  private selectFavorite(loc: SavedLocation) {
+    this.editingId = loc.id
+    this.noteInput = loc.note
+    this.pickedAddress = loc.address
+    const gcj = ChaoxingUtils.bd09_to_gcj02(
+      ChaoxingUtils.parseStoredCoord(loc.latitude),
+      ChaoxingUtils.parseStoredCoord(loc.longitude))
+    this.pickPosition(gcj.lat, gcj.lon, true, loc.address)
+  }
+
+  /** 定位到当前位置：仅移动镜头，不打标记、不选点 */
+  private async locateCurrent() {
+    try {
+      const atManager = abilityAccessCtrl.createAtManager()
+      const permissions: Array<Permissions> =
+        ['ohos.permission.APPROXIMATELY_LOCATION', 'ohos.permission.LOCATION']
+      const context = getContext(this) as common.UIAbilityContext
+      const result = await atManager.requestPermissionsFromUser(context, permissions)
+      if (!result.authResults.every((r: number) => r === 0)) {
+        promptAction.showToast({ message: '未获得定位权限，请在系统设置中开启', duration: 1500 })
+        return
+      }
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, `Request location permission failed: ${e.message}`);
+      promptAction.showToast({ message: '定位权限请求失败' })
+      return
+    }
+    this.gpsLocating = true
+    try {
+      const location = await geoLocationManager.getCurrentLocation()
+      const gcj = ChaoxingUtils.wgs84_to_gcj02(location.latitude, location.longitude)
+      this.flyTo(gcj.lat, gcj.lon, 16)
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, `Get current location failed: ${e.message}`);
+      promptAction.showToast({ message: '定位失败，请检查定位服务' })
+    } finally {
+      this.gpsLocating = false
+    }
+  }
+
+  private scheduleGeocode() {
+    if (this.geocodeTimer >= 0) {
+      clearTimeout(this.geocodeTimer)
+    }
+    this.geocodeSeq++
+    const seq = this.geocodeSeq
+    this.geocodeTimer = setTimeout(() => {
+      this.geocodeTimer = -1
+      this.reverseGeocode(seq)
+    }, 500)
+  }
+
+  /** 选点后取地址；getAddressesFromLocation 中国境内按 GCJ-02 请求 */
+  private async reverseGeocode(seq: number) {
+    try {
+      const addresses = await geoLocationManager.getAddressesFromLocation({
+        latitude: this.gcjLat,
+        longitude: this.gcjLon,
+        maxItems: 1
+      })
+      if (seq !== this.geocodeSeq) {
+        return
+      }
+      if (addresses.length > 0 && addresses[0].placeName) {
+        this.pickedAddress = addresses[0].placeName
+      } else {
+        this.pickedAddress = `${this.gcjLat.toFixed(6)}, ${this.gcjLon.toFixed(6)}`
+      }
+      // 地址回填后刷新选点针上方的标签
+      this.syncPin()
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, `Reverse geocode failed: ${e.message}`);
+      if (seq !== this.geocodeSeq) {
+        return
+      }
+      this.pickedAddress = `${this.gcjLat.toFixed(6)}, ${this.gcjLon.toFixed(6)}`
+    }
   }
 }

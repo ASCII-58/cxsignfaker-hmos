@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<link rel="stylesheet" href="leaflet.css">
+<style>
+  html, body, #map { margin: 0; padding: 0; width: 100%; height: 100%; background: #e9edf0; }
+  /* 水滴定位针：与旧 MapKit 版视觉一致（选点红 / 收藏琥珀），尖点在底部中央 */
+  .pin { position: relative; width: 30px; height: 42px; filter: drop-shadow(0 2px 3px rgba(0,0,0,.35)); }
+  .pin .b {
+    position: absolute; left: 0; top: 2px; width: 30px; height: 30px;
+    border-radius: 50% 50% 50% 0; transform: rotate(-45deg);
+    background: var(--c); border: 2px solid #fff; box-sizing: border-box;
+  }
+  .pin .m {
+    position: absolute; inset: 2px 0 0 0; display: flex; align-items: center; justify-content: center;
+    transform: rotate(45deg); color: #fff; font-size: 13px; font-weight: bold; line-height: 1;
+  }
+  .pin .dot { position: absolute; left: 10px; top: 12px; width: 10px; height: 10px; border-radius: 50%; background: #fff; }
+  .leaflet-tooltip.pin-tip {
+    padding: 2px 8px; border: none; border-radius: 10px; background: rgba(255,255,255,.95);
+    color: #333; font-size: 12px; box-shadow: 0 1px 4px rgba(0,0,0,.25);
+    width: 240px; max-width: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .leaflet-tooltip.pin-tip::before { display: none; }
+  .leaflet-container { background: #e9edf0; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<script src="leaflet.js"></script>
+<script>
+  var map = L.map('map', {
+    zoomControl: false,
+    attributionControl: false,
+    minZoom: 3,
+    maxZoom: 18,
+    zoomSnap: 0.5
+  }).setView([39.90923, 116.39743], 11);
+
+  // 高德在线瓦片（GCJ-02）：与宿主 ArkTS 的坐标换算（BD-09 <-> GCJ-02）一致。
+  // 瓦片请求由宿主 onInterceptRequest 拦截做磁盘缓存（LRU 上限 4MB），未命中回源网络。
+  L.tileLayer('https://wprd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&style=7&x={x}&y={y}&z={z}', {
+    tileSize: 256,
+    updateWhenIdle: false,
+    keepBuffer: 3
+  }).addTo(map);
+
+  var pin = null;          // 选点针（红，可拖动）
+  var favGroup = L.layerGroup().addTo(map);  // 收藏针图层
+
+  function pinIcon(color, glyph) {
+    return L.divIcon({
+      className: '',
+      iconSize: [30, 42],
+      iconAnchor: [15, 42],
+      html: '<div class="pin" style="--c:' + color + '">' +
+            '<div class="b"></div>' +
+            (glyph ? '<div class="m">' + glyph + '</div>' : '<div class="dot"></div>') +
+            '</div>'
+    });
+  }
+
+  function tipLabel(text) {
+    return L.tooltip({ permanent: true, direction: 'top', offset: [0, -44], className: 'pin-tip', opacity: 1 })
+            .setContent(text || '');
+  }
+
+  map.on('click', function (e) {
+    if (window.arkBridge) arkBridge.onMapClick(e.latlng.lat, e.latlng.lng);
+  });
+
+  // ---- 宿主（ArkTS）调用的接口 ----
+  window.setPin = function (lat, lng, label, draggable) {
+    var pos = [lat, lng];
+    if (pin) {
+      pin.setLatLng(pos);
+      pin.setTooltipContent(label || '选点');
+    } else {
+      pin = L.marker(pos, {
+        icon: pinIcon('#EA4335', ''),
+        draggable: draggable !== false,
+        zIndexOffset: 1000
+      }).addTo(map);
+      pin.bindTooltip(tipLabel(label || '选点'));
+      pin.on('dragend', function () {
+        var p = pin.getLatLng();
+        if (window.arkBridge) arkBridge.onPinDragEnd(p.lat, p.lng);
+      });
+      pin.on('click', function () {
+        var p = pin.getLatLng();
+        if (window.arkBridge) arkBridge.onPinDragEnd(p.lat, p.lng);
+      });
+    }
+  };
+  window.clearPin = function () {
+    if (pin) { map.removeLayer(pin); pin = null; }
+  };
+  window.setFavorites = function (json) {
+    favGroup.clearLayers();
+    var arr = JSON.parse(json);
+    arr.forEach(function (it) {
+      var m = L.marker([it.lat, it.lng], {
+        icon: pinIcon('#E5A200', '★'),
+        draggable: false
+      }).addTo(favGroup);
+      if (it.label) m.bindTooltip(tipLabel(it.label));
+      m.on('click', function () {
+        if (window.arkBridge) arkBridge.onFavoriteClick(it.id);
+      });
+    });
+  };
+  window.flyTo = function (lat, lng, zoom) {
+    map.flyTo([lat, lng], zoom || map.getZoom(), { duration: 0.45 });
+  };
+  window.getMapCenter = function () {
+    var c = map.getCenter();
+    return [c.lat, c.lng];
+  };
+
+  // 就绪握手：宿主收到后推送当前收藏与选点状态
+  if (window.arkBridge) arkBridge.onMapReady();
+</script>
+</body>
+</html>

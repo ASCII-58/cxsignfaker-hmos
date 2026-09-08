@@ -22,6 +22,7 @@ const KEY_EXPORT_DB = 12;
 const KEY_IMPORT_DB = 13;
 const KEY_CHANGELOG = 14;
 const KEY_GITHUB = 15;
+const KEY_MAP_STYLE = 16;
 
 // 应用内更新日志数据结构（来源：rawfile/changelog.json，更新日志只需编辑该文件）
 interface ChangelogSection {
@@ -222,6 +223,59 @@ export struct SettingsComponent {
         fontColor: $r('app.color.unsignable'),
         action: () => {
           this.clearCache()
+        }
+      }
+    });
+  }
+
+  /**
+   * 清理地图相关缓存资源：
+   * - filesDir/map-style：旧版内置底图样式（约 100MB；现已改用瓦片底图，仅清理历史残留）
+   * - cacheDir/maptiles：瓦片磁盘缓存（上限 4MB，LRU 自动淘汰）
+   * 删除后不影响功能：下次使用地图选点时按需重新下载。
+   */
+  async clearMapResources() {
+    const mapStyleDir = this.context.filesDir + '/map-style';
+    const tileCacheDir = this.context.cacheDir + '/maptiles';
+    const mapSdkCache = this.context.cacheDir + '/rdb';
+    try {
+      let cleaned = 0;
+      if (await fs.access(mapStyleDir)) {
+        await fs.rmdir(mapStyleDir);
+        cleaned++;
+      }
+      if (await fs.access(tileCacheDir)) {
+        await fs.rmdir(tileCacheDir);
+        cleaned++;
+      }
+      if (await fs.access(mapSdkCache)) {
+        // 华为 MapKit 底图瓦片缓存（SateLlite.db）；现已弃用 MapKit，仅清理历史残留
+        await fs.rmdir(mapSdkCache);
+        cleaned++;
+      }
+      if (cleaned === 0) {
+        promptAction.showToast({ message: '地图缓存为空，无需清理' });
+      } else {
+        promptAction.showToast({ message: '已清理，下次使用地图选点时会按需重新下载' });
+      }
+    } catch (error) {
+      console.error('Failed to clear map resources', error);
+      promptAction.showToast({ message: '清理地图资源失败' });
+    }
+  }
+
+  confirmClearMapResources() {
+    AlertDialog.show({
+      message: '确定清理地图缓存资源吗？包括旧版底图样式（约 100MB）与瓦片缓存（上限 4MB）。清理后不影响功能，使用地图选点时会按需重新下载。',
+      primaryButton: {
+        value: '取消',
+        action: () => {}
+      },
+      secondaryButton: {
+        value: '清理',
+        fontColor: $r('app.color.unsignable'),
+        action: () => {
+          this.clearMapResources()
         }
       }
     });
@@ -757,6 +811,24 @@ export struct SettingsComponent {
               .onTouch(this.pressTouchHandler(KEY_CLEAR_CACHE))
               .onClick(() => {
                 this.confirmClearCache()
+              })
+
+              this.SettingsDivider()
+
+              Row() {
+                this.SettingTexts('清理地图资源', '清理旧版底图样式与瓦片缓存（地图选点按需重新下载）')
+                this.Chevron()
+              }
+              .width('100%').padding({ left: 16, right: 16, top: 13, bottom: 13 })
+              .scale({
+                x: this.pressedKey === KEY_MAP_STYLE ? 0.97 : 1,
+                y: this.pressedKey === KEY_MAP_STYLE ? 0.97 : 1
+              })
+              .animation({ duration: 300, curve: curves.interpolatingSpring(0, 1, 328, 28) })
+              .onAreaChange(this.pressAreaHandler(KEY_MAP_STYLE))
+              .onTouch(this.pressTouchHandler(KEY_MAP_STYLE))
+              .onClick(() => {
+                this.confirmClearMapResources()
               })
 
               this.SettingsDivider()
