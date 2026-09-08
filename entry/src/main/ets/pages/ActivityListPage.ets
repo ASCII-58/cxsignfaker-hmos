@@ -2,7 +2,7 @@ import { ActivityItem, ClassInfo, CourseAndActivity } from '../utils/classFun';
 import { ChaoxingUtils } from '../utils/utils';
 import { LengthMetrics, promptAction } from '@kit.ArkUI';
 import { deviceInfo } from '@kit.BasicServicesKit';
-import { HideMode, HdsNavDestination, ScrollEffectType } from '@kit.UIDesignKit';
+import { HdsNavDestination, ScrollEffectType } from '@kit.UIDesignKit';
 // hdsMaterial 是 6.1(23) API：API<23 系统无该导出，静态 import 值会启动即崩（见 Index.ets 同款处理），
 // 这里只做类型导入，枚举值用常量
 import type { hdsMaterial } from '@kit.UIDesignKit';
@@ -103,7 +103,7 @@ export struct ActivityListPage {
   private readonly supportFloatingBar: boolean = deviceInfo.sdkApiVersion >= 23
 
   build() {
-    // HdsNavDestination（首页同款悬浮标题栏）：无级渐变模糊随列表滚动连续变化，上滑一镜到底隐藏
+    // HdsNavDestination（首页同款悬浮标题栏）：无级渐变模糊随列表滚动连续变化
     HdsNavDestination() {
       if (this.ActivityList !== null && this.ActivityList.length > 0) {
         List({ space: 0, initialIndex: 0, scroller: this.listScroller }) {
@@ -239,12 +239,6 @@ export struct ActivityListPage {
       },
       avoidLayoutSafeArea: false,
       enableComponentSafeArea: false
-    })
-    // 上滑隐没标题区与状态栏文字、下滑回顶恢复（首页同款一镜到底）
-    .dynamicHideTitleBar({
-      hideTitleArea: true,
-      hideStatusBar: true,
-      mode: HideMode.SCROLL_UP_TO
     })
     .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM]) // 内容铺满状态栏和手势条之下
     .bindToScrollable([this.listScroller]) // 标题栏模糊绑定活动列表滚动
