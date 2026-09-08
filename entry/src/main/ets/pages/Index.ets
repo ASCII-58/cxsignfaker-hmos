@@ -28,6 +28,7 @@ const DOMAIN = 0x0004;
 // MaterialLevel.GENTLE=1（轻柔，官方 Spatialization 示例默认档位）
 const HDS_MATERIAL_TYPE_ADAPTIVE = 100;
 const HDS_MATERIAL_LEVEL_GENTLE = 1;
+const HDS_MATERIAL_LEVEL_SMOOTH = 2;
 
 AppStorage.setOrCreate('userHostName', $r('app.string.defaultUname'))
 AppStorage.setOrCreate('userHostPhone', $r('app.string.defaultPhone'))
@@ -373,7 +374,7 @@ export default struct HomePage {
   private listScroller: Scroller = new Scroller(); // 标题栏渐变模糊的滚动绑定源
   private readonly tabBarMask: HdsTabsBackgroundStyle = { maskColor: $r('app.color.page_background') };
   // 沉浸光感悬浮页签（官方 Spatialization 示例同款）：材质类型跟随系统策略（ADAPTIVE，随壁纸/深浅色自适应光感），
-  // 等级用示例默认 GENTLE（轻柔），与标题栏材质强弱保持一致；adaptToHandedness 让胶囊按持机手自动左右换位。
+  // 等级用 SMOOTH（流畅，三档中最弱，高斯模糊最轻、透出感最强），比标题栏的 GENTLE 更通透；adaptToHandedness 让胶囊按持机手自动左右换位。
   // barBottomMargin 取实测手势条高度：胶囊落在手势条区域内
   // 而非其上方，不额外避让；无实测值时退回系统级 8vp 内边距（示例同款兜底）。
   // 注意 gradientMask 必须显式置透明：默认值自带黑色渐变遮罩，会在胶囊下方糊出一条黑边
@@ -384,7 +385,7 @@ export default struct HomePage {
     adaptToHandedness: true,
     systemMaterialEffect: {
       materialType: HDS_MATERIAL_TYPE_ADAPTIVE as hdsMaterial.MaterialType,
-      materialLevel: HDS_MATERIAL_LEVEL_GENTLE as hdsMaterial.MaterialLevel
+      materialLevel: HDS_MATERIAL_LEVEL_SMOOTH as hdsMaterial.MaterialLevel
     }
   };
   private openLinkContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
