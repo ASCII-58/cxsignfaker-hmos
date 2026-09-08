@@ -43,14 +43,14 @@ struct CourseItem {
         Text(this.course.name)
           .fontSize(16)
           .fontWeight(FontWeight.Medium)
-          .fontColor($r('sys.color.ohos_id_color_text_primary'))
+          .fontColor($r('app.color.primary_text'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
 
         if (this.course.teacherfactor) {
           Text(`教师: ${this.course.teacherfactor}`)
             .fontSize(13)
-            .fontColor($r('sys.color.ohos_id_color_text_secondary'))
+            .fontColor($r('app.color.secondary_text'))
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
         }
@@ -61,7 +61,6 @@ struct CourseItem {
     }
     .width('100%')
     .height(68)
-    .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
     .padding({ left: 16, right: 16 })
     .scale({ x: this.isPressed ? 0.98 : 1, y: this.isPressed ? 0.98 : 1 })
     .animation({ duration: 150, curve: Curve.EaseInOut })
@@ -193,10 +192,10 @@ export default struct SearchLongTakeTransitionPageTwo {
             LoadingProgress()
               .width(48)
               .height(48)
-              .color($r('sys.color.ohos_id_color_emphasize'))
+              .color($r('app.color.icon'))
             Text('加载中...')
               .fontSize(14)
-              .fontColor($r('sys.color.ohos_id_color_text_secondary'))
+              .fontColor($r('app.color.secondary_text'))
               .margin({ top: 12 })
           }
           .width('100%')
@@ -207,19 +206,19 @@ export default struct SearchLongTakeTransitionPageTwo {
             Image($r('app.media.ic_public_quit')) .draggable(false)
               .width(80)
               .height(80)
-              .fillColor($r('sys.color.ohos_id_color_text_tertiary'))
+              .fillColor($r('app.color.secondary_text'))
               .margin({ bottom: 16 })
               .opacity(0.5)
 
             Text(this.searchText ? '未找到匹配的课程' : '暂无课程')
               .fontSize(16)
               .fontWeight(FontWeight.Medium)
-              .fontColor($r('sys.color.ohos_id_color_text_secondary'))
+              .fontColor($r('app.color.secondary_text'))
 
             if (this.searchText) {
               Text('换个关键词试试看')
                 .fontSize(14)
-                .fontColor($r('sys.color.ohos_id_color_text_tertiary'))
+                .fontColor($r('app.color.text_placeholder'))
                 .margin({ top: 8 })
             }
           }
@@ -230,7 +229,7 @@ export default struct SearchLongTakeTransitionPageTwo {
           Column() {
             Text(`找到 ${this.filteredCourses.length} 个课程`)
               .fontSize(14)
-              .fontColor($r('sys.color.ohos_id_color_text_secondary'))
+              .fontColor($r('app.color.secondary_text'))
               .width('100%')
               .padding({ left: 16, right: 16, bottom: 8 })
 
