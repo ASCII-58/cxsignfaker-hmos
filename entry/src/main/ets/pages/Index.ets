@@ -79,7 +79,6 @@ struct ClassListItem {
     }
     .width('100%')
     .height(68)
-    .backgroundColor($r('app.color.card_background'))
     .padding({ left: 16, right: 16 })
     .scale({ x: this.isPressed ? 0.98 : 1, y: this.isPressed ? 0.98 : 1 })
     .animation({ duration: 150, curve: Curve.EaseInOut })

@@ -54,7 +54,6 @@ struct signIcon {
         .borderWidth(2)
         .borderRadius(12)
         .margin(10)
-        .backgroundColor($r('app.color.card_background'))
         .opacity(this.isEnded ? 0.5 : 1)
         .onAppear(() => {
           if (this.signType === '0') {
@@ -148,7 +147,6 @@ export struct ActivityListPage {
                 }
                 .width('100%')
                 .height(68)
-                .backgroundColor($r('app.color.card_background'))
                 .padding({ left: 16, right: 16 })
                 .border({
                   width: { left: this.isActivityEnded(Activity) ? 0 : 3 },
