@@ -18,6 +18,15 @@
 - **Encryption**: `@ohos/crypto-js` for Chaoxing platform AES
 - **Networking**: `utils/httpClient.ets` (`Http` helper) — all GET/POST/JSONP boilerplate goes through it; do not hand-roll `http.createHttp()` in new code
 - **Sign flow**: `SignerPage` owns ALL sign/sign-out orchestration (`executeSignFlow`/`executeSignOutFlow`); gesture/password components are pure inputs that validate a code and hand it back; captcha lives in `utils/captchaApi.ets`, face recognition in `utils/faceApi.ets`, cloud-drive image upload in `utils/upload.ets`
+- **Sign-type capability matrix** (签到类型 × 能力矩阵 — `executeSignFlow` 按类型走不同的输入/校验分支；改签到逻辑前先对照此表):
+
+| 签到类型 | 点击直接签到 | 拍照上传云盘 | 定位（经纬度+地址） | 扫码 enc | 签到码/手势编码 | 滑块验证码 | 人脸识别 | checkSignCode 预校验 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 拍照签到（0） | ✓（ifphoto≠1） | ✓（ifphoto=1） |  |  |  | ✓ |  |  |
+| 二维码签到（2） |  |  | ✓（ifopenAddress=1） | ✓ |  | ✓ | ✓ |  |
+| 手势签到（3） |  |  |  |  | ✓ | ✓ |  | ✓ |
+| 位置签到（4） |  |  | ✓ |  |  | ✓ | ✓ |  |
+| 签到码签到（5） |  |  |  |  | ✓ | ✓ |  | ✓ |
 
 ## Build & Test
 
