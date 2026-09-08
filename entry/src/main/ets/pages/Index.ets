@@ -4,7 +4,7 @@ import image from '@ohos.multimedia.image';
 import { ClassInfo, CourseAndActivity } from '../utils/classFun';
 import { scanBarcode, scanCore } from '@kit.ScanKit';
 import { curves, LengthMetrics, UIContext } from '@kit.ArkUI';
-import { hdsEffect, HideMode, HdsNavDestination, HdsTabs, HdsTabsController, HdsTabsBackgroundStyle, HdsTabsFloatingStyle, ScrollEffectType } from '@kit.UIDesignKit';
+import { hdsEffect, HdsNavDestination, HdsTabs, HdsTabsController, HdsTabsBackgroundStyle, HdsTabsFloatingStyle, ScrollEffectType } from '@kit.UIDesignKit';
 // hdsMaterial 是 6.1(23) 新 API：API22 及以下系统的 @hms:hds.hdsMaterial 模块没有该导出，
 // 静态 import 会在页面加载期直接 SyntaxError 崩溃（6.0 模拟器实测）。因此只做类型导入（编译期擦除、
 // 运行时不产生 import），枚举值以常量书写，运行时只是普通数字，由系统按版本决定是否生效
@@ -587,13 +587,6 @@ export default struct HomePage {
       // 否则内容被整体下移到栏底、永远无法穿透到栏下（模拟器实测表现为栏区一块不透明色块）
       avoidLayoutSafeArea: false,
       enableComponentSafeArea: false
-    })
-    // 上滑隐没标题区与状态栏文字、下滑回顶恢复（官方沉浸光感场景同款，内容获得全屏沉浸）；
-    // 仅响应 bindToScrollable 绑定的课程列表，用户中心 Tab 不受影响。6.0(20) 起支持
-    .dynamicHideTitleBar({
-      hideTitleArea: true,
-      hideStatusBar: true,
-      mode: HideMode.SCROLL_UP_TO
     })
     .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM]) // 内容铺满状态栏和手势条之下
     .bindToScrollable([this.listScroller]) // 标题栏模糊绑定课程列表滚动
