@@ -4,7 +4,7 @@ import image from '@ohos.multimedia.image';
 import { ClassInfo, CourseAndActivity } from '../utils/classFun';
 import { scanBarcode, scanCore } from '@kit.ScanKit';
 import { curves, LengthMetrics, UIContext } from '@kit.ArkUI';
-import { hdsEffect, HdsNavDestination, HdsTabs, HdsTabsController, HdsTabsBackgroundStyle, HdsTabsFloatingStyle, ScrollEffectType } from '@kit.UIDesignKit';
+import { hdsEffect, HdsNavDestination, HdsTabs, HdsTabsController, HdsTabsBackgroundStyle, ScrollEffectType } from '@kit.UIDesignKit';
 // hdsMaterial 是 6.1(23) 新 API：API22 及以下系统的 @hms:hds.hdsMaterial 模块没有该导出，
 // 静态 import 会在页面加载期直接 SyntaxError 崩溃（6.0 模拟器实测）。因此只做类型导入（编译期擦除、
 // 运行时不产生 import），枚举值以常量书写，运行时只是普通数字，由系统按版本决定是否生效
@@ -25,10 +25,10 @@ import { LocationFavoritesComponent } from '../Component/LocationFavoritesCompon
 const TAG = 'IndexPage';
 const DOMAIN = 0x0004;
 // 沉浸光感枚举值别名（与 SDK 6.1 d.ts 一致）：MaterialType.ADAPTIVE=100（跟随系统材质策略）、
-// MaterialLevel.GENTLE=1（轻柔，官方 Spatialization 示例默认档位）
+// MaterialLevel.EXQUISITE=0/GENTLE=1/SMOOTH=2。档位存 AppStorage「hdsMaterialLevel」，
+// 设置页「沉浸光感」切换后首页页签与标题栏联动（官方 Spatialization 沉浸光感案例同款）
 const HDS_MATERIAL_TYPE_ADAPTIVE = 100;
 const HDS_MATERIAL_LEVEL_GENTLE = 1;
-const HDS_MATERIAL_LEVEL_SMOOTH = 2;
 
 AppStorage.setOrCreate('userHostName', $r('app.string.defaultUname'))
 AppStorage.setOrCreate('userHostPhone', $r('app.string.defaultPhone'))
@@ -38,6 +38,7 @@ AppStorage.setOrCreate('userQRValue', '')
 AppStorage.setOrCreate('cloneSessionCookies', '')
 AppStorage.setOrCreate('cloneSessionName', '')
 AppStorage.setOrCreate('cloneSessionPhone', '')
+AppStorage.setOrCreate('hdsMaterialLevel', HDS_MATERIAL_LEVEL_GENTLE)
 
 interface UserInfoComponentInterface {
   hostName: Resource | string
@@ -314,7 +315,10 @@ struct UserInfoComponent {
     .opacity(this.isReady ? 1 : 0)
     .translate({ y: this.isReady ? 0 : -16 })
     .bindSheet($$this.sheetVisible, this.UnifiedSheet, {
-      height: 'auto', detents: [SheetSize.MEDIUM, SheetSize.LARGE],
+      // 设置内容长且可滚动：固定 90% 高度（activeSheet 在打开前已就位，选项按内容分支生效）；
+      // 二维码名片内容短，保持自适应高度档位
+      height: this.activeSheet === 0 ? '90%' : 'auto',
+      detents: this.activeSheet === 0 ? undefined : [SheetSize.MEDIUM, SheetSize.LARGE],
       // 内容组件自身背景透明，表面色统一由 sheet 提供（延伸进小白条避让区，双色会形成断层）
       backgroundColor: $r('app.color.page_background')
     })
@@ -370,23 +374,9 @@ export default struct HomePage {
   private readonly supportFloatingBar: boolean = deviceInfo.sdkApiVersion >= 23;
   @StorageLink('naviIndicatorHeight') naviIndicatorHeight: number = 0; // EntryAbility 实测的系统手势条高度
   @StorageLink('statusBarHeight') statusBarHeight: number = 0; // EntryAbility 实测的状态栏高度
+  @StorageLink('hdsMaterialLevel') hdsMaterialLevel: number = HDS_MATERIAL_LEVEL_GENTLE; // 沉浸光感档位：页签与标题栏联动
   private listScroller: Scroller = new Scroller(); // 标题栏渐变模糊的滚动绑定源
   private readonly tabBarMask: HdsTabsBackgroundStyle = { maskColor: $r('app.color.page_background') };
-  // 沉浸光感悬浮页签（官方 Spatialization 示例同款）：材质类型跟随系统策略（ADAPTIVE，随壁纸/深浅色自适应光感），
-  // 等级用 SMOOTH（流畅，三档中最弱，高斯模糊最轻、透出感最强），比标题栏的 GENTLE 更通透；adaptToHandedness 让胶囊按持机手自动左右换位。
-  // barBottomMargin 取实测手势条高度：胶囊落在手势条区域内
-  // 而非其上方，不额外避让；无实测值时退回系统级 8vp 内边距（示例同款兜底）。
-  // 注意 gradientMask 必须显式置透明：默认值自带黑色渐变遮罩，会在胶囊下方糊出一条黑边
-  private readonly floatingBarStyle: HdsTabsFloatingStyle = {
-    barWidth: { smallWidth: 280, mediumWidth: 400, largeWidth: 560 },
-    barBottomMargin: this.naviIndicatorHeight > 0 ? this.naviIndicatorHeight : $r('sys.float.padding_level8'),
-    gradientMask: { maskColor: Color.Transparent },
-    adaptToHandedness: true,
-    systemMaterialEffect: {
-      materialType: HDS_MATERIAL_TYPE_ADAPTIVE as hdsMaterial.MaterialType,
-      materialLevel: HDS_MATERIAL_LEVEL_SMOOTH as hdsMaterial.MaterialLevel
-    }
-  };
   private openLinkContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
 
   // 页签项：图标+文字（应用市场风格），选中态主题蓝
@@ -528,7 +518,19 @@ export default struct HomePage {
         .barMode(BarMode.Fixed)
         .animationDuration(350) // 平滑内容过渡
         .barOverlap(true) // 内容穿透：列表从悬浮胶囊下方滚动穿过
-        .barFloatingStyle(this.floatingBarStyle) // 6.1(23) 悬浮页签：沉浸材质 + 贴实测手势条高度
+        .barFloatingStyle({ // 6.1(23) 悬浮页签（官方 Spatialization 示例同款）：沉浸光感材质 + 贴实测手势条高度。
+          // 等级随设置「沉浸光感」切换（默认 GENTLE），与标题栏联动；barBottomMargin 取实测手势条高度，
+          // 胶囊落在手势条区域内而非其上方，无实测值时退回系统级 8vp 内边距（示例同款兜底）；
+          // gradientMask 必须显式置透明：默认值自带黑色渐变遮罩，会在胶囊下方糊出一条黑边
+          barWidth: { smallWidth: 280, mediumWidth: 400, largeWidth: 560 },
+          barBottomMargin: this.naviIndicatorHeight > 0 ? this.naviIndicatorHeight : $r('sys.float.padding_level8'),
+          gradientMask: { maskColor: Color.Transparent },
+          adaptToHandedness: true,
+          systemMaterialEffect: {
+            materialType: HDS_MATERIAL_TYPE_ADAPTIVE as hdsMaterial.MaterialType,
+            materialLevel: this.hdsMaterialLevel as hdsMaterial.MaterialLevel
+          }
+        })
         .onTabBarClick(() => {
           this.popCurrentTabLabel();
         })
@@ -576,10 +578,10 @@ export default struct HomePage {
           // 而非默认 vp(8) 就饱和；6.0(20) 起支持
           blurEffectiveEndOffset: LengthMetrics.vp(this.statusBarHeight + 56)
         },
-        systemMaterialEffect: this.supportFloatingBar ? { // 沉浸光感材质（示例同款）。等级取示例默认 GENTLE（轻柔）：
-          // ADAPTIVE 跟随系统策略，真机常解析为强材质，静止时材质面板压在纯色页面背景上就不是透明的了
+        systemMaterialEffect: this.supportFloatingBar ? { // 沉浸光感材质（示例同款）：类型 ADAPTIVE 跟随系统策略；
+          // 等级随设置「沉浸光感」切换（默认 GENTLE），与底部页签保持同一档位联动
           materialType: HDS_MATERIAL_TYPE_ADAPTIVE as hdsMaterial.MaterialType,
-          materialLevel: HDS_MATERIAL_LEVEL_GENTLE as hdsMaterial.MaterialLevel
+          materialLevel: this.hdsMaterialLevel as hdsMaterial.MaterialLevel
         } : undefined
       },
       // 官方示例同款显式声明（沉浸一体化的关键）：关闭内容对标题栏的组件级避让，
