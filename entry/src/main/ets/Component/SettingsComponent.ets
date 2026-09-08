@@ -1,4 +1,4 @@
-import { curves, promptAction, UIContext } from '@kit.ArkUI';
+import { curves, promptAction } from '@kit.ArkUI';
 import { bundleManager, common, Want, ConfigurationConstant } from '@kit.AbilityKit';
 import { fileIo as fs, picker, fileUri } from '@kit.CoreFileKit';
 import { BusinessError } from '@kit.BasicServicesKit';
@@ -39,34 +39,24 @@ interface ChangelogRelease {
 interface ChangelogFile {
   releases: ChangelogRelease[];
 }
-const COLOR_MODE_ICONS: Resource[] = [
-  $r('app.media.ic_theme_auto'),
-  $r('app.media.ic_theme_light'),
-  $r('app.media.ic_theme_dark')
+// 华为官方图标库(HarmonyOS Symbol)：自动=半圆、浅色=太阳、深色=月亮
+const COLOR_MODE_SYMBOLS: Resource[] = [
+  $r('sys.symbol.circle_lefthalf_inset_filled'),
+  $r('sys.symbol.sun_max'),
+  $r('sys.symbol.moon_fill')
 ];
 
 @Component
 export struct SettingsComponent {
   @State version: string = '';
   @State colorModeIndex: number = 0;
-  // 滑动条预览位置：拖动过程中先行移动/高亮，松手才提交 setColorMode
-  @State previewIndex: number = 0;
   @State thumbX: number = 0;
   @State trackWidth: number = 0;
-  @State thumbPressed: boolean = false;
-  // 拖拽跟手果冻量：0 无形变，>0 按横向速度拉伸(横向拉长、纵向压缩)
-  @State thumbStretch: number = 0;
   // 通用按压 Q 弹：当前按下的按钮标识，-1 表示无；按压态保持至抬手或移出按钮区域
   @State pressedKey: number = -1;
   // 各按压目标的尺寸缓存 key->[宽,高]：触控按下后 Move/Up 持续派发给该组件，
   // 移出判定需要组件自身尺寸(onAreaChange 采集)
   private pressAreas: Map<number, number[]> = new Map();
-  private panActive: boolean = false;
-  private dragStartThumbX: number = 0;
-  private touchStartX: number = 0;
-  private touchStartY: number = 0;
-  private touchMoved: number = 0;
-  private thumbInitialized: boolean = false;
   @State modelCaptchaEnabled: boolean = false;
   @State modelTestRunning: boolean = false;
   @State modelTestState: number = MODEL_TEST_IDLE;
@@ -76,12 +66,7 @@ export struct SettingsComponent {
   async aboutToAppear() {
     this.getVersion();
     await this.loadColorMode();
-    this.previewIndex = this.colorModeIndex;
-    // 偏好读取是异步 IO，首帧布局(onAreaChange)很可能先用默认值 0 初始化了 thumbX；
-    // 读到真实档位后若轨道已量好宽度，需把滑块直接同步过去，否则每次打开都停在"自动"
-    if (this.trackWidth > 0) {
-      this.thumbX = this.previewIndex * this.getSegWidth();
-    }
+    this.syncThumb();
     await this.loadModelCaptcha();
   }
 
@@ -101,6 +86,13 @@ export struct SettingsComponent {
       this.colorModeIndex = await pref.get(PREF_COLOR_MODE_KEY, 0) as number;
     } catch (e) {
       this.colorModeIndex = 0;
+    }
+  }
+
+  /** 滑块位置与当前档位同步：偏好是异步读回的，首帧可能已用默认值 0 布局 */
+  private syncThumb() {
+    if (this.trackWidth > 0) {
+      this.thumbX = this.colorModeIndex * this.getSegWidth();
     }
   }
 
@@ -454,42 +446,14 @@ export struct SettingsComponent {
     return this.trackWidth / 3;
   }
 
-  private clampThumbX(x: number): number {
-    return Math.min(Math.max(x, 0), this.getSegWidth() * 2);
-  }
-
-  private indexFromThumb(): number {
-    return Math.min(2, Math.max(0, Math.round(this.thumbX / this.getSegWidth())));
-  }
-
-  private snapThumb(index: number) {
-    // 增大阻尼：滑块落位只带轻微回弹，不出现明显震荡
-    this.getUIContext().animateTo({ curve: curves.springMotion(0.3, 0.75) }, () => {
-      this.thumbX = index * this.getSegWidth();
-    });
-  }
-
-  /** 按压果冻效果：滑块横向微胀、纵向压缩，松手弹回 */
-  private animateThumbPress(pressed: boolean) {
-    this.getUIContext().animateTo({ curve: curves.springMotion(0.3, 0.75) }, () => {
-      this.thumbPressed = pressed;
-    });
-  }
-
-  /** 拖拽跟手果冻：官方推荐跟手曲线 responsiveSpringMotion，横向按速度拉伸、纵向压缩；
-   *  响应式弹簧会在 overlapDuration 内衔接上一次动画，跟手不抖不跳 */
-  private applyDragJelly(velocityX: number) {
-    const stretch = Math.min(0.15, Math.abs(velocityX) / 9000);
-    this.getUIContext().animateTo({ curve: curves.responsiveSpringMotion(0.25, 0.75) }, () => {
-      this.thumbStretch = stretch;
-    });
-  }
-
-  /** 离手收尾：形变量归零，springMotion 从跟手动画继承初速度，平滑回正 */
-  private releaseDragJelly() {
-    this.getUIContext().animateTo({ curve: curves.springMotion(0.3, 0.75) }, () => {
-      this.thumbStretch = 0;
-    });
+  /** 点选提交：滑块直接落位，必要时应用颜色模式 */
+  private commitIndex(index: number) {
+    if (index === this.colorModeIndex) {
+      this.syncThumb();
+      return;
+    }
+    this.setColorMode(index);
+    this.syncThumb();
   }
 
   /** 采集按压目标自身尺寸，供"移出按钮区域"命中检测 */
@@ -521,65 +485,12 @@ export struct SettingsComponent {
     };
   }
 
-  /** 松手/点击提交：滑块弹性吸附到目标档位，必要时应用颜色模式 */
-  private commitIndex(index: number) {
-    this.previewIndex = index;
-    this.snapThumb(index);
-    if (index !== this.colorModeIndex) {
-      this.setColorMode(index);
-    }
-  }
-
-  /** 悬浮页签式交互：按下滑块即弹至按压处档位；拖动交给横向 PanGesture(轴向裁决，
-   *  纵向漂移让给 List 滚动)；松手若位移极小视为点击提交，否则弹回生效档位 */
-  private onSliderTouch(event: TouchEvent) {
-    const segW = this.getSegWidth();
-    if (segW <= 0) {
-      return;
-    }
-    const touch = event.touches[0];
-    if (event.type === TouchType.Down) {
-      this.touchStartX = touch.x;
-      this.touchStartY = touch.y;
-      this.touchMoved = 0;
-      this.previewIndex = this.indexFromX(touch.x - segW / 2);
-      this.snapThumb(this.previewIndex);
-      this.animateThumbPress(true);
-    } else if (event.type === TouchType.Move) {
-      const dx = touch.x - this.touchStartX;
-      const dy = touch.y - this.touchStartY;
-      this.touchMoved = Math.max(this.touchMoved, Math.sqrt(dx * dx + dy * dy));
-      if (this.touchMoved > 10 && this.thumbPressed) {
-        this.animateThumbPress(false);
-      }
-    } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-      this.animateThumbPress(false);
-      if (this.panActive) {
-        // 横向拖动由 PanGesture 的 onActionEnd 提交
-        return;
-      }
-      if (this.touchMoved < 10) {
-        this.commitIndex(this.previewIndex);
-      } else {
-        // 起手后转成列表滚动等，未构成点击：滑块弹回当前生效档位
-        this.previewIndex = this.colorModeIndex;
-        this.snapThumb(this.colorModeIndex);
-      }
-    }
-  }
-
-  private indexFromX(x: number): number {
-    const clamped = this.clampThumbX(x);
-    return Math.min(2, Math.max(0, Math.round(clamped / this.getSegWidth())));
-  }
-
-  /** SVG 动画指示：非选中图标旋转±90°并缩放淡出，选中图标从对应方向旋入 */
+  /** 模式图标(官方 Symbol)：切换时非选中图标旋转±90°并缩放淡出，选中图标从对应方向旋入 */
   @Builder
   ThemeModeIcon(idx: number) {
-    Image(COLOR_MODE_ICONS[idx]) .draggable(false)
-      .width(24).height(24)
-      .fillColor(this.colorModeIndex === idx
-        ? $r('app.color.selected') : $r('app.color.secondary_text'))
+    SymbolGlyph(COLOR_MODE_SYMBOLS[idx])
+      .fontSize(24)
+      .fontColor([$r('app.color.selected')])
       .opacity(this.colorModeIndex === idx ? 1 : 0)
       .scale({
         x: this.colorModeIndex === idx ? 1 : 0.4,
@@ -606,7 +517,7 @@ export struct SettingsComponent {
         .padding({ left: 20, top: 12, bottom: 16 })
 
       List({ space: 16 }) {
-        // 外观：SVG 动画指示器 + 三段滑动条(拖动或点击切换 自动/浅色/深色)
+        // 外观：模式图标 + 三段滑块(点选切换 自动/浅色/深色)
         ListItem() {
           Column() {
             this.SectionHeader('外观')
@@ -624,51 +535,32 @@ export struct SettingsComponent {
               }
 
               Stack({ alignContent: Alignment.Start }) {
-                // 玻璃滑轨：胶囊形，半透明填充 + 发丝描边
+                // 滑轨：胶囊形底
                 Row()
                   .width('100%').height(40)
                   .borderRadius(20)
                   .backgroundColor($r('app.color.glass_track_fill'))
                   .border({ width: 0.8, color: $r('app.color.glass_border') })
-                // 吸附滑块：玻璃胶囊，顶部高光渐变 + 柔和投影
+                // 滑块：选中档位的底色胶囊，落位带 200ms 缓动
                 Row()
                   .width(this.trackWidth > 0 ? this.getSegWidth() - 6 : 0)
                   .height(34)
                   .borderRadius(17)
                   .backgroundColor($r('app.color.glass_thumb_fill'))
                   .border({ width: 0.8, color: $r('app.color.glass_border') })
-                  .shadow({ radius: 10, color: $r('app.color.glass_shadow'), offsetY: 3 })
-                  .linearGradient({
-                    angle: 180,
-                    colors: [
-                      [$r('app.color.glass_thumb_sheen'), 0],
-                      [Color.Transparent, 0.45]
-                    ]
-                  })
                   .margin({ left: 3 })
                   .translate({ x: this.thumbX })
-                  .scale({
-                    x: this.thumbPressed ? 1.06 : 1 + this.thumbStretch,
-                    y: this.thumbPressed ? 0.92 : 1 - this.thumbStretch * 0.7
-                  })
+                  .animation({ duration: 200, curve: Curve.EaseOut })
                 Row() {
                   ForEach([0, 1, 2], (idx: number) => {
                     Text(COLOR_MODE_LABELS[idx])
                       .fontSize(14)
-                      .fontWeight(this.previewIndex === idx ? FontWeight.Medium : FontWeight.Normal)
-                      .fontColor(this.previewIndex === idx
+                      .fontWeight(this.colorModeIndex === idx ? FontWeight.Medium : FontWeight.Normal)
+                      .fontColor(this.colorModeIndex === idx
                         ? $r('app.color.selected') : $r('app.color.secondary_text'))
-                      .animation({ duration: 250, curve: Curve.EaseOut })
                       .textAlign(TextAlign.Center)
                       .layoutWeight(1)
                       .height('100%')
-                      .scale({
-                        x: this.pressedKey === idx ? 0.92 : 1,
-                        y: this.pressedKey === idx ? 0.92 : 1
-                      })
-                      .animation({ duration: 300, curve: curves.interpolatingSpring(0, 1, 328, 28) })
-                      .onAreaChange(this.pressAreaHandler(idx))
-                      .onTouch(this.pressTouchHandler(idx))
                       .onClick(() => {
                         this.commitIndex(idx);
                       })
@@ -680,39 +572,8 @@ export struct SettingsComponent {
               .margin({ left: 12 })
               .onAreaChange((_oldArea: Area, newArea: Area) => {
                 this.trackWidth = newArea.width as number;
-                if (!this.thumbInitialized && this.trackWidth > 0) {
-                  this.thumbInitialized = true;
-                  this.thumbX = this.previewIndex * this.getSegWidth();
-                }
+                this.syncThumb();
               })
-              .onTouch((event: TouchEvent) => {
-                this.onSliderTouch(event);
-              })
-              .gesture(
-                // 横向 Pan 与 List 纵向滚动按轴向竞争：横向拖动独占触控，纵向漂移由列表滚动
-                PanGesture({ fingers: 1, direction: PanDirection.Horizontal, distance: 3 })
-                  .onActionStart(() => {
-                    this.panActive = true;
-                    this.dragStartThumbX = this.thumbX;
-                    this.applyDragJelly(0);
-                  })
-                  .onActionUpdate((event: GestureEvent) => {
-                    this.thumbX = this.clampThumbX(this.dragStartThumbX + event.offsetX);
-                    this.previewIndex = this.indexFromThumb();
-                    // 跟手果冻：按瞬时速度拉伸，快拖变长、慢拖收拢
-                    this.applyDragJelly(event.velocityX);
-                  })
-                  .onActionEnd(() => {
-                    this.panActive = false;
-                    this.releaseDragJelly();
-                    this.commitIndex(this.indexFromThumb());
-                  })
-                  .onActionCancel(() => {
-                    this.panActive = false;
-                    this.releaseDragJelly();
-                    this.commitIndex(this.indexFromThumb());
-                  })
-              )
             }
             .width('100%')
             .alignItems(VerticalAlign.Center)
