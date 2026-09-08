@@ -208,8 +208,7 @@ export struct OtherUserItem {
     })
     .bindSheet($$this.shareDialogVisible, this.QRShareSheetContent, {
       height: 'auto', detents: [SheetSize.MEDIUM, SheetSize.LARGE],
-      backgroundColor: $r('sys.color.ohos_id_color_sub_background'),
-      onWillDismiss: () => { this.shareDialogVisible = false }
+      backgroundColor: $r('sys.color.ohos_id_color_sub_background')
     })
   }
 }

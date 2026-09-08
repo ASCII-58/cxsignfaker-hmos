@@ -77,6 +77,11 @@ export struct SettingsComponent {
     this.getVersion();
     await this.loadColorMode();
     this.previewIndex = this.colorModeIndex;
+    // 偏好读取是异步 IO，首帧布局(onAreaChange)很可能先用默认值 0 初始化了 thumbX；
+    // 读到真实档位后若轨道已量好宽度，需把滑块直接同步过去，否则每次打开都停在"自动"
+    if (this.trackWidth > 0) {
+      this.thumbX = this.previewIndex * this.getSegWidth();
+    }
     await this.loadModelCaptcha();
   }
 
