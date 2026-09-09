@@ -612,7 +612,7 @@ export struct DebugPage {
                 .margin({ left: 12, right: 12 })
 
               Row() {
-                Text('发送测试邮件（不崩溃，直接验证上报链路）')
+                Text('发送测试报告（不崩溃，直接验证上报链路）')
                   .fontSize(14)
                   .fontColor($r('sys.color.ohos_id_color_text_primary'))
                 Blank()
