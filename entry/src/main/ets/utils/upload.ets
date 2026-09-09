@@ -56,7 +56,7 @@ async function applyExifOrientation(pixelMap: image.PixelMap, orientation: numbe
  * 对缓存图片做随机差异化处理（随机裁剪 90%~99% + 随机质量重编码），原地覆盖。
  * 同一张源图每次处理结果都不同，规避服务端重复图片检测；极小图直接跳过保留原图
  */
-async function randomizeImageInPlace(filePath: string): Promise<void> {
+export async function randomizeImageInPlace(filePath: string): Promise<void> {
   const imageSource = image.createImageSource(filePath);
   let pixelMap: image.PixelMap | null = null;
   let imagePacker: image.ImagePacker | null = null;
