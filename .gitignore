@@ -47,3 +47,6 @@ Thumbs.db
 *.hvigor
 hvigorw
 hvigorw.bat.test/
+
+# local harness session logs (contain transient API keys)
+session-*.md
