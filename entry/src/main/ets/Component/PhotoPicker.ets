@@ -148,8 +148,8 @@ export struct photoPicker {
           const puid = (await loginFunction.getUserInfo(userInfo.cookies)).puid
           this.objectidArray[index] = await uploadImageForObject(context, userInfo.cookies, puid, uri)
         } catch (error) {
-          hilog.error(DOMAIN, TAG, `Photo upload failed for user ${this.signIdArray[index]}`,
-            JSON.stringify(error))
+          hilog.error(DOMAIN, TAG, 'Photo upload failed for user %d: %{public}s',
+            this.signIdArray[index], JSON.stringify(error))
           promptAction.showToast({ message: `图片 ${index + 1} 上传失败`, duration: 2000 })
         }
         this.refreshStatusText(index + 1, total)
