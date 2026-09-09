@@ -215,7 +215,7 @@ async function reportCrash(info: hiAppEvent.AppEventInfo): Promise<void> {
 }
 
 /**
- * Debug 面板「发送测试邮件」：不制造崩溃，直接发送一条测试负载到 Worker，
+ * Debug 面板「发送测试报告」：不制造崩溃，直接发送一条测试负载到 Worker，
  * 独立验证 URL/口令/JSON/邮件链路（与真实崩溃上报走完全相同的 POST）。
  * 失败时抛出异常，由调用方展示。
  */

@@ -1,5 +1,5 @@
 /**
- * 崩溃上报 Worker（Cloudflare Workers）：App → 本 Worker → Sentry（主）+ Resend 邮件（兜底）
+ * 崩溃上报 Worker（Cloudflare Workers）：App → 本 Worker → Sentry
  *
  * 一、Sentry 侧准备（一次性，约 5 分钟；已有账号可直接复用，如 Android 项目的 aquamarine5 组织）
  * 1. 注册/登录 https://sentry.io（免费版 5k errors/月，个人够用；新账号 Region 选 US 即可）
@@ -7,24 +7,22 @@
  *    （平台只影响官方文档推荐，不影响接收数据）→ 项目名如 chaoxingsignfaker-harmony
  * 3. 拷 DSN：项目 Settings → Client Keys → DSN，形如
  *    https://<publicKey>@oXXXXXX.ingest.us.sentry.io/<projectId>（老账号形如 xxx.ingest.sentry.io）
- * 4.（可选）Sentry Settings → Alerts 自带邮件通知，配好后可下线本 Worker 的 Resend 兜底
+ * 4. 崩溃提醒：Sentry 自带邮件通知（Issue 黴一次出现时默认发信给成员），无需额外配置
  *
  * 二、部署/更新本 Worker
  * 1. Cloudflare → Workers & Pages → crash-mailer → Edit code → 粘贴本文件全部内容 → Deploy
  * 2. Settings → Variables and Secrets（类型选 Secret）：
- *    SENTRY_DSN      新增，填上面第 3 步的 DSN（不配则只走邮件兜底）
- *    RESEND_API_KEY  可选，保留则邮件兜底继续生效
- *    ALERT_EMAIL     可选
+ *    SENTRY_DSN      必配，填上面第 3 步的 DSN
  *    CRASH_TOKEN     549200ccc8254e17bf4d9e126b211f811b619f3e7d3542c6854868f28fa55d25
  *                    （与 utils/CrashReporter.ets 的 CRASH_TOKEN 一致）
- * 3. 验证：手机 Debug 页点「发送测试崩溃」→ Sentry 项目 Issues 页出现 LinkTest 事件即通；
- *    返回体带诊断 {"ok":true,"sentry":200,"email":200}（App 端只看 HTTP 200，无感）
+ * 3. 验证：手机 Debug 页点「发送测试报告」→ Sentry 项目 Issues 页出现 LinkTest 事件即通；
+ *    返回体带诊断 {"ok":true,"sentry":200}（App 端只看 HTTP 200，无感）
  *
  * App 端零改动：手机只访问自己的 Worker 域名（国内可达已验证），DSN 只存在 Worker 环境变量里，
  * 崩溃负载仍走原 POST /crash + x-crash-token，由本 Worker 转写成 Sentry Envelope 协议转发。
  */
 
-const SENTRY_SDK = { name: 'crash-mailer-worker', version: '1.1.0' };
+const SENTRY_SDK = { name: 'crash-mailer-worker', version: '1.2.0' };
 const CN_TZ_OFFSET_MS = 8 * 3600 * 1000;
 
 /** 解析 DSN（https://<publicKey>@<host>/<projectId>）→ 三元组；非法返回 null */
@@ -41,7 +39,9 @@ function parseJsFrames(stack) {
   const frames = [];
   for (const line of String(stack).split('\n')) {
     const m = /at\s+(?:(.*?)\s+\()?([^(]+?):(\d+):(\d+)\)?$/.exec(line.trim());
-    if (!m) continue;
+    if (!m) {
+      continue;
+    }
     frames.push({
       function: (m[1] || '').trim() || '<anonymous>',
       filename: m[2].trim(),
@@ -60,7 +60,9 @@ function parseNativeFrames(stack) {
   const frames = [];
   for (const line of String(stack).split('\n')) {
     const m = /^#(\d+)\s+(.*?)\s+\((.*?)\+(.*?)\)\s+pc=(.*)$/.exec(line.trim());
-    if (!m) continue;
+    if (!m) {
+      continue;
+    }
     const frame = {
       function: m[2].trim() || '<unknown>',
       filename: m[3].trim(),
@@ -77,7 +79,9 @@ function parseNativeFrames(stack) {
 
 /** hilog 文本 → breadcrumbs（能解析行首 MM-DD HH:MM:SS.mmm 则换算时间戳，否则用崩溃时刻） */
 function hilogToBreadcrumbs(hilog, fallbackTs) {
-  if (!hilog) return [];
+  if (!hilog) {
+    return [];
+  }
   const now = Date.now();
   const year = new Date().getUTCFullYear();
   return String(hilog)
@@ -85,11 +89,19 @@ function hilogToBreadcrumbs(hilog, fallbackTs) {
     .filter((line) => line.trim() !== '')
     .slice(-20)
     .map((line) => {
-      const crumb = { timestamp: fallbackTs, type: 'default', category: 'hilog', level: 'info', message: line.slice(0, 200) };
+      const crumb = {
+        timestamp: fallbackTs,
+        type: 'default',
+        category: 'hilog',
+        level: 'info',
+        message: line.slice(0, 200)
+      };
       const tm = /^(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})\.(\d{3})/.exec(line);
       if (tm) {
         // hilog 是设备本地（UTC+8）时间，换算回 epoch；跨年兜底：未来超 1 天则按去年
-        let ts = Date.UTC(year, Number(tm[1]) - 1, Number(tm[2]), Number(tm[3]), Number(tm[4]), Number(tm[5]), Number(tm[6])) - CN_TZ_OFFSET_MS;
+        let ts =
+          Date.UTC(year, Number(tm[1]) - 1, Number(tm[2]), Number(tm[3]), Number(tm[4]), Number(tm[5]), Number(tm[6])) -
+            CN_TZ_OFFSET_MS;
         if (ts > now + 24 * 3600 * 1000) {
           ts -= 365 * 24 * 3600 * 1000;
         }
@@ -97,7 +109,14 @@ function hilogToBreadcrumbs(hilog, fallbackTs) {
       }
       const lm = /\s([VDIWEF])\s/.exec(line);
       if (lm) {
-        crumb.level = { V: 'debug', D: 'debug', I: 'info', W: 'warning', E: 'error', F: 'fatal' }[lm[1]] ?? 'info';
+        crumb.level = {
+          V: 'debug',
+          D: 'debug',
+          I: 'info',
+          W: 'warning',
+          E: 'error',
+          F: 'fatal'
+        }[lm[1]] ?? 'info';
       }
       return crumb;
     });
@@ -204,32 +223,6 @@ async function forwardToSentry(env, crash) {
   }
 }
 
-/** 邮件兜底（Resend），未配 RESEND_API_KEY 时跳过 */
-async function sendEmail(env, crash) {
-  if (!env.RESEND_API_KEY) {
-    return 'not-configured';
-  }
-  const summary = `${crash.app ?? 'app'} ${crash.version ?? ''} [${crash.crash_type ?? 'unknown'}] ${crash.name ?? ''} @ ${crash.device ?? ''}`;
-  try {
-    const resp = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${env.RESEND_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        from: 'CrashReporter <onboarding@resend.dev>',
-        to: [env.ALERT_EMAIL],
-        subject: `[崩溃] ${summary}`.slice(0, 200),
-        text: JSON.stringify(crash, null, 2)
-      })
-    });
-    return resp.ok ? 200 : resp.status;
-  } catch (e) {
-    return `error: ${(e && e.message) || e}`;
-  }
-}
-
 export default {
   async fetch(request, env) {
     if (request.method !== 'POST') {
@@ -251,8 +244,8 @@ export default {
     if (!crash || typeof crash !== 'object') {
       return new Response('bad payload', { status: 400 });
     }
-    const [sentry, email] = await Promise.all([forwardToSentry(env, crash), sendEmail(env, crash)]);
-    const ok = sentry === 200 || email === 200;
-    return Response.json({ ok: ok, sentry: sentry, email: email }, { status: ok ? 200 : 502 });
+    const sentry = await forwardToSentry(env, crash);
+    const ok = sentry === 200;
+    return Response.json({ ok: ok, sentry: sentry }, { status: ok ? 200 : 502 });
   }
 };
