@@ -18,9 +18,10 @@ const UPLOAD_TIMEOUT_MS = 30000;
  * @param cookies 用户 Cookie
  * @param puid 用户 puid
  * @param srcUri 本地图片路径或媒体库 URI
+ * @param onProgress 可选，上传进度回调（0-100）
  */
 export async function uploadImageForObject(context: Context, cookies: string, puid: string,
-  srcUri: string): Promise<string> {
+  srcUri: string, onProgress?: (percent: number) => void): Promise<string> {
   const token = await Sign.GetToken(cookies);
   const fileName = ChaoxingUtils.generatePhotoName() + '.jpg';
   const copyFilePath = context.cacheDir + '/' + fileName;
@@ -46,6 +47,14 @@ export async function uploadImageForObject(context: Context, cookies: string, pu
   const task = await request.uploadFile(context, uploadConfig);
   return await new Promise<string>((resolve, reject) => {
     let settled = false;
+    if (onProgress) {
+      task.on('progress', (uploadedSize: number, totalSize: number) => {
+        hilog.info(DOMAIN, TAG, 'upload progress: %d/%d', uploadedSize, totalSize);
+        if (totalSize > 0 && uploadedSize <= totalSize) {
+          onProgress(Math.min(100, Math.round(uploadedSize * 100 / totalSize)));
+        }
+      });
+    }
     task.on('headerReceive', (value) => {
       if (settled || !(value && value['body'])) {
         return;

@@ -6,6 +6,9 @@ import { loginFunction } from '../utils/Login';
 const TAG = 'SignerUsers';
 const DOMAIN = 0x0012;
 
+/** 会话级头像缓存：userId → 头像。避免每次打开选择列表都重新走 DB + 网络下载 */
+const avatarCache = new Map<number, image.PixelMap>();
+
 /** 签到用户选择列表中的用户项 */
 export interface userMenu {
   uname: string
@@ -38,15 +41,26 @@ export struct Icon {
     }
     .margin({ right: 12 })
     .onAppear(async () => {
+      const cached = avatarCache.get(this.UserId);
+      if (cached) {
+        this.ImageData = cached;
+        this.isLoaded = true;
+        return;
+      }
       try {
         const userData = await DatabaseManager.getInstance().getUserById(this.UserId);
         if (userData) {
           const url = (await loginFunction.getUserInfo(userData.cookies)).pic
-          this.ImageData = await loginFunction.GetPic(url) as image.PixelMap
-          this.isLoaded = true;
+          const pic = await loginFunction.GetPic(url)
+          if (pic) {
+            this.ImageData = pic;
+            avatarCache.set(this.UserId, pic);
+            this.isLoaded = true;
+          }
         }
       } catch (e) {
-        hilog.error(DOMAIN, TAG, `[Icon] Load failed for user ${this.UserId}:`, e);
+        hilog.error(DOMAIN, TAG, `[Icon] Load failed for user ${this.UserId}: %{public}s`,
+          (e as Error).message);
       }
     })
   }
