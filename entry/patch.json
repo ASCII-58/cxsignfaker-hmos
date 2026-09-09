@@ -2,7 +2,7 @@
   "app": {
     "bundleName": "com.xhub.chaoxingsignfaker",
     "patchVersionCode": 2000332,
-    "versionCode": 1019000
+    "versionCode": 1019001
   },
   "module": {
     "name": "entry",
