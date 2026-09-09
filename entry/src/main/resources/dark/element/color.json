@@ -17,6 +17,10 @@
       "value": "#161B22"
     },
     {
+      "name": "list_item_bg",
+      "value": "#21262D"
+    },
+    {
       "name": "header_background",
       "value": "#010409"
     },
