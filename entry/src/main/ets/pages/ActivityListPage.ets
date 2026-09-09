@@ -27,6 +27,8 @@ export interface ActivityInfo {
   signType: SignType
   /** 活动列表返回的 data.ext，preSign 时使用 */
   ext: string
+  /** 活动名称（仅签到统计落库展示用） */
+  ActivityName?: string
 }
 
 export enum SignType {
@@ -176,7 +178,8 @@ export struct ActivityListPage {
                   CourseId: this.courseId,
                   ClassId: this.classId,
                   signType: Activity.otherId.toString() as SignType,
-                  ext: this.activityExt
+                  ext: this.activityExt,
+                  ActivityName: Activity.nameOne
                 }
                 this.pathInfos.pushPath({ name: 'SignerPage', param: activityInfo })
               })

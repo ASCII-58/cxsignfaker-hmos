@@ -72,6 +72,50 @@ interface ImportResult {
   message: string;
 }
 
+/**
+ * 待写入的签到统计记录（SignRecord 表）
+ * action: 'sign' = 签到尝试 | 'signout' = 签退尝试
+ * kind: 对齐 parseSignResult 的结果类型（success/already/error/...）
+ */
+export interface SignRecordData {
+  uname: string
+  activityId: string
+  activityName: string
+  signType: string
+  action: string
+  kind: string
+  message: string
+}
+
+/** 签到统计记录（含自增 id 与落库时间戳，毫秒） */
+export interface SignRecord {
+  id: number
+  uname: string
+  activityId: string
+  activityName: string
+  signType: string
+  action: string
+  kind: string
+  message: string
+  createTime: number
+}
+
+/** 签到统计汇总（sign* 字段仅统计 action='sign' 的记录） */
+export interface SignStats {
+  signTotal: number
+  signSuccess: number
+  signAlready: number
+  signFailed: number
+  signOutSuccess: number
+  typeCounts: SignTypeCount[]
+}
+
+/** 按签到类型（SignType 字符串值）的次数分布 */
+export interface SignTypeCount {
+  signType: string
+  count: number
+}
+
 class DatabaseManager {
   private static instance: DatabaseManager | null = null;
   private rdbStore: relationalStore.RdbStore | null = null;
@@ -429,9 +473,9 @@ class DatabaseManager {
    * @returns {Promise<number>} 表中的记录数量
    * @throws {Error} 如果数据库未初始化或表名无效
    */
-  public async getTableCount(tableName: 'HostUser' | 'OtherUser'): Promise<number> {
+  public async getTableCount(tableName: 'HostUser' | 'OtherUser' | 'SignRecord'): Promise<number> {
     // 验证表名合法性，防止SQL注入
-    const allowedTables = ['HostUser', 'OtherUser'];
+    const allowedTables = ['HostUser', 'OtherUser', 'SignRecord'];
     if (!allowedTables.includes(tableName)) {
       throw new Error(`无效的表名: ${tableName}. 允许的表: ${allowedTables.join(', ')}`);
     }
@@ -879,6 +923,152 @@ class DatabaseManager {
     }
   }
 
+  // ---------------- 签到统计（SignRecord 表） ----------------
+
+  /**
+   * 插入一条签到/签退统计记录
+   * @returns 插入结果状态码：1-成功，0-失败
+   */
+  public async insertSignRecord(record: SignRecordData): Promise<number> {
+    if (!this.rdbStore) {
+      throw new Error('Database not initialized. Call init() first.');
+    }
+
+    if (!record.uname || !record.kind || !record.action) {
+      throw new Error('用户名、操作类型与结果类型不能为空');
+    }
+
+    try {
+      await this.rdbStore.executeSql(
+        'INSERT INTO SignRecord (uname, activityId, activityName, signType, action, kind, message, createTime) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        [record.uname, record.activityId, record.activityName, record.signType,
+          record.action, record.kind, record.message, Date.now()]
+      );
+      return 1;
+    } catch (err) {
+      hilog.error(0x0000, 'DB', `Failed to insert sign record: ${err.message}`);
+      return 0;
+    }
+  }
+
+  /**
+   * 获取最近的签到统计记录（按落库时间倒序）
+   * @param limit 返回条数上限（更早的记录不返回，但仍参与汇总统计）
+   */
+  public async getSignRecords(limit: number): Promise<SignRecord[]> {
+    if (!this.rdbStore) {
+      throw new Error('Database not initialized. Call init() first.');
+    }
+
+    try {
+      const resultSet = await this.rdbStore.querySql(
+        'SELECT * FROM SignRecord ORDER BY id DESC LIMIT ?', [limit]);
+      const records: SignRecord[] = [];
+      while (resultSet.goToNextRow()) {
+        records.push({
+          id: resultSet.getLong(resultSet.getColumnIndex('id')),
+          uname: resultSet.getString(resultSet.getColumnIndex('uname')),
+          activityId: resultSet.getString(resultSet.getColumnIndex('activityId')),
+          activityName: resultSet.getString(resultSet.getColumnIndex('activityName')),
+          signType: resultSet.getString(resultSet.getColumnIndex('signType')),
+          action: resultSet.getString(resultSet.getColumnIndex('action')),
+          kind: resultSet.getString(resultSet.getColumnIndex('kind')),
+          message: resultSet.getString(resultSet.getColumnIndex('message')),
+          createTime: resultSet.getLong(resultSet.getColumnIndex('createTime'))
+        });
+      }
+      resultSet.close();
+      return records;
+    } catch (error) {
+      const err = new Error(`Failed to fetch sign records: ${error.message}`);
+      hilog.error(0x0000, 'DB', err.message);
+      throw err;
+    }
+  }
+
+  /**
+   * 签到统计汇总：签到次数/成功/已签到/失败、签退成功次数与按类型分布
+   */
+  public async getSignStats(): Promise<SignStats> {
+    if (!this.rdbStore) {
+      throw new Error('Database not initialized. Call init() first.');
+    }
+
+    const stats: SignStats = {
+      signTotal: 0, signSuccess: 0, signAlready: 0, signFailed: 0,
+      signOutSuccess: 0, typeCounts: []
+    };
+
+    try {
+      const summarySet = await this.rdbStore.querySql(
+        `SELECT
+          IFNULL(SUM(CASE WHEN action = 'sign' THEN 1 ELSE 0 END), 0) AS signTotal,
+          IFNULL(SUM(CASE WHEN action = 'sign' AND kind = 'success' THEN 1 ELSE 0 END), 0) AS signSuccess,
+          IFNULL(SUM(CASE WHEN action = 'sign' AND kind = 'already' THEN 1 ELSE 0 END), 0) AS signAlready,
+          IFNULL(SUM(CASE WHEN action = 'sign' AND kind NOT IN ('success', 'already') THEN 1 ELSE 0 END), 0) AS signFailed,
+          IFNULL(SUM(CASE WHEN action = 'signout' AND kind = 'success' THEN 1 ELSE 0 END), 0) AS signOutSuccess
+        FROM SignRecord`);
+      try {
+        if (summarySet.goToFirstRow()) {
+          stats.signTotal = summarySet.getLong(summarySet.getColumnIndex('signTotal'));
+          stats.signSuccess = summarySet.getLong(summarySet.getColumnIndex('signSuccess'));
+          stats.signAlready = summarySet.getLong(summarySet.getColumnIndex('signAlready'));
+          stats.signFailed = summarySet.getLong(summarySet.getColumnIndex('signFailed'));
+          stats.signOutSuccess = summarySet.getLong(summarySet.getColumnIndex('signOutSuccess'));
+        }
+      } finally {
+        summarySet.close();
+      }
+
+      const typeSet = await this.rdbStore.querySql(
+        "SELECT signType, COUNT(*) AS count FROM SignRecord WHERE action = 'sign' " +
+        'GROUP BY signType ORDER BY count DESC');
+      try {
+        while (typeSet.goToNextRow()) {
+          stats.typeCounts.push({
+            signType: typeSet.getString(typeSet.getColumnIndex('signType')),
+            count: typeSet.getLong(typeSet.getColumnIndex('count'))
+          });
+        }
+      } finally {
+        typeSet.close();
+      }
+      return stats;
+    } catch (error) {
+      const err = new Error(`Failed to fetch sign stats: ${error.message}`);
+      hilog.error(0x0000, 'DB', err.message);
+      throw err;
+    }
+  }
+
+  /**
+   * 清空全部签到统计记录
+   * @returns 删除的记录数量
+   */
+  public async clearSignRecords(): Promise<number> {
+    if (!this.rdbStore) {
+      throw new Error('数据库未初始化。请先调用init()方法。');
+    }
+
+    try {
+      this.rdbStore.beginTransaction();
+      try {
+        const countBefore = await this.getTableCount('SignRecord');
+        await this.rdbStore.executeSql('DELETE FROM SignRecord');
+        await this.rdbStore.executeSql('DELETE FROM sqlite_sequence WHERE name = "SignRecord"');
+        this.rdbStore.commit();
+        hilog.info(0x0000, 'DB', `Cleared ${countBefore} sign records`);
+        return countBefore;
+      } catch (error) {
+        this.rdbStore.rollBack();
+        throw this.normalizeError(error, '清空签到统计记录失败');
+      }
+    } catch (err) {
+      throw this.normalizeError(err, '清空签到统计记录操作异常');
+    }
+  }
+
   async close(): Promise<void> {
     if (this.rdbStore) {
       try {
@@ -926,6 +1116,20 @@ class DatabaseManager {
           latitude TEXT NOT NULL,
           longitude TEXT NOT NULL,
           address TEXT NOT NULL DEFAULT ''
+        );
+      `);
+
+      await this.rdbStore.executeSql(`
+        CREATE TABLE IF NOT EXISTS SignRecord (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          uname TEXT NOT NULL,
+          activityId TEXT NOT NULL DEFAULT '',
+          activityName TEXT NOT NULL DEFAULT '',
+          signType TEXT NOT NULL DEFAULT '',
+          action TEXT NOT NULL DEFAULT 'sign',
+          kind TEXT NOT NULL,
+          message TEXT NOT NULL DEFAULT '',
+          createTime INTEGER NOT NULL
         );
       `);
     } catch (err) {

@@ -29,6 +29,11 @@
       "name": "DebugPanel",
       "pageSourceFile": "src/main/ets/pages/DebugPanelPage.ets",
       "buildFunction": "init"
+    },
+    {
+      "name": "SignStatsPage",
+      "pageSourceFile": "src/main/ets/pages/SignStatsPage.ets",
+      "buildFunction": "initSignStats"
     }
   ]
 }

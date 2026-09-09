@@ -1082,15 +1082,15 @@ export struct SignPage {
         const userInfo = await this.requireUser(targetIds[i])
         const info = await Sign.GetSignInfo(userInfo.cookies, this.activityInfo?.ActivityId || '')
         if (info.signOutId <= 0) {
-          this.recordOutcome(hashTable, { kind: 'none', message: '该用户无可用签退', needCaptcha: false }, label)
+          this.recordOutcome(hashTable, { kind: 'none', message: '该用户无可用签退', needCaptcha: false }, label, 'signout')
         } else {
           await Sign.DoSignOut(userInfo.cookies, info.signInId, info.signOutId)
-          this.recordOutcome(hashTable, { kind: 'success', message: '签退成功', needCaptcha: false }, label)
+          this.recordOutcome(hashTable, { kind: 'success', message: '签退成功', needCaptcha: false }, label, 'signout')
         }
       } catch (e) {
         hilog.error(DOMAIN, TAG, `User ${targetIds[i]} sign out error`, e)
         this.recordOutcome(hashTable,
-          { kind: 'error', message: `签退失败: ${(e as Error).message}`, needCaptcha: false }, label)
+          { kind: 'error', message: `签退失败: ${(e as Error).message}`, needCaptcha: false }, label, 'signout')
       }
       if (i < targetIds.length - 1) {
         await new Promise<void>((resolve) => setTimeout(resolve, Sign.NEXT_SIGN_INTERVAL_MS))
@@ -1134,15 +1134,35 @@ export struct SignPage {
   }
 
   /**
-   * 按用户名聚合同类签到结果（key = kind|message）
+   * 按用户名聚合同类签到结果（key = kind|message），并写入本地签到统计
+   * @param action 'sign' = 签到 | 'signout' = 签退（统计记录的操作类型）
    */
-  private recordOutcome(map: Map<string, string[]>, outcome: SignOutcome, uname: string) {
+  private recordOutcome(map: Map<string, string[]>, outcome: SignOutcome, uname: string,
+    action: string = 'sign') {
     const key = `${outcome.kind}|${outcome.message}`
     if (map.has(key)) {
       map.get(key)!.push(uname)
     } else {
       map.set(key, [uname])
     }
+    this.logSignRecord(outcome, uname, action)
+  }
+
+  /**
+   * 签到统计落库（fire-and-forget：统计失败不影响签到流程，仅记日志）
+   */
+  private logSignRecord(outcome: SignOutcome, uname: string, action: string) {
+    DatabaseManager.getInstance().insertSignRecord({
+      uname: uname,
+      activityId: this.activityInfo?.ActivityId || '',
+      activityName: this.activityInfo?.ActivityName || '',
+      signType: this.activityInfo?.signType || '',
+      action: action,
+      kind: outcome.kind,
+      message: outcome.message
+    }).catch((e: Error) => {
+      hilog.error(DOMAIN, TAG, `Failed to log sign record: ${e.message}`)
+    })
   }
 
   /**
