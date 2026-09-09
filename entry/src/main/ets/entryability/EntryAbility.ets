@@ -4,6 +4,7 @@ import { window } from '@kit.ArkUI';
 import { DatabaseManager } from '../utils/DataBase';
 import { loginFunction } from '../utils/Login';
 import { ChaoxingUtils } from '../utils/utils';
+import { CrashReporter } from '../utils/CrashReporter';
 import { BusinessError } from '@kit.BasicServicesKit';
 
 const DOMAIN = 0x0000;
@@ -24,6 +25,9 @@ export default class EntryAbility extends UIAbility {
 
     // 启动数据库初始化（不阻塞UIAbility创建）
     this.initializeDatabase();
+
+    // 注册崩溃事件订阅（APP_CRASH：JsError/NativeCrash，下次启动时回调并上报邮件）
+    CrashReporter.init();
   }
 
   onDestroy(): void {
