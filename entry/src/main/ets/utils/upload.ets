@@ -24,7 +24,13 @@ export async function uploadImageForObject(context: Context, cookies: string, pu
   const token = await Sign.GetToken(cookies);
   const fileName = ChaoxingUtils.generatePhotoName() + '.jpg';
   const copyFilePath = context.cacheDir + '/' + fileName;
-  fs.copyFileSync(srcUri, copyFilePath);
+  // 相册选择器返回 file://media/... URI，copyFile 不支持 URI 入参，需先 openSync 取 fd 再按 fd 复制
+  const srcFile = fs.openSync(srcUri, fs.OpenMode.READ_ONLY);
+  try {
+    fs.copyFileSync(srcFile.fd, copyFilePath);
+  } finally {
+    fs.closeSync(srcFile.fd);
+  }
   const uploadConfig: request.UploadConfig = {
     url: `${ChaoXingApi.URL_UPLOAD_PHOTO.toString()}&_token=${token}`,
     method: 'POST',

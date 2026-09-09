@@ -172,7 +172,8 @@ export class loginFunction {
         const pic: string = (Json as object)?.['pic'] || ''
         const uid: number = (Json as object)?.['uid'] || 0
         const fid: string = (Json as object)?.['fid'] || ''
-        const puid: string = (Json as object)?.['puid'] || ''
+        // 接口实际返回数值型 puid，request 上传 data[].value 要求字符串，必须显式转换
+        const puid: string = String((Json as object)?.['puid'] || '')
         const clientId: string = (Json as object)?.['clientId'] || ''
         const userInfo: UserInfo = {
           'msg': (uname && pic) ? 'successful' : 'fetch error',
