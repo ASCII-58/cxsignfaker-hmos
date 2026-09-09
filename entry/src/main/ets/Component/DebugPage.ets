@@ -11,6 +11,7 @@ import { CaptchaComponent, CaptchaUserParam } from './Captcha';
 import { Sign, parseSignResult } from '../utils/sign';
 import { writeBufferToFile } from '../utils/httpClient';
 import { FaceApi, FaceResultParam, randomizeFaceImage } from '../utils/faceApi';
+import { sendTestCrashReport } from '../utils/CrashReporter';
 
 const ONNX_TEST_TAG = 'OnnxTest';
 
@@ -60,6 +61,11 @@ export struct DebugPage {
   // 默认人脸查看（联网：主用户 cookie 拉取云盘默认人脸，仅查看）
   @State profileLog: string = '尚未获取';
   @State profileImagePath: string = '';
+  // 崩溃上报链路状态（CrashReporter 写入 AppStorage，用于 Debug 面板排查）
+  @StorageProp('crashReportStatus') crashReportStatus: string = '';
+  // 崩溃邮件发送链路测试（不崩溃，直接 POST 测试负载到 Worker）
+  @State crashSending: boolean = false;
+  @State crashSendLog: string = '尚未发送';
 
   async aboutToAppear() {
     await this.loadInfo();
@@ -141,6 +147,25 @@ export struct DebugPage {
       promptAction.showToast({ message: '签名时间已设为过期' });
     } catch (e) {
       promptAction.showToast({ message: '设置失败' });
+    }
+  }
+
+  /** 崩溃邮件发送链路测试：不制造崩溃，直接 POST 一条测试负载到 Worker（等价于崩溃后重启时上报的那次请求） */
+  private async testCrashSend() {
+    if (this.crashSending) {
+      return;
+    }
+    this.crashSending = true;
+    this.crashSendLog = '发送中...';
+    try {
+      await sendTestCrashReport();
+      this.crashSendLog = '✔ 发送成功（HTTP 200），请查收邮箱';
+      promptAction.showToast({ message: '测试邮件已提交，请查收邮箱' });
+    } catch (e) {
+      this.crashSendLog = `✘ 发送失败: ${(e as Error).message}`;
+      promptAction.showToast({ message: '发送失败，详见日志' });
+    } finally {
+      this.crashSending = false;
     }
   }
 
@@ -478,6 +503,14 @@ export struct DebugPage {
               .width('100%')
               .margin({ bottom: 8, left: 4 })
 
+            if (this.crashReportStatus !== '') {
+              Text(`崩溃上报：${this.crashReportStatus}`)
+                .fontSize(12)
+                .fontColor($r('sys.color.ohos_id_color_text_secondary'))
+                .width('100%')
+                .margin({ bottom: 8, left: 4 })
+            }
+
             Column() {
               Row() {
                 Text('重置签名状态')
@@ -554,9 +587,51 @@ export struct DebugPage {
               }
               .width('100%').padding(12)
               .onClick(() => { this.setSignDaysAgo(365) })
+
+              Divider()
+                .color($r('sys.color.ohos_id_color_list_separator'))
+                .margin({ left: 12, right: 12 })
+
+              Row() {
+                Text('模拟崩溃（验证邮件上报，重启后发送）')
+                  .fontSize(14)
+                  .fontColor($r('sys.color.ohos_id_color_text_primary'))
+                Blank()
+                Image($r('app.media.arrow_right')) .draggable(false)
+                  .width(16).height(16)
+                  .fillColor($r('sys.color.ohos_id_color_text_tertiary'))
+              }
+              .width('100%').padding(12)
+              .onClick(() => {
+                // 未捕获异常 → js crash，进程退出；下次启动由 CrashReporter 上报邮件
+                throw new Error('DebugPage 模拟崩溃：验证 CrashReporter 邮件链路');
+              })
+
+              Divider()
+                .color($r('sys.color.ohos_id_color_list_separator'))
+                .margin({ left: 12, right: 12 })
+
+              Row() {
+                Text('发送测试邮件（不崩溃，直接验证上报链路）')
+                  .fontSize(14)
+                  .fontColor($r('sys.color.ohos_id_color_text_primary'))
+                Blank()
+                Button(this.crashSending ? '发送中' : '发送')
+                  .fontSize(13)
+                  .height(32)
+                  .enabled(!this.crashSending)
+                  .onClick(() => { this.testCrashSend() })
+              }
+              .width('100%').padding(12)
             }
             .backgroundColor($r('sys.color.ohos_id_color_list_card_bg'))
             .borderRadius(16)
+
+            Text(this.crashSendLog)
+              .fontSize(12)
+              .fontColor($r('sys.color.ohos_id_color_text_tertiary'))
+              .width('100%')
+              .margin({ top: 6, left: 4 })
           }
         }
         ListItem(){

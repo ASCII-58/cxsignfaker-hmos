@@ -38,6 +38,20 @@ export class Http {
   }
 
   /**
+   * POST 请求（application/json），body 为序列化后的 JSON，返回原始响应
+   */
+  static async postJson(url: string, data: object, extraHeaders?: Record<string, string>): Promise<RawHttpResponse> {
+    const header: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (extraHeaders) {
+      const headerKeys = Object.keys(extraHeaders);
+      for (let i = 0; i < headerKeys.length; i++) {
+        header[headerKeys[i]] = extraHeaders[headerKeys[i]];
+      }
+    }
+    return await Http.request(url, http.RequestMethod.POST, JSON.stringify(data), undefined, header);
+  }
+
+  /**
    * GET 并解析 JSON 响应体
    */
   static async getJson(url: string, cookies?: string, extraHeaders?: Record<string, string>): Promise<object> {

@@ -1,0 +1,56 @@
+- generic [ref=e4]:
+  - generic [ref=e5]:
+    - generic [ref=e6]: OpenHarmony三方库中心仓
+    - generic [ref=e9]:
+      - generic [ref=e10] [cursor=pointer]: 文档帮助
+      - generic [ref=e11]: 简体中文
+      - generic [ref=e17]: 登录
+      - generic [ref=e20] [cursor=pointer]: 注册
+  - generic [ref=e22]:
+    - textbox "输入关键词，回车即搜索" [ref=e28]: sentry
+    - generic [ref=e30]:
+      - generic [ref=e31]:
+        - generic [ref=e32]: 为你找到 1 个搜索结果 ~
+        - generic [ref=e35] [cursor=pointer]:
+          - generic:
+            - combobox [ref=e37]
+            - generic [ref=e38]: 相关性
+      - generic [ref=e47] [cursor=pointer]:
+        - generic [ref=e48]:
+          - generic [ref=e49]:
+            - link "@ohos/sentry" [ref=e358]:
+              - /url: /#/cn/detail/@ohos%2Fsentry
+            - generic [ref=e52]:
+              - generic [ref=e53]:
+                - generic [ref=e54]: likes
+                - generic [ref=e55]: "0"
+              - generic [ref=e56]:
+                - generic [ref=e57]: points
+                - generic [ref=e58]: "25"
+              - generic [ref=e59]:
+                - generic [ref=e60]: popularity
+                - generic [ref=e61]: "12"
+          - generic "Sentry SDK for OpenHarmony / HarmonyOS — exception monitoring, ANR, performance tracing, and Session Replay." [ref=e360]
+        - generic [ref=e63]:
+          - generic "ohos" [ref=e361]
+          - generic "zeming" [ref=e362]
+          - generic "V1.0.1" [ref=e363]
+          - generic "(21 天前)" [ref=e364]
+          - generic "Apache-2.0" [ref=e68]
+  - generic [ref=e343]:
+    - list [ref=e345]:
+      - listitem [ref=e346]:
+        - link "用户使用协议" [ref=e347] [cursor=pointer]:
+          - /url: /#/cn/help/useragreement
+      - listitem [ref=e348]:
+        - link "安全策略" [ref=e349] [cursor=pointer]:
+          - /url: /#/cn/help/securitypolicy
+      - listitem [ref=e350]:
+        - link "隐私政策" [ref=e351] [cursor=pointer]:
+          - /url: /#/cn/help/privacypolicy
+      - listitem [ref=e352]:
+        - link "平台服务等级" [ref=e353] [cursor=pointer]:
+          - /url: /#/cn/help/platformservicelevel
+    - generic [ref=e354]:
+      - paragraph [ref=e355]: 开放原子开源基金会版权所有 | 京ICP备2020036654号-3 | 京公网安备11030102011662号
+      - paragraph [ref=e356]: Copyright © 2026 OPENATOM FOUNDATION. All rights reserved.
