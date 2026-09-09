@@ -4,7 +4,7 @@
 
 ![GitHub 下载总量](https://img.shields.io/github/downloads/ASCII-58/chaoxingsignfaker-for-harmony-OS-NEXT/total?style=flat-square&label=%E4%B8%8B%E8%BD%BD%E9%87%8F)
 ![最新版下载](https://img.shields.io/github/downloads/ASCII-58/chaoxingsignfaker-for-harmony-OS-NEXT/latest/total?style=flat-square&label=%E6%9C%80%E6%96%B0%E7%89%88%E4%B8%8B%E8%BD%BD)
-![版本](https://img.shields.io/badge/%E7%89%88%E6%9C%AC-1.18.0-green?style=flat-square)
+![版本](https://img.shields.io/badge/%E7%89%88%E6%9C%AC-1.19.0-green?style=flat-square)
 ![平台](https://img.shields.io/badge/HarmonyOS_NEXT-API_20-blue?style=flat-square)
 ![架构](https://img.shields.io/badge/架构-arm64__v8a-orange?style=flat-square)
 ![License](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)
