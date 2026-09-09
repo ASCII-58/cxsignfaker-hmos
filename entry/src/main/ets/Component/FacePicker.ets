@@ -79,7 +79,9 @@ export struct facePicker {
           const processedPath = context.cacheDir + '/' + ChaoxingUtils.generatePhotoName() + '.jpg'
           await randomizeFaceImage(rawPath, processedPath)
           const puid = (await loginFunction.getUserInfo(userInfo.cookies)).puid
-          this.faceObjectIdArr[index] = await uploadImageForObject(context, userInfo.cookies, puid, processedPath)
+          // processedPath 已由 randomizeFaceImage 随机裁剪过，关闭上传层随机化避免二次裁剪影响人脸比对
+          this.faceObjectIdArr[index] = await uploadImageForObject(context, userInfo.cookies, puid,
+            processedPath, undefined, false)
         } catch (e) {
           hilog.error(DOMAIN, TAG, `Prepare profile face failed: ${(e as Error).message}`)
           promptAction.showToast({ message: `用户 ${index + 1} 默认人脸获取失败`, duration: 2000 })
