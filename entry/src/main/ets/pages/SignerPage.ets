@@ -2,7 +2,7 @@ import { ActivityInfo, SignType } from './ActivityListPage';
 import { CommonSignParams, parseSignResult, Sign, SignDetailResult, SignOutcome, UserQueryObject } from '../utils/sign';
 import { FaceApi } from '../utils/faceApi';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { DatabaseManager, SavedLocation, UserDataAndId } from '../utils/DataBase';
+import { DatabaseManager, SavedLocation, SignRecordData, UserDataAndId } from '../utils/DataBase';
 import { loginFunction } from '../utils/Login';
 import { ChaoxingUtils } from '../utils/utils';
 import { FunctionalButton, functionalButtonComponentManager } from '@kit.ScenarioFusionKit';
@@ -20,6 +20,7 @@ import UrlTools from '../utils/urlTools';
 import { geoLocationManager } from '@kit.LocationKit';
 import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
 import { CaptchaComponent, CaptchaUserParam } from '../Component/Captcha';
+import { LeaderboardReporter } from '../utils/LeaderboardReporter';
 
 const TAG = 'SignerPage';
 const DOMAIN = 0x0008;
@@ -1060,7 +1061,7 @@ export struct SignPage {
       }
     }
 
-    this.recordOutcome(map, outcome, loginInfo.uname)
+    this.recordOutcome(map, outcome, loginInfo.uname, 'sign', uidForSign)
     return outcome
   }
 
@@ -1082,10 +1083,12 @@ export struct SignPage {
         const userInfo = await this.requireUser(targetIds[i])
         const info = await Sign.GetSignInfo(userInfo.cookies, this.activityInfo?.ActivityId || '')
         if (info.signOutId <= 0) {
-          this.recordOutcome(hashTable, { kind: 'none', message: '该用户无可用签退', needCaptcha: false }, label, 'signout')
+          this.recordOutcome(hashTable, { kind: 'none', message: '该用户无可用签退', needCaptcha: false },
+            label, 'signout', userInfo.uid.toString())
         } else {
           await Sign.DoSignOut(userInfo.cookies, info.signInId, info.signOutId)
-          this.recordOutcome(hashTable, { kind: 'success', message: '签退成功', needCaptcha: false }, label, 'signout')
+          this.recordOutcome(hashTable, { kind: 'success', message: '签退成功', needCaptcha: false },
+            label, 'signout', userInfo.uid.toString())
         }
       } catch (e) {
         hilog.error(DOMAIN, TAG, `User ${targetIds[i]} sign out error`, e)
@@ -1138,21 +1141,21 @@ export struct SignPage {
    * @param action 'sign' = 签到 | 'signout' = 签退（统计记录的操作类型）
    */
   private recordOutcome(map: Map<string, string[]>, outcome: SignOutcome, uname: string,
-    action: string = 'sign') {
+    action: string = 'sign', uid: string = '') {
     const key = `${outcome.kind}|${outcome.message}`
     if (map.has(key)) {
       map.get(key)!.push(uname)
     } else {
       map.set(key, [uname])
     }
-    this.logSignRecord(outcome, uname, action)
+    this.logSignRecord(outcome, uname, action, uid)
   }
 
   /**
-   * 签到统计落库（fire-and-forget：统计失败不影响签到流程，仅记日志）
+   * 签到统计落库 + 云端排行榜上报（均 fire-and-forget：失败不影响签到流程，仅记日志）
    */
-  private logSignRecord(outcome: SignOutcome, uname: string, action: string) {
-    DatabaseManager.getInstance().insertSignRecord({
+  private logSignRecord(outcome: SignOutcome, uname: string, action: string, uid: string = '') {
+    const record: SignRecordData = {
       uname: uname,
       activityId: this.activityInfo?.ActivityId || '',
       activityName: this.activityInfo?.ActivityName || '',
@@ -1160,9 +1163,11 @@ export struct SignPage {
       action: action,
       kind: outcome.kind,
       message: outcome.message
-    }).catch((e: Error) => {
+    }
+    DatabaseManager.getInstance().insertSignRecord(record).catch((e: Error) => {
       hilog.error(DOMAIN, TAG, `Failed to log sign record: ${e.message}`)
     })
+    LeaderboardReporter.report(record, uid)
   }
 
   /**
