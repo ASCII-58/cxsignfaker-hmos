@@ -11,6 +11,7 @@
 # Build artifacts
 **/build
 /.hvigor
+/.hvigor-build
 .cxx
 /.clangd
 /.clang-format
