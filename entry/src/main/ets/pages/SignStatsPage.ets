@@ -1,4 +1,5 @@
 import { DatabaseManager, SignRecord, SignStats, SignTypeCount } from '../utils/DataBase';
+import { LeaderboardReporter } from '../utils/LeaderboardReporter';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { LengthMetrics, promptAction } from '@kit.ArkUI';
 import { deviceInfo } from '@kit.BasicServicesKit';
@@ -47,13 +48,15 @@ export function initSignStats(name: string) {
 
 /**
  * 签到统计页：汇总（次数/成功/失败/成功率/签退）+ 签到类型分布 + 最近记录
- * 数据来自本地 SignRecord 表（SignerPage 每次签到/签退逐用户落库），仅离线本地数据
+ * 数据来自本地 SignRecord 表（SignerPage 每次签到/签退逐用户落库）；
+ * 支持一键把本地记录补录到云端排行榜（LeaderboardReporter.syncHistoryToCloud）
  */
 @Component
 struct SignStatsPage {
   @State stats: SignStats | null = null;
   @State records: SignRecord[] = [];
   @State isLoading: boolean = true;
+  @State isSyncing: boolean = false;
   @StorageProp('statusBarHeight') statusBarHeight: number = 0; // EntryAbility 实测的状态栏高度
   private pathInfos: NavPathStack = new NavPathStack();
   private listScroller: Scroller = new Scroller(); // 标题栏渐变模糊的滚动绑定源
@@ -126,6 +129,26 @@ struct SignStatsPage {
         }
       }
     })
+  }
+
+  /** 本地记录补录到云端排行榜：按原始落库时间上报，计分由 Worker 唯一索引去重 */
+  private async syncToCloud() {
+    if (this.isSyncing) {
+      return
+    }
+    this.isSyncing = true
+    try {
+      const outcome = await LeaderboardReporter.syncHistoryToCloud()
+      promptAction.showToast({
+        message: `云同步完成：成功 ${outcome.synced} 条，跳过 ${outcome.skipped} 条，失败 ${outcome.failed} 条`,
+        duration: 3000
+      })
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, `Cloud sync failed: ${(e as Error).message}`)
+      promptAction.showToast({ message: `云同步失败：${(e as Error).message}` })
+    } finally {
+      this.isSyncing = false
+    }
   }
 
   @Builder
@@ -313,6 +336,17 @@ struct SignStatsPage {
               this.HistoryCard()
             }.width('100%').padding({ left: 16, right: 16 }).margin({ top: 10 })
             ListItem() {
+              Button(this.isSyncing ? '同步中...' : '同步记录到云端')
+                .width('100%').height(46).borderRadius(23)
+                .fontSize(16)
+                .backgroundColor($r('app.color.card_background'))
+                .fontColor($r('app.color.selected'))
+                .enabled(!this.isSyncing)
+                .onClick(() => {
+                  this.syncToCloud()
+                })
+            }.width('100%').padding({ left: 16, right: 16 }).margin({ top: 16 })
+            ListItem() {
               Button('清空统计记录')
                 .width('100%').height(46).borderRadius(23)
                 .fontSize(16)
@@ -321,7 +355,7 @@ struct SignStatsPage {
                 .onClick(() => {
                   this.confirmClearRecords()
                 })
-            }.width('100%').padding({ left: 16, right: 16 }).margin({ top: 16 })
+            }.width('100%').padding({ left: 16, right: 16 }).margin({ top: 10 })
           }
           ListItem() {
             Column().height(24)
