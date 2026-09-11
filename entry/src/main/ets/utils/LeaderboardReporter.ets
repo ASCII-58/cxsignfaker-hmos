@@ -1,4 +1,6 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { common } from '@kit.AbilityKit';
+import { preferences } from '@kit.ArkData';
 import { Http } from './httpClient';
 import { DatabaseManager, SignRecord, SignRecordData, UserDataAndId } from './DataBase';
 import { loginFunction } from './Login';
@@ -13,6 +15,8 @@ const DOMAIN = 0x0010;
 const WORKER_URL = 'https://crash.ascii58.dpdns.org';
 /** 与 Worker 环境变量 LB_TOKEN 一致的共享口令 */
 const LB_TOKEN = '549200ccc8254e17bf4d9e126b211f811b619f3e7d3542c6854868f28fa55d25';
+/** 自动补录水位线（本地偏好键）：只上报该时间戳（毫秒）之后的记录 */
+const PREF_LAST_SYNC_KEY = 'lb_last_sync_ms';
 
 /** 上报负载（扁平结构，字段名与 Worker 端 normalizeReport 对齐） */
 export interface LeaderboardPayload {
@@ -64,6 +68,10 @@ export class LeaderboardReporter {
    */
   static report(record: SignRecordData, uid: string): void {
     if (WORKER_URL.includes('REPLACE')) {
+      return;
+    }
+    // 设置「云端同步」开关（默认开启）：关闭后签到不再实时上报
+    if (AppStorage.get<boolean>('lbSyncEnabled') === false) {
       return;
     }
     const uidNum = Number(uid);
@@ -128,6 +136,14 @@ export class LeaderboardReporter {
     if (WORKER_URL.includes('REPLACE')) {
       throw new Error('未配置上报地址');
     }
+    const records = await DatabaseManager.getInstance().getAllSignRecords();
+    return LeaderboardReporter.syncRecords(records);
+  }
+
+  /**
+   * 同步指定记录集：构建 昵称/标签 → uid 映射后逐条上报（手动全量同步与自动增量补录共用）
+   */
+  private static async syncRecords(records: SignRecord[]): Promise<SyncOutcome> {
     const db = DatabaseManager.getInstance();
     const hostUsers = await db.getAllUsers(true);
     const otherUsers = await db.getAllUsers();
@@ -163,7 +179,6 @@ export class LeaderboardReporter {
       }
     }
 
-    const records = await db.getAllSignRecords();
     const outcome: SyncOutcome = { total: records.length, synced: 0, failed: 0, skipped: 0 };
     const seen = new Set<string>();
     for (const record of records) {
@@ -196,6 +211,38 @@ export class LeaderboardReporter {
     hilog.info(DOMAIN, TAG, 'Cloud sync done: total %{public}d, synced %{public}d, failed %{public}d, skipped %{public}d',
       outcome.total, outcome.synced, outcome.failed, outcome.skipped);
     return outcome;
+  }
+
+  /**
+   * 启动时自动补录新增签到记录（设置「云端同步」开关控制，默认开启）：
+   * 只上报上次成功同步水位线之后的记录，本批全部成功才推进水位线；
+   * 映射整体失败（如 cookies 全部过期）时 synced 为 0，水位线保持不动，
+   * 待 EntryAbility 启动刷新 cookies 后下次启动自动重试。fire-and-forget，失败仅记日志。
+   */
+  static async autoSyncNewRecords(context: common.UIAbilityContext): Promise<void> {
+    if (AppStorage.get<boolean>('lbSyncEnabled') === false) {
+      return;
+    }
+    try {
+      const pref = await preferences.getPreferences(context, 'settings');
+      const watermark = await pref.get(PREF_LAST_SYNC_KEY, 0) as number;
+      const records = (await DatabaseManager.getInstance().getAllSignRecords())
+        .filter((record: SignRecord) => record.createTime > watermark);
+      if (records.length === 0) {
+        return;
+      }
+      const outcome = await LeaderboardReporter.syncRecords(records);
+      if (outcome.failed === 0 && outcome.synced > 0) {
+        // 记录按 createTime 升序，末条即本批最大水位
+        await pref.put(PREF_LAST_SYNC_KEY, records[records.length - 1].createTime);
+        await pref.flush();
+      }
+      hilog.info(DOMAIN, TAG,
+        'Auto sync: total %{public}d, synced %{public}d, failed %{public}d, skipped %{public}d, watermark %{public}d',
+        outcome.total, outcome.synced, outcome.failed, outcome.skipped, watermark);
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, `Auto sync failed: ${(e as Error).message}`);
+    }
   }
 
   /**

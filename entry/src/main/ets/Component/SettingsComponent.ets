@@ -21,6 +21,7 @@ const HDS_LEVEL_EXQUISITE = 0;
 const HDS_LEVEL_GENTLE = 1;
 const HDS_LEVEL_SMOOTH = 2;
 const PREF_HDS_LEVEL_KEY = 'hds_material_level';
+const PREF_LB_SYNC_KEY = 'lb_sync_enabled';
 
 interface MaterialLevelOption {
   level: number;
@@ -167,6 +168,7 @@ export struct SettingsComponent {
   @State modelTestRunning: boolean = false;
   @State modelTestState: number = MODEL_TEST_IDLE;
   @State hdsMaterialLevel: number = HDS_LEVEL_GENTLE;
+  @State cloudSyncEnabled: boolean = true;
   // 沉浸光感为 6.1(23) 特性：低版本系统无该材质，设置项随之隐藏
   private readonly supportFloatingBar: boolean = deviceInfo.sdkApiVersion >= 23;
   onImportDone: () => void = () => {};
@@ -180,6 +182,7 @@ export struct SettingsComponent {
     this.syncThumb();
     await this.loadModelCaptcha();
     await this.loadHdsMaterialLevel();
+    await this.loadCloudSync();
   }
 
   async getVersion() {
@@ -240,6 +243,29 @@ export struct SettingsComponent {
       await pref.flush();
     } catch (e) {
       console.error('Failed to save hds material level', e);
+    }
+  }
+
+  /** 云端排行榜同步开关：偏好持久化 + 经 AppStorage 下发给 LeaderboardReporter（默认开启） */
+  async loadCloudSync() {
+    try {
+      let pref = await preferences.getPreferences(this.context, 'settings');
+      this.cloudSyncEnabled = await pref.get(PREF_LB_SYNC_KEY, true) as boolean;
+    } catch (e) {
+      this.cloudSyncEnabled = true;
+    }
+    AppStorage.setOrCreate('lbSyncEnabled', this.cloudSyncEnabled);
+  }
+
+  async saveCloudSync(enabled: boolean) {
+    this.cloudSyncEnabled = enabled;
+    AppStorage.setOrCreate('lbSyncEnabled', enabled);
+    try {
+      let pref = await preferences.getPreferences(this.context, 'settings');
+      await pref.put(PREF_LB_SYNC_KEY, enabled);
+      await pref.flush();
+    } catch (e) {
+      console.error('Failed to save cloud sync switch', e);
     }
   }
 
@@ -853,6 +879,31 @@ export struct SettingsComponent {
                     .padding({ left: 16, right: 16, bottom: 12 })
                 }
               }
+            }
+            .backgroundColor($r('app.color.card_background'))
+            .borderRadius(16)
+          }
+        }
+
+        // 排行榜：签到记录云端同步开关（实时上报 + 启动自动补录）
+        ListItem() {
+          Column() {
+            this.SectionHeader('排行榜')
+            Column() {
+              Row() {
+                this.SettingTexts('云端同步', '签到记录自动同步到排行榜，历史记录启动时自动补录')
+                Toggle({ type: ToggleType.Switch, isOn: this.cloudSyncEnabled })
+                  .selectedColor($r('app.color.selected'))
+                  .onChange((value: boolean) => {
+                    // sheet 每次打开都会重建本组件，程序化回填同样触发 onChange；
+                    // 回填值必然与当前状态一致，用户真实拨动才会相异
+                    if (value === this.cloudSyncEnabled) {
+                      return;
+                    }
+                    this.saveCloudSync(value)
+                  })
+              }
+              .width('100%').padding({ left: 16, right: 16, top: 13, bottom: 13 })
             }
             .backgroundColor($r('app.color.card_background'))
             .borderRadius(16)
