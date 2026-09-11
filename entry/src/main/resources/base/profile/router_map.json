@@ -34,6 +34,11 @@
       "name": "SignStatsPage",
       "pageSourceFile": "src/main/ets/pages/SignStatsPage.ets",
       "buildFunction": "initSignStats"
+    },
+    {
+      "name": "LeaderboardPage",
+      "pageSourceFile": "src/main/ets/pages/LeaderboardPage.ets",
+      "buildFunction": "initLeaderboard"
     }
   ]
 }

@@ -135,6 +135,18 @@
     {
       "name": "glass_shadow",
       "value": "#26000000"
+    },
+    {
+      "name": "medal_gold",
+      "value": "#D4A72C"
+    },
+    {
+      "name": "medal_silver",
+      "value": "#98A2AE"
+    },
+    {
+      "name": "medal_bronze",
+      "value": "#C48A5A"
     }
   ]
 }
