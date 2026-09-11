@@ -988,6 +988,40 @@ class DatabaseManager {
   }
 
   /**
+   * 获取全部签到统计记录（不限条数，按落库时间升序；云端补录同步用）
+   */
+  public async getAllSignRecords(): Promise<SignRecord[]> {
+    if (!this.rdbStore) {
+      throw new Error('Database not initialized. Call init() first.');
+    }
+
+    try {
+      const resultSet = await this.rdbStore.querySql(
+        'SELECT * FROM SignRecord ORDER BY createTime ASC, id ASC');
+      const records: SignRecord[] = [];
+      while (resultSet.goToNextRow()) {
+        records.push({
+          id: resultSet.getLong(resultSet.getColumnIndex('id')),
+          uname: resultSet.getString(resultSet.getColumnIndex('uname')),
+          activityId: resultSet.getString(resultSet.getColumnIndex('activityId')),
+          activityName: resultSet.getString(resultSet.getColumnIndex('activityName')),
+          signType: resultSet.getString(resultSet.getColumnIndex('signType')),
+          action: resultSet.getString(resultSet.getColumnIndex('action')),
+          kind: resultSet.getString(resultSet.getColumnIndex('kind')),
+          message: resultSet.getString(resultSet.getColumnIndex('message')),
+          createTime: resultSet.getLong(resultSet.getColumnIndex('createTime'))
+        });
+      }
+      resultSet.close();
+      return records;
+    } catch (error) {
+      const err = new Error(`Failed to fetch all sign records: ${error.message}`);
+      hilog.error(0x0000, 'DB', err.message);
+      throw err;
+    }
+  }
+
+  /**
    * 签到统计汇总：签到次数/成功/已签到/失败、签退成功次数与按类型分布
    */
   public async getSignStats(): Promise<SignStats> {
