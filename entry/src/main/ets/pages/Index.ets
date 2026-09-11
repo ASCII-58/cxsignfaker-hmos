@@ -735,6 +735,9 @@ export default struct HomePage {
           this.ActionItem($r('app.media.ic_public_ok'), '签到统计', () => {
             this.pageInfos.pushPath({ name: 'SignStatsPage' })
           })
+          this.ActionItem($r('app.media.ic_public_rank'), '签到排行榜', () => {
+            this.pageInfos.pushPath({ name: 'LeaderboardPage' })
+          })
           this.ActionItem($r('app.media.map_badge_local'), '管理收藏的位置', () => {
             this.locationsSheetVisible = true
           })
