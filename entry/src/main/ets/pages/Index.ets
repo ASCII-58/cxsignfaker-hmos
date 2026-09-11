@@ -516,7 +516,7 @@ export default struct HomePage {
         }
         .height('100%').vertical(false)
         .barMode(BarMode.Fixed)
-        .animationDuration(350) // 平滑内容过渡
+        .animationDuration(0) // 0 = 关闭页签切换动画，内容瞬时切换
         .barOverlap(true) // 内容穿透：列表从悬浮胶囊下方滚动穿过
         .barFloatingStyle({ // 6.1(23) 悬浮页签（官方 Spatialization 示例同款）：沉浸光感材质 + 贴实测手势条高度。
           // 等级随设置「沉浸光感」切换（默认 GENTLE），与标题栏联动；barBottomMargin 取实测手势条高度，
@@ -546,7 +546,7 @@ export default struct HomePage {
         }
         .height('100%').vertical(false)
         .barMode(BarMode.Fixed)
-        .animationDuration(350) // 平滑内容过渡
+        .animationDuration(0) // 0 = 关闭页签切换动画，内容瞬时切换
         .barOverlap(true) // 内容穿透：列表从页签栏下滚动穿过
         .barBackgroundStyle(this.tabBarMask) // 页签栏下渐隐遮罩
         .onTabBarClick(() => {
