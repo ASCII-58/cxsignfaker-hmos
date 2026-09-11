@@ -5,6 +5,7 @@ import { DatabaseManager } from '../utils/DataBase';
 import { loginFunction } from '../utils/Login';
 import { ChaoxingUtils } from '../utils/utils';
 import { CrashReporter } from '../utils/CrashReporter';
+import { LeaderboardReporter } from '../utils/LeaderboardReporter';
 import { BusinessError } from '@kit.BasicServicesKit';
 
 const DOMAIN = 0x0000;
@@ -76,8 +77,12 @@ export default class EntryAbility extends UIAbility {
         }
       });
 
-      // Refresh other users' cookies in background (non-blocking)
-      this.refreshOtherUsersCookiesAsync(dbManager);
+      // Refresh other users' cookies in background (non-blocking);
+      // 刷新完成后自动补录新增签到记录到云端排行榜（设置「云端同步」开关控制，默认开启）
+      this.refreshOtherUsersCookiesAsync(dbManager)
+        .then(() => {
+          LeaderboardReporter.autoSyncNewRecords(this.context);
+        });
 
 
     } catch (error) {
