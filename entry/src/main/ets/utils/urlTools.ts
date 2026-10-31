@@ -19,10 +19,10 @@ export default class UrlTools {
 
     // 遍历每个参数对
     paramPairs.forEach((pair) => {
-      // 按 '=' 分割键值对
-      const aaa = pair.split('=');
-      const key = aaa[0];
-      const value = aaa[1];
+      // 只按第一个 '=' 分割：enc 等值可能含 Base64 填充符 '='，split('=') 会截断值
+      const eqIndex = pair.indexOf('=');
+      const key = eqIndex === -1 ? pair : pair.substring(0, eqIndex);
+      const value = eqIndex === -1 ? '' : pair.substring(eqIndex + 1);
 
       if (key) {
         // 解码 URI 组件并添加到对象中

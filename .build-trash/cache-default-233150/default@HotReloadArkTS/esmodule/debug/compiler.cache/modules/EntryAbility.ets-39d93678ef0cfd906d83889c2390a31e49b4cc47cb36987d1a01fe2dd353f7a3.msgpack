@@ -1,495 +1,0 @@
-Ôr@Ÿªassertions¤code´customTransformCache¬dependencies¢id¤meta±moduleSideEffects¬originalCode±originalSourcemap«resolvedIds®sourcemapChainµsyntheticNamedExportsµtransformDependencies®transformFiles¨cacheAstÔrAÚ'Jimport ConfigurationConstant from "@ohos.app.ability.ConfigurationConstant";
-import UIAbility from "@ohos.app.ability.UIAbility";
-import hilog from "@ohos.hilog";
-import window from "@ohos.window";
-import { DatabaseManager } from '../utils/DataBase';
-import { loginFunction } from '../utils/Login';
-import { ChaoxingUtils } from '../utils/utils';
-import { CrashReporter } from '../utils/CrashReporter';
-import { LeaderboardReporter } from '../utils/LeaderboardReporter';
-const DOMAIN = 0x0000;
-const TAG = 'DB_INIT';
-export default class EntryAbility extends UIAbility {
-    constructor() {
-        super(...arguments);
-        // æ•°æ®åº“åˆå§‹åŒ–çŠ¶æ€
-        this.isDatabaseInitialized = false;
-        this.databaseInitError = null;
-        this.isInitializingDatabase = false;
-        this.DB_INIT_TIMEOUT = 10000;
-    }
-    // 5ç§’è¶…æ—¶
-    onCreate(want, launchParam) {
-        this.context.getApplicationContext().setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
-        hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onCreate');
-        // å¯åŠ¨æ•°æ®åº“åˆå§‹åŒ–ï¼ˆä¸é˜»å¡UIAbilityåˆ›å»ºï¼‰
-        this.initializeDatabase();
-        // æ³¨å†Œå´©æºƒäº‹ä»¶è®¢é˜…ï¼ˆAPP_CRASHï¼šJsError/NativeCrashï¼Œä¸‹æ¬¡å¯åŠ¨æ—¶å›è°ƒå¹¶ä¸ŠæŠ¥é‚®ä»¶ï¼‰
-        CrashReporter.init();
-    }
-    onDestroy() {
-        hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onDestroy');
-    }
-    async onWindowStageCreate(windowStage) {
-        try {
-            // ç¡®ä¿æ•°æ®åº“åˆå§‹åŒ–å®Œæˆï¼ˆå¸¦è¶…æ—¶ï¼‰
-            await this.waitForDatabaseInit();
-            const dbManager = DatabaseManager.getInstance();
-            const user = await dbManager.getUserByPosition(1, true);
-            const username = user?.phone;
-            const pwd = user?.pwd;
-            const loginBody = ChaoxingUtils.getLoginBody(ChaoxingUtils.encryptByAES(username), pwd);
-            const loginResult = await loginFunction.LoginChaoXing(loginBody);
-            if (loginResult.ok && loginResult.cookies) {
-                // Update host user cookies
-                dbManager.updateUser(1, { 'cookies': loginResult.cookies }, true);
-            }
-            // Load main page immediately without waiting for other users to login
-            windowStage.loadContent('pages/initPage', (err) => {
-                // æˆåŠŸæ—¶ err ä¹Ÿå¯èƒ½å¸¦ code=0ï¼ˆä¸”ç±»å‹å¯èƒ½æ˜¯å­—ç¬¦ä¸²ï¼‰ï¼Œå¿…é¡»æ•°å€¼å½’ä¸€åŒ–ååˆ¤æ–­
-                const loadErrCode = Number(err?.code ?? 0);
-                if (loadErrCode !== 0) {
-                    hilog.error(DOMAIN, TAG, 'Failed to load main page: Code=%{public}d, Message=%{public}s', loadErrCode, err?.message ?? '');
-                    return;
-                }
-                hilog.info(DOMAIN, TAG, '%{public}s', 'Succeeded in loading the main content.');
-                // å®æµ‹ç³»ç»Ÿå®‰å…¨åŒºï¼šæ‰‹åŠ¿æ¡é«˜åº¦ä¾›æ‚¬æµ®èƒ¶å›Šè´´åº•å®šä½ï¼ŒçŠ¶æ€æ é«˜åº¦ä¾›æ ‡é¢˜æ å†…å®¹ä¸‹æ²‰ï¼ˆAppStorage ç”±é¡µé¢æ¶ˆè´¹ï¼‰
-                try {
-                    const mainWindow = windowStage.getMainWindowSync();
-                    const ui = mainWindow.getUIContext();
-                    const systemArea = mainWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM);
-                    const indicator = mainWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR);
-                    AppStorage.setOrCreate('statusBarHeight', ui.px2vp(systemArea?.topRect?.height ?? 0));
-                    AppStorage.setOrCreate('naviIndicatorHeight', ui.px2vp(indicator?.bottomRect?.height ?? 0));
-                    hilog.info(DOMAIN, TAG, `SafeArea measured: statusBar=${AppStorage.get('statusBarHeight') ?? -1} vp, naviIndicator=${AppStorage.get('naviIndicatorHeight') ?? -1} vp`);
-                }
-                catch (measureError) {
-                    hilog.error(DOMAIN, TAG, 'Measure navi indicator failed: %{public}s', measureError.message);
-                }
-            });
-            // Refresh other users' cookies in background (non-blocking);
-            // åˆ·æ–°å®Œæˆåè‡ªåŠ¨è¡¥å½•æ–°å¢ç­¾åˆ°è®°å½•åˆ°äº‘ç«¯æ’è¡Œæ¦œï¼ˆè®¾ç½®ã€Œäº‘ç«¯åŒæ­¥ã€å¼€å…³æ§åˆ¶ï¼Œé»˜è®¤å¼€å¯ï¼‰
-            this.refreshOtherUsersCookiesAsync(dbManager)
-                .then(() => {
-                LeaderboardReporter.autoSyncNewRecords(this.context);
-            });
-        }
-        catch (error) {
-            const err = error;
-            hilog.error(DOMAIN, TAG, 'Window stage creation error: Code=%{public}d, Message=%{public}s', err.code, err.message);
-        }
-    }
-    onWindowStageDestroy() {
-        hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onWindowStageDestroy');
-        // å…³é—­æ•°æ®åº“è¿æ¥
-        try {
-            const dbManager = DatabaseManager.getInstance();
-            if (dbManager.isInitialized()) {
-                dbManager.close();
-                hilog.info(DOMAIN, TAG, '%{public}s', 'Database connection closed');
-            }
-        }
-        catch (error) {
-            const err = error;
-            hilog.error(DOMAIN, TAG, 'Failed to close database: Code=%{public}d, Message=%{public}s', err.code, err.message);
-        }
-    }
-    onForeground() {
-        hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onForeground');
-    }
-    onBackground() {
-        hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onBackground');
-    }
-    /**
-     * åˆå§‹åŒ–æ•°æ®åº“ï¼ˆåœ¨onCreateä¸­è°ƒç”¨ï¼‰
-     */
-    async initializeDatabase() {
-        if (this.isInitializingDatabase || this.isDatabaseInitialized) {
-            return;
-        }
-        this.isInitializingDatabase = true;
-        hilog.info(DOMAIN, TAG, '%{public}s', 'Starting database initialization...');
-        try {
-            // åˆå§‹åŒ–æ•°æ®åº“
-            await DatabaseManager.getInstance().init(this.context);
-            // æ£€æŸ¥HostUserè¡¨çŠ¶æ€
-            const isEmpty = await DatabaseManager.getInstance().isHostUserTableEmpty();
-            hilog.info(DOMAIN, TAG, 'HostUser table is %{public}s', isEmpty ? 'empty' : 'not empty');
-            this.isDatabaseInitialized = true;
-            this.databaseInitError = null;
-            hilog.info(DOMAIN, TAG, '%{public}s', 'Database initialized successfully');
-        }
-        catch (error) {
-            this.databaseInitError = error instanceof Error ? error.message : 'Unknown database initialization error';
-            hilog.error(DOMAIN, TAG, 'Database initialization failed: %{public}s', this.databaseInitError);
-        }
-        finally {
-            this.isInitializingDatabase = false;
-        }
-    }
-    /**
-     * ç­‰å¾…æ•°æ®åº“åˆå§‹åŒ–å®Œæˆï¼ˆå¸¦è¶…æ—¶ï¼‰
-     */
-    async waitForDatabaseInit() {
-        return new Promise((resolve, reject) => {
-            const startTime = Date.now();
-            const checkInterval = 100; // æ£€æŸ¥é—´éš”
-            const checkStatus = () => {
-                if (this.isDatabaseInitialized) {
-                    clearInterval(timer);
-                    resolve();
-                }
-                else if (this.databaseInitError) {
-                    clearInterval(timer);
-                    reject(new Error(this.databaseInitError));
-                }
-                else if (Date.now() - startTime >= this.DB_INIT_TIMEOUT) {
-                    clearInterval(timer);
-                    reject(new Error('Database initialization timeout'));
-                }
-            };
-            const timer = setInterval(checkStatus, checkInterval);
-            checkStatus(); // ç«‹å³æ£€æŸ¥ä¸€æ¬¡
-        });
-    }
-    /**
-     * Refresh other users' cookies asynchronously in the background
-     * This runs in parallel and doesn't block the app startup
-     */
-    async refreshOtherUsersCookiesAsync(dbManager) {
-        try {
-            const userCount = await dbManager.getTableCount('OtherUser');
-            if (userCount === 0) {
-                hilog.info(DOMAIN, TAG, 'No other users to refresh');
-                return;
-            }
-            hilog.info(DOMAIN, TAG, `Refreshing cookies for ${userCount} other users in background`);
-            // Get all users first
-            const userPromises = [];
-            for (let index = 1; index <= userCount; index++) {
-                userPromises.push(this.refreshSingleUserCookies(dbManager, index));
-            }
-            // Run all user logins in parallel
-            await Promise.allSettled(userPromises);
-            hilog.info(DOMAIN, TAG, 'Background cookie refresh completed');
-        }
-        catch (error) {
-            hilog.error(DOMAIN, TAG, `Background cookie refresh failed: ${error.message}`);
-        }
-    }
-    /**
-     * Refresh a single user's cookies
-     */
-    async refreshSingleUserCookies(dbManager, position) {
-        try {
-            const userInfo = await dbManager.getUserByPosition(position);
-            if (userInfo !== null) {
-                const username = userInfo.phone;
-                const pwd = userInfo.pwd;
-                const loginBody = ChaoxingUtils.getLoginBody(ChaoxingUtils.encryptByAES(username), pwd);
-                const loginResult = await loginFunction.LoginChaoXing(loginBody);
-                if (loginResult.ok && loginResult.cookies) {
-                    await dbManager.updateUser(userInfo.id, { cookies: loginResult.cookies }, false);
-                    hilog.debug(DOMAIN, TAG, `Refreshed cookies for user at position ${position}`);
-                }
-                else {
-                    await dbManager.deleteUser(userInfo.id, false);
-                    hilog.warn(DOMAIN, TAG, `Deleted user at position ${position} due to login failure`);
-                }
-            }
-        }
-        catch (error) {
-            hilog.error(DOMAIN, TAG, `Failed to refresh user at position ${position}: ${error.message}`);
-        }
-    }
-}
-//# sourceMappingURL=EntryAbility.js.mapÂ™Ùu hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.app.ability.ConfigurationConstant.d.tsÙi hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.app.ability.UIAbility.d.tsÙY hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.hilog.d.tsÙZ hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.window.d.tsÙUE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\DataBase.etsÙRE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\Login.etsÙQE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\utils.tsÙZE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\CrashReporter.etsÙ`E:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\LeaderboardReporter.etsÙ`E:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\entryability\EntryAbility.etsÔrBšªmoduleName±isLocalDependency¯isNodeEntryFile§pkgPath±belongProjectPath§pkgNameªpkgVersion±dependencyPkgInfo°belongModulePath¬shouldEmitJs¥entryÃÂÙ5E:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entryÙ/E:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT¥entry¥1.0.0Ô  Ù5E:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entryÃÃÚ$import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
-import { hilog } from '@kit.PerformanceAnalysisKit';
-import { window } from '@kit.ArkUI';
-import { DatabaseManager } from '../utils/DataBase';
-import { loginFunction } from '../utils/Login';
-import { ChaoxingUtils } from '../utils/utils';
-import { CrashReporter } from '../utils/CrashReporter';
-import { LeaderboardReporter } from '../utils/LeaderboardReporter';
-import { BusinessError } from '@kit.BasicServicesKit';
-
-const DOMAIN = 0x0000;
-const TAG = 'DB_INIT';
-
-export default class EntryAbility extends UIAbility {
-  // æ•°æ®åº“åˆå§‹åŒ–çŠ¶æ€
-  private isDatabaseInitialized: boolean = false;
-  private databaseInitError: string | null = null;
-  private isInitializingDatabase: boolean = false;
-  private readonly DB_INIT_TIMEOUT = 10000;
-
-  // 5ç§’è¶…æ—¶
-
-  onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
-    this.context.getApplicationContext().setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
-    hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onCreate');
-
-    // å¯åŠ¨æ•°æ®åº“åˆå§‹åŒ–ï¼ˆä¸é˜»å¡UIAbilityåˆ›å»ºï¼‰
-    this.initializeDatabase();
-
-    // æ³¨å†Œå´©æºƒäº‹ä»¶è®¢é˜…ï¼ˆAPP_CRASHï¼šJsError/NativeCrashï¼Œä¸‹æ¬¡å¯åŠ¨æ—¶å›è°ƒå¹¶ä¸ŠæŠ¥é‚®ä»¶ï¼‰
-    CrashReporter.init();
-  }
-
-  onDestroy(): void {
-    hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onDestroy');
-  }
-
-  async onWindowStageCreate(windowStage: window.WindowStage): Promise<void> {
-
-    try {
-      // ç¡®ä¿æ•°æ®åº“åˆå§‹åŒ–å®Œæˆï¼ˆå¸¦è¶…æ—¶ï¼‰
-      await this.waitForDatabaseInit();
-
-      const dbManager = DatabaseManager.getInstance()
-
-      const user = await dbManager.getUserByPosition(1, true)
-      const username = user?.phone
-      const pwd = user?.pwd
-      const loginBody = ChaoxingUtils.getLoginBody(ChaoxingUtils.encryptByAES(username), pwd)
-      const loginResult = await loginFunction.LoginChaoXing(loginBody)
-      if (loginResult.ok && loginResult.cookies) {
-        // Update host user cookies
-        dbManager.updateUser(1, { 'cookies': loginResult.cookies }, true)
-      }
-      // Load main page immediately without waiting for other users to login
-      windowStage.loadContent('pages/initPage', (err) => {
-        // æˆåŠŸæ—¶ err ä¹Ÿå¯èƒ½å¸¦ code=0ï¼ˆä¸”ç±»å‹å¯èƒ½æ˜¯å­—ç¬¦ä¸²ï¼‰ï¼Œå¿…é¡»æ•°å€¼å½’ä¸€åŒ–ååˆ¤æ–­
-        const loadErrCode = Number(err?.code ?? 0);
-        if (loadErrCode !== 0) {
-          hilog.error(DOMAIN, TAG, 'Failed to load main page: Code=%{public}d, Message=%{public}s', loadErrCode,
-            (err as BusinessError)?.message ?? '');
-          return;
-        }
-        hilog.info(DOMAIN, TAG, '%{public}s', 'Succeeded in loading the main content.');
-        // å®æµ‹ç³»ç»Ÿå®‰å…¨åŒºï¼šæ‰‹åŠ¿æ¡é«˜åº¦ä¾›æ‚¬æµ®èƒ¶å›Šè´´åº•å®šä½ï¼ŒçŠ¶æ€æ é«˜åº¦ä¾›æ ‡é¢˜æ å†…å®¹ä¸‹æ²‰ï¼ˆAppStorage ç”±é¡µé¢æ¶ˆè´¹ï¼‰
-        try {
-          const mainWindow = windowStage.getMainWindowSync();
-          const ui = mainWindow.getUIContext();
-          const systemArea = mainWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM);
-          const indicator = mainWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR);
-          AppStorage.setOrCreate('statusBarHeight', ui.px2vp(systemArea?.topRect?.height ?? 0));
-          AppStorage.setOrCreate('naviIndicatorHeight', ui.px2vp(indicator?.bottomRect?.height ?? 0));
-          hilog.info(DOMAIN, TAG,
-            `SafeArea measured: statusBar=${AppStorage.get<number>('statusBarHeight') ?? -1} vp, naviIndicator=${AppStorage.get<number>('naviIndicatorHeight') ?? -1} vp`);
-        } catch (measureError) {
-          hilog.error(DOMAIN, TAG, 'Measure navi indicator failed: %{public}s', (measureError as Error).message);
-        }
-      });
-
-      // Refresh other users' cookies in background (non-blocking);
-      // åˆ·æ–°å®Œæˆåè‡ªåŠ¨è¡¥å½•æ–°å¢ç­¾åˆ°è®°å½•åˆ°äº‘ç«¯æ’è¡Œæ¦œï¼ˆè®¾ç½®ã€Œäº‘ç«¯åŒæ­¥ã€å¼€å…³æ§åˆ¶ï¼Œé»˜è®¤å¼€å¯ï¼‰
-      this.refreshOtherUsersCookiesAsync(dbManager)
-        .then(() => {
-          LeaderboardReporter.autoSyncNewRecords(this.context);
-        });
-
-
-    } catch (error) {
-      const err = error as BusinessError;
-      hilog.error(DOMAIN, TAG, 'Window stage creation error: Code=%{public}d, Message=%{public}s',
-        err.code, err.message);
-
-    }
-  }
-
-  onWindowStageDestroy(): void {
-    hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onWindowStageDestroy');
-
-    // å…³é—­æ•°æ®åº“è¿æ¥
-    try {
-      const dbManager = DatabaseManager.getInstance();
-      if (dbManager.isInitialized()) {
-        dbManager.close();
-        hilog.info(DOMAIN, TAG, '%{public}s', 'Database connection closed');
-      }
-    } catch (error) {
-      const err = error as BusinessError;
-      hilog.error(DOMAIN, TAG, 'Failed to close database: Code=%{public}d, Message=%{public}s',
-        err.code, err.message);
-    }
-  }
-
-  onForeground(): void {
-    hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onForeground');
-  }
-
-  onBackground(): void {
-    hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onBackground');
-  }
-
-  /**
-   * åˆå§‹åŒ–æ•°æ®åº“ï¼ˆåœ¨onCreateä¸­è°ƒç”¨ï¼‰
-   */
-  private async initializeDatabase(): Promise<void> {
-    if (this.isInitializingDatabase || this.isDatabaseInitialized) {
-      return;
-    }
-
-    this.isInitializingDatabase = true;
-    hilog.info(DOMAIN, TAG, '%{public}s', 'Starting database initialization...');
-
-    try {
-      // åˆå§‹åŒ–æ•°æ®åº“
-      await DatabaseManager.getInstance().init(this.context);
-
-      // æ£€æŸ¥HostUserè¡¨çŠ¶æ€
-      const isEmpty = await DatabaseManager.getInstance().isHostUserTableEmpty();
-      hilog.info(DOMAIN, TAG, 'HostUser table is %{public}s', isEmpty ? 'empty' : 'not empty');
-
-      this.isDatabaseInitialized = true;
-      this.databaseInitError = null;
-      hilog.info(DOMAIN, TAG, '%{public}s', 'Database initialized successfully');
-    } catch (error) {
-      this.databaseInitError = error instanceof Error ? error.message : 'Unknown database initialization error';
-      hilog.error(DOMAIN, TAG, 'Database initialization failed: %{public}s', this.databaseInitError);
-    } finally {
-      this.isInitializingDatabase = false;
-    }
-  }
-
-  /**
-   * ç­‰å¾…æ•°æ®åº“åˆå§‹åŒ–å®Œæˆï¼ˆå¸¦è¶…æ—¶ï¼‰
-   */
-  private async waitForDatabaseInit(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const startTime = Date.now();
-      const checkInterval = 100; // æ£€æŸ¥é—´éš”
-
-      const checkStatus = () => {
-        if (this.isDatabaseInitialized) {
-          clearInterval(timer);
-          resolve();
-        } else if (this.databaseInitError) {
-          clearInterval(timer);
-          reject(new Error(this.databaseInitError));
-        } else if (Date.now() - startTime >= this.DB_INIT_TIMEOUT) {
-          clearInterval(timer);
-          reject(new Error('Database initialization timeout'));
-        }
-      };
-
-      const timer = setInterval(checkStatus, checkInterval);
-      checkStatus(); // ç«‹å³æ£€æŸ¥ä¸€æ¬¡
-    });
-  }
-
-  /**
-   * Refresh other users' cookies asynchronously in the background
-   * This runs in parallel and doesn't block the app startup
-   */
-  private async refreshOtherUsersCookiesAsync(dbManager: DatabaseManager): Promise<void> {
-    try {
-      const userCount: number = await dbManager.getTableCount('OtherUser')
-      if (userCount === 0) {
-        hilog.info(DOMAIN, TAG, 'No other users to refresh');
-        return;
-      }
-
-      hilog.info(DOMAIN, TAG, `Refreshing cookies for ${userCount} other users in background`);
-
-      // Get all users first
-      const userPromises: Promise<void>[] = [];
-
-      for (let index = 1; index <= userCount; index++) {
-        userPromises.push(this.refreshSingleUserCookies(dbManager, index));
-      }
-
-      // Run all user logins in parallel
-      await Promise.allSettled(userPromises);
-
-      hilog.info(DOMAIN, TAG, 'Background cookie refresh completed');
-    } catch (error) {
-      hilog.error(DOMAIN, TAG, `Background cookie refresh failed: ${error.message}`);
-    }
-  }
-
-  /**
-   * Refresh a single user's cookies
-   */
-  private async refreshSingleUserCookies(dbManager: DatabaseManager, position: number): Promise<void> {
-    try {
-      const userInfo = await dbManager.getUserByPosition(position)
-      if (userInfo !== null) {
-        const username = userInfo.phone
-        const pwd = userInfo.pwd
-        const loginBody = ChaoxingUtils.getLoginBody(ChaoxingUtils.encryptByAES(username), pwd)
-        const loginResult = await loginFunction.LoginChaoXing(loginBody)
-        if (loginResult.ok && loginResult.cookies) {
-          await dbManager.updateUser(userInfo.id, { cookies: loginResult.cookies }, false)
-          hilog.debug(DOMAIN, TAG, `Refreshed cookies for user at position ${position}`);
-        } else {
-          await dbManager.deleteUser(userInfo.id, false)
-          hilog.warn(DOMAIN, TAG, `Deleted user at position ${position} due to login failure`);
-        }
-      }
-    } catch (error) {
-      hilog.error(DOMAIN, TAG, `Failed to refresh user at position ${position}: ${error.message}`);
-    }
-  }
-}
-ÀÔrC™Ù'@ohos.app.ability.ConfigurationConstant»@ohos.app.ability.UIAbility«@ohos.hilog¬@ohos.window±../utils/DataBase®../utils/Login¶../utils/CrashReporter¼../utils/LeaderboardReporter®../utils/utilsÔrD—ªassertions¨external¢id¤meta±moduleSideEffectsªresolvedByµsyntheticNamedExportsAÃÙu hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.app.ability.ConfigurationConstant.d.tsÔrE‘¯hostModulesInfo‘ÔrF’²hostDependencyName®hostModuleNameÙ'@ohos.app.ability.ConfigurationConstant¥entryÃªoh-resolveÂDAÃÙi hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.app.ability.UIAbility.d.tsE‘F»@ohos.app.ability.UIAbility¥entryÃªoh-resolveÂDAÃÙY hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.hilog.d.tsAÃªoh-resolveÂDAÃÙZ hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.window.d.tsE‘F¬@ohos.window¥entryÃªoh-resolveÂDAÂÙUE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\DataBase.etsAÃªoh-resolveÂDAÂÙRE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\Login.etsAÃªoh-resolveÂDAÂÙZE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\CrashReporter.etsAÃªoh-resolveÂDAÂÙ`E:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\LeaderboardReporter.etsAÃªoh-resolveÂDAÂÙQE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\utils.tsAÃªoh-resolveÂ“ÔrG–§version¤fileªsourceRoot§sources¥names¨mappings¯EntryAbility.js ‘°EntryAbility.etsÜ Í–”    ”  ”  /”"  ÌH”ÌK  ÌY”ÌL  ÌZ–”    ”  1”  :”  ÌH”3  ÌY”4  ÌZ–”   ” 	” ” ” 3”  4–”   ” 	” ” ”! #”" $˜”   ” ”	 	” ” ”   ”3 3”4 4˜”   ” ”	 	” ” ” ”. .”/ /˜”   ” ”	 	” ” ” ”. .”/ /˜”   ” ”	 	” ” ” ”6 6”7 7˜”   ” ”	 	” ” ”$ $”ÌB ÌB”ÌC ÌC–”  
- ” 
-” 
-” 
-” 
-” 
-–”   ” ”	 	” ” ” ˜”   ” ” ” ” ”! "”* *”3 3‘”  ’” ” •” 
-”" ”% +”* 0”+ 1•” 
-” ”! -”% 1”& 2•” 
-”#  ”& ,”+ 1”, 2•” ” "” %”$ *”% +’” Ìå ” Ìå’” ” 	–” ” 
-” ” ” ” ?Ü ” ” ” 	” ” ”* &”, (”- )”9 5”: 6”ÌO ÌK”ÌP ÌL”ÌY ÌU”ÌZ ÌV”Ìl Ìh”Ìm Ìi”Ìn Ìj” ” 	” 
-” ” ” ” ”$  ”& "”2 .”4 0”ÌF ÌB”ÌG ÌC”ÌH ÌD’” ”# –” ” ” 	” ”! ”" ’” ”? ;–” ” ” ” ” ” ’” ” ’” !” !” "” "	” "
-” "” "” "” "”$ " ”& ""”2 ".”4 "0”ÌG "ÌC”ÌH "ÌD”ÌI "ÌE’” #” #–” %”	 %”
- %” %” %”) %;’” '” '’” (” (—” )” )” )” )”* )$”, )&”- )'™” +” +” +” +”- +'”. +(”9 +3”; +5”< +5” -” -” -” -” -”( -"”) -#”: -4”; -5”< -6”> -8”ÌB -<”ÌC -=”ÌD -=˜” .” .” .” .”! .”# .”( ."”) ."˜” /” /” /” /” /” /”! /”" /Ü ” 0” 0” 0” 0”+ 0%”, 0&”8 02”9 03”ÌF 0Ì@”ÌG 0ÌA”ÌS 0ÌM”ÌT 0ÌN”Ì\ 0ÌV”Ì] 0ÌW”Ì_ 0ÌY”Ìb 0Ì\”Ìc 0Ì]”Ìd 0Ì]œ” 1” 1” 1”  1”& 1 ”3 1-”4 1.”ÌA 1;”ÌB 1<”ÌK 1ÌE”ÌL 1ÌF”ÌM 1ÌFš” 2” 2
-” 2” 2” 2”" 2”- 2'”. 2(”5 2/”7 21’” 3”+ 3#Ü ” 4” 4” 4”$ 4”% 4”& 4”( 4 ”* 4"”3 4+”5 4-”Ì@ 48”ÌA 49”ÌH 4Ì@”ÌJ 4ÌB”ÌL 4ÌD”ÌP 4ÌH”ÌQ 4ÌI”ÌR 4ÌI‘” 5’” 6”ÌR 6ÌL›” 7” 7” 7”# 7”$ 7”4 7.”6 70”7 71”: 74”< 76”> 78’” 8”< 84” 9” 9”! 9”$ 9”* 9"”+ 9#”. 9&”0 9(”4 9,”8 90”9 91”: 92”; 93–” :” :” :”$ :”% :”' :Ü ” ;
-” ;” ;” ;”  ;”& ;”( ;”+ ;!”- ;#”Ìl ;Ìb”Ìn ;Ìd”Ìy ;Ìo”Ì{ <”Ì~ <"”Ì€ <$”Ì‡ <+”Ì‹ </”Ì <1”Ì <2”Ì <3’” =
-” =‘” >	” ?” ?” ?” ?” ?”! ?”# ?”& ?”( ? ”4 ?,”6 ?.”Ì^ ?ÌV”Ì_ ?ÌW”Ì` ?ÌX’” Ì@”ÌI Ì@ÌA’” ÌA” ÌA™” ÌB
-” ÌB”$ ÌB”' ÌB”2 ÌB(”3 ÌB)”ÌD ÌB:”ÌF ÌB<”ÌG ÌB=™” ÌC
-” ÌC” ÌC” ÌC”) ÌC”* ÌC ”6 ÌC,”8 ÌC.”9 ÌC/Ÿ” ÌD
-” ÌD”$ ÌD”' ÌD”1 ÌD'”2 ÌD(”ÌD ÌD:”ÌE ÌD;”ÌK ÌDÌA”ÌL ÌDÌB”ÌY ÌDÌO”ÌZ ÌDÌP”Ìe ÌDÌ[”Ìf ÌDÌ\”Ìg ÌDÌ]Ÿ” ÌE
-” ÌE”# ÌE”& ÌE”0 ÌE&”1 ÌE'”ÌC ÌE9”ÌD ÌE:”ÌJ ÌEÌ@”ÌK ÌEÌA”ÌX ÌEÌN”ÌY ÌEÌO”Ìr ÌEÌh”Ìs ÌEÌi”Ìt ÌEÌjÜ ” ÌF
-” ÌF” ÌF”* ÌF ”+ ÌF!”< ÌF2”> ÌF4”Ì@ ÌF6”ÌA ÌF7”ÌF ÌF<”ÌG ÌF=”ÌQ ÌFÌG”ÌS ÌFÌI”ÌZ ÌFÌP”Ì\ ÌFÌR”Ìb ÌFÌX”Ìf ÌFÌ\”Ìg ÌFÌ]”Ìh ÌFÌ^”Ìi ÌFÌ_”Ìj ÌFÌ`Ü ” ÌG
-” ÌG” ÌG”* ÌG ”+ ÌG!”Ì@ ÌG6”ÌB ÌG8”ÌD ÌG:”ÌE ÌG;”ÌJ ÌGÌ@”ÌK ÌGÌA”ÌT ÌGÌJ”ÌV ÌGÌL”Ì` ÌGÌV”Ìb ÌGÌX”Ìh ÌGÌ^”Ìl ÌGÌb”Ìm ÌGÌc”Ìn ÌGÌd”Ìo ÌGÌe”Ìp ÌGÌfÜ  ” ÌH
-” ÌH” ÌH” ÌH” ÌH”% ÌH”' ÌH”* ÌH ”, ÌI”ÌL ÌI,”ÌV ÌI6”ÌW ÌI7”ÌZ ÌI:”Ì[ ÌIÌC”Ìl ÌIÌT”Ìm ÌIÌU”Ìq ÌIÌY”Ìr ÌIÌZ”Ìs ÌIÌ[”Ì‰ ÌIÌq”Ì“ ÌIÌ{”Ì” ÌIÌ|”Ì— ÌIÌ”Ì˜ ÌIÌˆ”Ì­ ÌIÌ”Ì® ÌIÌ”Ì² ÌIÌ¢”Ì³ ÌIÌ£”Ì´ ÌIÌ¤”Ì¹ ÌIÌ©”Ìº ÌIÌª”Ì» ÌIÌ«‘” ÌJ	”” ÌJ
-” ÌJ”# ÌJ”% ÌJÜ ” ÌK
-” ÌK” ÌK” ÌK”  ÌK”& ÌK”( ÌK”+ ÌK!”- ÌK#”ÌX ÌKÌN”ÌZ ÌKÌQ”Ìf ÌKÌg”Ìg ÌKÌh”Ìn ÌKÌo”Ìo ÌKÌp”Ìp ÌKÌq‘” ÌL	”” ÌM” ÌM” ÌM” ÌM	’” ÌO”ÌI ÌOÌC’” ÌP”7 ÌP1—” ÌQ” ÌQ
-” ÌQ”. ÌQ(”/ ÌQ)”8 ÌQ2”9 ÌQ3•” ÌR	” ÌR” ÌR” ÌR” ÌRš” ÌS
-”# ÌS”$ ÌS”6 ÌS0”7 ÌS1”; ÌS5”< ÌS6”ÌC ÌS=”ÌD ÌS>”ÌE ÌS?”” ÌT” ÌT	” ÌT
-” ÌT‘”	 ÌW”” ÌW” ÌW” ÌW” ÌW–” ÌX” ÌX” ÌX” ÌX” ÌX(” ÌX)Ü ” ÌY” ÌY” ÌY” ÌY” ÌY” ÌY”  ÌY”# ÌY”% ÌY”Ìg ÌYÌa”Ìi ÌZ”Ìl ÌZ”Ìm ÌZ”Ìq ÌZ”Ìs ÌZ”Ìv ÌZ”Ìw ÌZ”Ì~ ÌZ”Ì ÌZ”Ì€ ÌZ‘”	 Ì\’” Ì]” Ì]’” Ì_” Ì_” Ì`” Ì`	” Ì`
-” Ì`” Ì`” Ì`” Ì`”$ Ì` ”& Ì`"”2 Ì`.”4 Ì`0”ÌR Ì`ÌN”ÌS Ì`ÌO”ÌT Ì`ÌP’” Ìb” Ìb’” Ìc” Ìc™” Ìd” Ìd” Ìd” Ìd”- Ìd'”. Ìd(”9 Ìd3”; Ìd5”< Ìd6—” Ìe” Ìe
-” Ìe” Ìe”' Ìe!”) Ìe#”+ Ìe%–” Ìf” Ìf” Ìf” Ìf”! Ìf”" Ìf” Ìg” Ìg” Ìg” Ìg” Ìg”! Ìg”# Ìg”& Ìg”( Ìg ”4 Ìg,”6 Ìg.”ÌR ÌgÌJ”ÌS ÌgÌK”ÌT ÌgÌL‘” Ìh‘”	 Ìi”” Ìi” Ìi” Ìi” Ìi–” Ìj” Ìj” Ìj” Ìj” Ìj(” Ìj)Ü ” Ìk” Ìk” Ìk” Ìk” Ìk” Ìk”  Ìk”# Ìk”% Ìk”Ìd ÌkÌ^”Ìf Ìl”Ìi Ìl”Ìj Ìl”Ìn Ìl”Ìp Ìl”Ìs Ìl”Ìt Ìl”Ì{ Ìl”Ì| Ìl”Ì} Ìl‘”	 Ìm’” Ìn” Ìn’” Ìp” Ìp” Ìq” Ìq	” Ìq
-” Ìq” Ìq” Ìq” Ìq”$ Ìq ”& Ìq"”2 Ìq.”4 Ìq0”ÌJ ÌqÌF”ÌK ÌqÌG”ÌL ÌqÌH’” Ìr” Ìr’” Ìt” Ìt” Ìu” Ìu	” Ìu
-” Ìu” Ìu” Ìu” Ìu”$ Ìu ”& Ìu"”2 Ìu.”4 Ìu0”ÌJ ÌuÌF”ÌK ÌuÌG”ÌL ÌuÌH’” Ìv” Ìv‘” Ìx‘” Ìz”” Ì{
-”	 Ì{”
- Ì{” Ì{"š” Ì|” Ì|” Ì|” Ì|”' Ì|#”+ Ì|'”/ Ì|+”0 Ì|,”ÌE Ì|ÌA”ÌG Ì|ÌC’” Ì}” Ì}‘”	 Ì~—” Ì€” Ì€” Ì€	”# Ì€”& Ì€"”* Ì€&”+ Ì€'” Ì” Ì	” Ì
-” Ì” Ì” Ì” Ì” Ì”  Ì”, Ì(”. Ì*”ÌS ÌÌO”ÌT ÌÌP”ÌU ÌÌQ’” Ìƒ” Ìƒ’” Ì„” Ì„” Ì…” Ì…”! Ì…”" Ì…”- Ì…'”/ Ì…)”0 Ì…*”4 Ì….”5 Ì…/”9 Ì…3”: Ì…4”ÌA Ì…;”ÌB Ì…<”ÌC Ì…=’” Ì‡” Ì‡” Ìˆ” Ìˆ” Ìˆ” Ìˆ”" Ìˆ”1 Ìˆ+”2 Ìˆ,”= Ìˆ7”? Ìˆ9”Ì@ Ìˆ:”ÌT ÌˆÌN”ÌV ÌˆÌP”ÌW ÌˆÌQÜ ” Ì‰” Ì‰” Ì‰” Ì‰” Ì‰” Ì‰” Ì‰”" Ì‰”$ Ì‰”ÌB Ì‰<”ÌD Ì‰>”ÌK Ì‰ÌE”ÌL Ì‰ÌF”ÌM Ì‰ÌG”ÌN Ì‰ÌH”ÌU Ì‰ÌO”ÌV Ì‰ÌP”ÌW Ì‰ÌQ”ÌX Ì‰ÌR”Ìc Ì‰Ì]”Ìd Ì‰Ì^”Ìe Ì‰Ì_—” Ì‹” Ì‹
-” Ì‹”& Ì‹ ”) Ì‹#”- Ì‹'”. Ì‹(—” ÌŒ” ÌŒ
-” ÌŒ”" ÌŒ”% ÌŒ”) ÌŒ#”* ÌŒ$” Ì” Ì” Ì” Ì” Ì” Ì” Ì”" Ì”$ Ì”0 Ì*”2 Ì,”ÌU ÌÌO”ÌV ÌÌP”ÌW ÌÌQ‘”	 Ì”” Ì” Ì” Ì” ÌÜ ” Ì” Ì
-” Ì”" Ì”% Ì”* Ì$”6 Ì0”; Ì5”< Ì6”= Ì7”> Ì8”ÌC Ì=”ÌD Ì>”ÌK ÌÌE”ÌL ÌÌF”ÌM ÌÌG”ÌN ÌÌH”Ìu ÌÌo”Ìv ÌÌpÜ ” Ì” Ì” Ì” Ì” Ì” Ì”  Ì”# Ì”% Ì”ÌQ ÌÌK”ÌS ÌÌM”ÌW ÌÌQ”ÌX ÌÌR”Ìi ÌÌc”Ìj ÌÌd”Ìk ÌÌe‘”	 Ì‘‘” Ì‘—” Ì’” Ì’
-” Ì’”' Ì’!”* Ì’$”/ Ì’)”0 Ì’*‘”	 Ì“’” Ì”” Ì”‘” Ì–‘” Ì˜”” Ì™
-”	 Ì™”
- Ì™” Ì™#›” Ìš” Ìš” Ìš” Ìš” Ìš” Ìš”# Ìš”% Ìš!”+ Ìš'”- Ìš)”/ Ìš+™” Ì›” Ì›” Ì›” Ì›”" Ì›”# Ì›”& Ì› ”( Ì›"”) Ì›#˜” Ìœ” Ìœ” Ìœ”" Ìœ”% Ìœ”& Ìœ ”' Ìœ!”. Ìœ(–” Ì” Ì” Ì”  Ì”# Ì”% Ì–” ÌŸ” ÌŸ” ÌŸ” ÌŸ”. ÌŸ&”0 ÌŸ(–” Ì 
-”! Ì ”" Ì ”' Ì ”( Ì ”) Ì ”” Ì¡
-” Ì¡” Ì¡” Ì¡‘” Ì¢	–” Ì¢” Ì¢” Ì¢” Ì¢”/ Ì¢)”1 Ì¢+–” Ì£
-”! Ì£”" Ì£”' Ì£”( Ì£”) Ì£œ” Ì¤
-” Ì¤” Ì¤” Ì¤”$ Ì¤”% Ì¤”) Ì¤”* Ì¤ ”; Ì¤1”< Ì¤2”= Ì¤3”> Ì¤4‘” Ì¥	” Ì¥” Ì¥” Ì¥” Ì¥”! Ì¥”# Ì¥”& Ì¥ ”/ Ì¥)”3 Ì¥-”7 Ì¥1”8 Ì¥2”ÌG Ì¥ÌA”ÌI Ì¥ÌC–” Ì¦
-”! Ì¦”" Ì¦”' Ì¦”( Ì¦”) Ì¦š” Ì§
-” Ì§” Ì§” Ì§”$ Ì§”% Ì§”ÌF Ì§<”ÌG Ì§=”ÌH Ì§>”ÌI Ì§?‘” Ì¨	“” Ì©” Ì©” Ì©›” Ì«” Ì«” Ì«” Ì«”% Ì«”& Ì« ”1 Ì«+”3 Ì«-”Ì@ Ì«:”ÌA Ì«;”ÌB Ì«<–” Ì¬” Ì¬” Ì¬” Ì¬” Ì¬”$ Ì¬”” Ì­”	 Ì­”
- Ì­” Ì­’” Ì®” Ì®‘” Ì°‘” Ì³–” Ì´
-”	 Ì´”
- Ì´”' Ì´-”( Ì´.”1 Ì´ÌH’” Ìµ” Ìµœ” Ì¶” Ì¶” Ì¶” Ì¶ ”$ Ì¶&”- Ì¶/”. Ì¶0”; Ì¶=”< Ì¶>”ÌG Ì¶ÌI”ÌH Ì¶ÌJ”ÌI Ì¶ÌJ–” Ì·” Ì·
-” Ì·” Ì·” Ì·”! Ì·œ” Ì¸” Ì¸” Ì¸” Ì¸” Ì¸”! Ì¸”# Ì¸”& Ì¸”( Ì¸ ”ÌC Ì¸;”ÌD Ì¸<”ÌE Ì¸=’” Ì¹” Ì¹‘” Ìº” Ì¼” Ì¼” Ì¼” Ì¼” Ì¼” Ì¼” Ì¼”" Ì¼”$ Ì¼”> Ì¼8”ÌG Ì¼ÌA”Ìc Ì¼Ì]”Ìd Ì¼Ì^”Ìe Ì¼Ì_’” Ì¾”" Ì¾–” Ì¿” Ì¿” Ì¿”! Ì¿,”# Ì¿.”$ Ì¿/” ÌÁ” ÌÁ” ÌÁ” ÌÁ” ÌÁ” ÌÁ”  ÌÁ”% ÌÁ”) ÌÁ#”2 ÌÁ,”4 ÌÁ.”9 ÌÁ3”; ÌÁ5”= ÌÁ7Ÿ” ÌÂ” ÌÂ” ÌÂ”! ÌÂ”" ÌÂ”& ÌÂ”' ÌÂ”? ÌÂ7”Ì@ ÌÂ8”ÌI ÌÂÌA”ÌK ÌÂÌC”ÌP ÌÂÌH”ÌQ ÌÂÌI”ÌR ÌÂÌJ”ÌS ÌÂÌK‘” ÌÃ’” ÌÅ”. ÌÅ(™” ÌÆ” ÌÆ” ÌÆ” ÌÆ”$ ÌÆ”% ÌÆ”1 ÌÆ+”2 ÌÆ,”3 ÌÆ-œ” ÌÈ” ÌÈ” ÌÈ” ÌÈ” ÌÈ” ÌÈ” ÌÈ”" ÌÈ”$ ÌÈ”ÌI ÌÈÌC”ÌJ ÌÈÌD”ÌK ÌÈÌE‘”	 ÌÉ”” ÌÉ” ÌÉ” ÌÉ” ÌÉÜ ” ÌÊ” ÌÊ” ÌÊ” ÌÊ” ÌÊ” ÌÊ”  ÌÊ”# ÌÊ”% ÌÊ”ÌJ ÌÊÌD”ÌO ÌÊÌI”ÌP ÌÊÌJ”ÌW ÌÊÌQ”ÌY ÌÊÌS”ÌZ ÌÊÌT”Ì[ ÌÊÌU‘”	 ÌË’” ÌÌ” ÌÌ‘” ÌÎ‘” ÌĞ˜” ÌÑ
-”	 ÌÑ”
- ÌÑ”" ÌÑ(”# ÌÑ)”, ÌÑÌC”. ÌÑÌE”6 ÌÑÌU’” ÌÒ” ÌÒœ” ÌÓ” ÌÓ” ÌÓ” ÌÓ”# ÌÓ”, ÌÓ&”- ÌÓ'”> ÌÓ8”? ÌÓ9”ÌG ÌÓÌA”ÌH ÌÓÌB”ÌI ÌÓÌB–” ÌÔ” ÌÔ
-” ÌÔ” ÌÔ”! ÌÔ”# ÌÔ˜” ÌÕ” ÌÕ” ÌÕ”! ÌÕ”) ÌÕ!”* ÌÕ"”/ ÌÕ'”0 ÌÕ'˜” ÌÖ” ÌÖ” ÌÖ” ÌÖ”$ ÌÖ”% ÌÖ”( ÌÖ ”) ÌÖ Ü ” Ì×” Ì×” Ì×”" Ì×”/ Ì×'”0 Ì×(”< Ì×4”= Ì×5”ÌJ Ì×ÌB”ÌK Ì×ÌC”ÌW Ì×ÌO”ÌX Ì×ÌP”Ì` Ì×ÌX”Ìa Ì×ÌY”Ìc Ì×Ì[”Ìf Ì×Ì^”Ìg Ì×Ì_”Ìh Ì×Ì_œ” ÌØ” ÌØ”! ÌØ”$ ÌØ”* ÌØ"”7 ÌØ/”8 ÌØ0”ÌE ÌØ=”ÌF ÌØ>”ÌO ÌØÌG”ÌP ÌØÌH”ÌQ ÌØÌHš” ÌÙ” ÌÙ” ÌÙ”  ÌÙ”" ÌÙ”& ÌÙ”1 ÌÙ)”2 ÌÙ*”9 ÌÙ1”; ÌÙ3Ü ” ÌÚ
-” ÌÚ”# ÌÚ”$ ÌÚ”. ÌÚ$”/ ÌÚ%”7 ÌÚ-”8 ÌÚ.”: ÌÚ0”< ÌÚ2”> ÌÚ4”ÌE ÌÚ;”ÌG ÌÚ=”ÌR ÌÚÌH”ÌS ÌÚÌI”ÌZ ÌÚÌP”Ì\ ÌÚÌR”Ì^ ÌÚÌT”Ìc ÌÚÌY”Ìd ÌÚÌZ”Ìe ÌÚÌZ” ÌÛ
-” ÌÛ” ÌÛ” ÌÛ”  ÌÛ”& ÌÛ”( ÌÛ”+ ÌÛ!”- ÌÛ#”ÌW ÌÛÌM”Ì_ ÌÛÌU”Ìa ÌÛÌW”Ìb ÌÛÌX”Ìc ÌÛÌY‘” ÌÜ	‘” ÌÜ” Ìİ
-” Ìİ”# Ìİ”$ Ìİ”. Ìİ$”/ Ìİ%”7 Ìİ-”8 Ìİ.”: Ìİ0”< Ìİ2”ÌA Ìİ7”ÌB Ìİ8”ÌC Ìİ8” ÌŞ
-” ÌŞ” ÌŞ” ÌŞ” ÌŞ”% ÌŞ”' ÌŞ”* ÌŞ ”, ÌŞ"”ÌH ÌŞ>”ÌP ÌŞÌF”Ìg ÌŞÌ]”Ìh ÌŞÌ^”Ìi ÌŞÌ_‘” Ìß	‘” Ìà‘”	 Ìá”” Ìá” Ìá” Ìá” ÌáÜ ” Ìâ” Ìâ” Ìâ” Ìâ” Ìâ” Ìâ”  Ìâ”# Ìâ”% Ìâ”ÌK ÌâÌE”ÌS ÌâÌM”ÌX ÌâÌR”Ì] ÌâÌW”Ì^ ÌâÌX”Ìe ÌâÌ_”Ìg ÌâÌa”Ìh ÌâÌb”Ìi ÌâÌc‘”	 Ìã’” Ìä” Ìä‘” ÌåÔrH–§version¤file§sources®sourcesContent¥names¨mappingsÀ‘À‘ÀÜ Î‘”    ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”  	 ‘”  
- ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”    ‘”  ! ‘”  " ‘”  # ‘”  $ ‘”  % ‘”  & ‘”  ' ‘”  ( ‘”  ) ‘”  * ‘”  + ‘”  , ‘”  - ‘”  . ‘”  / ‘”  0 ‘”  1 ‘”  2 ‘”  3 ‘”  4 ‘”  5 ‘”  6 ‘”  7 ‘”  8 ‘”  9 ‘”  : ‘”  ; ‘”  < ‘”  = ‘”  > ‘”  ? ‘”  Ì@ ‘”  ÌA ‘”  ÌB ‘”  ÌC ‘”  ÌD ‘”  ÌE ‘”  ÌF ‘”  ÌG ‘”  ÌH ‘”  ÌI ‘”  ÌJ ‘”  ÌK ‘”  ÌL ‘”  ÌM ‘”  ÌN ‘”  ÌO ‘”  ÌP ‘”  ÌQ ‘”  ÌR ‘”  ÌS ‘”  ÌT ‘”  ÌU ‘”  ÌV ‘”  ÌW ‘”  ÌX ‘”  ÌY ‘”  ÌZ ‘”  Ì[ ‘”  Ì\ ‘”  Ì] ‘”  Ì^ ‘”  Ì_ ‘”  Ì` ‘”  Ìa ‘”  Ìb ‘”  Ìc ‘”  Ìd ‘”  Ìe ‘”  Ìf ‘”  Ìg ‘”  Ìh ‘”  Ìi ‘”  Ìj ‘”  Ìk ‘”  Ìl ‘”  Ìm ‘”  Ìn ‘”  Ìo ‘”  Ìp ‘”  Ìq ‘”  Ìr ‘”  Ìs ‘”  Ìt ‘”  Ìu ‘”  Ìv ‘”  Ìw ‘”  Ìx ‘”  Ìy ‘”  Ìz ‘”  Ì{ ‘”  Ì| ‘”  Ì} ‘”  Ì~ ‘”  Ì ‘”  Ì€ ‘”  Ì ‘”  Ì‚ ‘”  Ìƒ ‘”  Ì„ ‘”  Ì… ‘”  Ì† ‘”  Ì‡ ‘”  Ìˆ ‘”  Ì‰ ‘”  ÌŠ ‘”  Ì‹ ‘”  ÌŒ ‘”  Ì ‘”  Ì ‘”  Ì ‘”  Ì ‘”  Ì‘ ‘”  Ì’ ‘”  Ì“ ‘”  Ì” ‘”  Ì• ‘”  Ì– ‘”  Ì— ‘”  Ì˜ ‘”  Ì™ ‘”  Ìš ‘”  Ì› ‘”  Ìœ ‘”  Ì ‘”  Ì ‘”  ÌŸ ‘”  Ì  ‘”  Ì¡ ‘”  Ì¢ ‘”  Ì£ ‘”  Ì¤ ‘”  Ì¥ ‘”  Ì¦ ‘”  Ì§ ‘”  Ì¨ ‘”  Ì© ‘”  Ìª ‘”  Ì« ‘”  Ì¬ ‘”  Ì­ ‘”  Ì® ‘”  Ì¯ ‘”  Ì° ‘”  Ì± ‘”  Ì² ‘”  Ì³ ‘”  Ì´ ‘”  Ìµ ‘”  Ì¶ ‘”  Ì· ‘”  Ì¸ ‘”  Ì¹ ‘”  Ìº ‘”  Ì» ‘”  Ì¼ ‘”  Ì½ ‘”  Ì¾ ‘”  Ì¿ ‘”  ÌÀ ‘”  ÌÁ ‘”  ÌÂ ‘”  ÌÃ ‘”  ÌÄ ‘”  ÌÅ ‘”  ÌÆ ‘”  ÌÇ ‘”  ÌÈ ‘”  ÌÉ ‘”  ÌÊ ‘”  ÌË ‘”  ÌÌ ‘”  ÌÍ ÔrI’§missing¦pluginÃ¦genAbcÂÔ  ÔrJ”²dynamicImportCache¹exportAllDeclarationCache»exportNamedDeclarationCache«importCache™ÔrK•¤type¥start£endªspecifiers¦source±ImportDeclaration ÌL‘ÔrL”¤type¥start£end¥local¶ImportDefaultSpecifierÔrM”¤type¥start£end¤nameªIdentifierµConfigurationConstantÔrN•¤type¥start£end¥value£raw§Literal"ÌKÙ'@ohos.app.ability.ConfigurationConstantÙ)"@ohos.app.ability.ConfigurationConstant"K±ImportDeclarationÌNÌ‚‘L¶ImportDefaultSpecifierÌUÌ^MªIdentifierÌUÌ^©UIAbilityN§LiteralÌdÌ»@ohos.app.ability.UIAbility½"@ohos.app.ability.UIAbility"K±ImportDeclarationÌ„Ì¤‘L¶ImportDefaultSpecifierÌ‹ÌMªIdentifierÌ‹Ì¥hilogN§LiteralÌ–Ì£«@ohos.hilog­"@ohos.hilog"K±ImportDeclarationÌ¦ÌÈ‘L¶ImportDefaultSpecifierÌ­Ì³MªIdentifierÌ­Ì³¦windowN§LiteralÌ¹ÌÇ¬@ohos.window®"@ohos.window"K±ImportDeclarationÌÊÌş‘ÔrO•¤type¥start£end¨imported¥local¯ImportSpecifierÌÓÌâMªIdentifierÌÓÌâ¯DatabaseManagerMªIdentifierÌÓÌâ¯DatabaseManagerN§LiteralÌêÌı±../utils/DataBase³'../utils/DataBase'K±ImportDeclarationÍ Í/‘O¯ImportSpecifierÍ	ÍMªIdentifierÍ	Í­loginFunctionMªIdentifierÍ	Í­loginFunctionN§LiteralÍÍ.®../utils/Login°'../utils/Login'K±ImportDeclarationÍ1Í`‘O¯ImportSpecifierÍ:ÍGMªIdentifierÍ:ÍG­ChaoxingUtilsMªIdentifierÍ:ÍG­ChaoxingUtilsN§LiteralÍOÍ_®../utils/utils°'../utils/utils'K±ImportDeclarationÍbÍ™‘O¯ImportSpecifierÍkÍxMªIdentifierÍkÍx­CrashReporterMªIdentifierÍkÍx­CrashReporterN§LiteralÍ€Í˜¶../utils/CrashReporter¸'../utils/CrashReporter'K±ImportDeclarationÍ›ÍŞ‘O¯ImportSpecifierÍ¤Í·MªIdentifierÍ¤Í·³LeaderboardReporterMªIdentifierÍ¤Í·³LeaderboardReporterN§LiteralÍ¿Íİ¼../utils/LeaderboardReporter¾'../utils/LeaderboardReporter'
