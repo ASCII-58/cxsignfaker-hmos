@@ -1,0 +1,561 @@
+Ôr@Ÿªassertions¤code´customTransformCache¬dependencies¢id¤meta±moduleSideEffects¬originalCode±originalSourcemap«resolvedIds®sourcemapChainµsyntheticNamedExportsµtransformDependencies®transformFiles¨cacheAstÔrAÚ ÿimport request from '@ohos.request';
+import fs from '@ohos.file.fs';
+import hilog from "@ohos.hilog";
+import image from "@ohos.multimedia.image";
+import { ChaoXingApi } from './PublicAPI';
+import { Sign } from './sign';
+import { ChaoxingUtils } from './utils';
+const TAG = 'CloudUpload';
+const DOMAIN = 0x0011;
+const UPLOAD_TIMEOUT_MS = 30000;
+// éšæœºå·®å¼‚åŒ–å‚æ•°ï¼ˆissue #209ï¼šæœåŠ¡ç«¯æ–°å¢é‡å¤å›¾ç‰‡æ£€æµ‹ï¼‰ï¼Œè£å‰ªæ¯”ä¾‹ä¸ faceApi.randomizeFaceImage ä¿æŒä¸€è‡´
+const MAX_DECODE_EDGE = 2048;
+const JPEG_QUALITY_MIN = 85;
+const JPEG_QUALITY_MAX = 95;
+// éšæœºåŒ–ä¸²è¡Œé˜Ÿåˆ—ï¼šå¤šç”¨æˆ·å¹¶å‘ä¸Šä¼ æ—¶é™åˆ¶åŒæ—¶è§£ç å¤§å›¾çš„å†…å­˜å³°å€¼
+let randomizeChain = Promise.resolve();
+/**
+ * æŠŠ EXIF Orientation(1-8) çƒ§å½•åˆ°åƒç´ ä¸­ã€‚
+ * è§£ç ä¸ä¼šè‡ªåŠ¨åº”ç”¨å›¾ç‰‡æ–¹å‘ï¼Œé‡ç¼–ç åˆä¼šä¸¢å¼ƒ EXIFï¼Œå¿…é¡»å…ˆæ—‹è½¬åˆ°ä½ï¼Œå¦åˆ™ç«–æ‹ç…§ç‰‡ä¼šä»¥æ¨ªå‘ä¸Šä¼ 
+ */
+async function applyExifOrientation(pixelMap, orientation) {
+    switch (orientation) {
+        case 2:
+            await pixelMap.flip(true, false);
+            break;
+        case 3:
+            await pixelMap.rotate(180);
+            break;
+        case 4:
+            await pixelMap.flip(false, true);
+            break;
+        case 5:
+            await pixelMap.rotate(90);
+            await pixelMap.flip(true, false);
+            break;
+        case 6:
+            await pixelMap.rotate(90);
+            break;
+        case 7:
+            await pixelMap.rotate(270);
+            await pixelMap.flip(true, false);
+            break;
+        case 8:
+            await pixelMap.rotate(270);
+            break;
+        default:
+            break;
+    }
+}
+/**
+ * å¯¹ç¼“å­˜å›¾ç‰‡åšéšæœºå·®å¼‚åŒ–å¤„ç†ï¼ˆéšæœºè£å‰ª 90%~99% + éšæœºè´¨é‡é‡ç¼–ç ï¼‰ï¼ŒåŸåœ°è¦†ç›–ã€‚
+ * åŒä¸€å¼ æºå›¾æ¯æ¬¡å¤„ç†ç»“æœéƒ½ä¸åŒï¼Œè§„é¿æœåŠ¡ç«¯é‡å¤å›¾ç‰‡æ£€æµ‹ï¼›æå°å›¾ç›´æ¥è·³è¿‡ä¿ç•™åŸå›¾
+ */
+export async function randomizeImageInPlace(filePath) {
+    const imageSource = image.createImageSource(filePath);
+    let pixelMap = null;
+    let imagePacker = null;
+    try {
+        let orientation = 1;
+        try {
+            const parsed = Number.parseInt(await imageSource.getImageProperty('Orientation'), 10);
+            if (!Number.isNaN(parsed)) {
+                orientation = parsed;
+            }
+        }
+        catch {
+            // æ—  EXIFï¼ˆå¦‚ PNGï¼‰æ—¶å¿½ç•¥æ–¹å‘å¤„ç†
+        }
+        // é™åˆ¶è§£ç å°ºå¯¸ï¼Œé¿å…é«˜åƒç´ ç…§ç‰‡è§£ç æ—¶å†…å­˜å³°å€¼è¿‡é«˜
+        const srcInfo = await imageSource.getImageInfo();
+        const srcW = srcInfo.size.width;
+        const srcH = srcInfo.size.height;
+        let decodeW = srcW;
+        let decodeH = srcH;
+        if (Math.max(srcW, srcH) > MAX_DECODE_EDGE) {
+            const k = MAX_DECODE_EDGE / Math.max(srcW, srcH);
+            decodeW = Math.max(1, Math.floor(srcW * k));
+            decodeH = Math.max(1, Math.floor(srcH * k));
+        }
+        pixelMap = await imageSource.createPixelMap({ desiredSize: { width: decodeW, height: decodeH }, editable: true });
+        await applyExifOrientation(pixelMap, orientation);
+        const info = await pixelMap.getImageInfo();
+        const width = info.size.width;
+        const height = info.size.height;
+        const cropWidth = Math.floor(width * (0.9 + Math.random() * 0.09));
+        const cropHeight = Math.floor(height * (0.9 + Math.random() * 0.09));
+        if (cropWidth < 1 || cropHeight < 1) {
+            return;
+        }
+        const cropX = Math.floor(Math.random() * (width - cropWidth));
+        const cropY = Math.floor(Math.random() * (height - cropHeight));
+        await pixelMap.crop({ x: cropX, y: cropY, size: { width: cropWidth, height: cropHeight } });
+        const quality = JPEG_QUALITY_MIN + Math.floor(Math.random() * (JPEG_QUALITY_MAX - JPEG_QUALITY_MIN + 1));
+        imagePacker = image.createImagePacker();
+        const packedBuffer = await imagePacker.packToData(pixelMap, { format: 'image/jpeg', quality: quality });
+        const file = fs.openSync(filePath, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+        try {
+            fs.writeSync(file.fd, packedBuffer);
+        }
+        finally {
+            fs.closeSync(file);
+        }
+        hilog.info(DOMAIN, TAG, 'image randomized: %dx%d -> crop(%d,%d,%dx%d) q%d', srcW, srcH, cropX, cropY, cropWidth, cropHeight, quality);
+    }
+    finally {
+        pixelMap?.release();
+        imagePacker?.release();
+        imageSource.release();
+    }
+}
+/** æ’é˜Ÿæ‰§è¡ŒéšæœºåŒ–ï¼›å•ä¸ªå¤±è´¥ä¸é˜»æ–­é˜Ÿåˆ—ä¸­çš„åç»­ä»»åŠ¡ */
+function enqueueRandomize(filePath) {
+    const task = randomizeChain.then(() => randomizeImageInPlace(filePath));
+    randomizeChain = task.catch(() => {
+    });
+    return task;
+}
+/**
+ * ä¸Šä¼ å›¾ç‰‡åˆ°è¶…æ˜Ÿäº‘ç›˜ï¼Œè¿”å› objectId
+ * ï¼ˆæ‹ç…§ç­¾åˆ°ä¸äººè„¸ç…§ç‰‡å…±ç”¨ï¼›å†…éƒ¨å®Œæˆ _token è·å–ä¸ multipart ä¸Šä¼ ï¼‰
+ *
+ * @param context UIAbilityContext
+ * @param cookies ç”¨æˆ· Cookie
+ * @param puid ç”¨æˆ· puid
+ * @param srcUri æœ¬åœ°å›¾ç‰‡è·¯å¾„æˆ–åª’ä½“åº“ URI
+ * @param onProgress å¯é€‰ï¼Œä¸Šä¼ è¿›åº¦å›è°ƒï¼ˆ0-100ï¼‰
+ * @param randomize å¯é€‰ï¼Œä¸Šä¼ å‰æ˜¯å¦åšéšæœºå·®å¼‚åŒ–å¤„ç†ï¼ˆé»˜è®¤ trueï¼‰ï¼›
+ *   å·²ç”± randomizeFaceImage éšæœºåŒ–è¿‡çš„äººè„¸å›¾åº”ä¼  falseï¼Œé¿å…äºŒæ¬¡è£å‰ªå½±å“äººè„¸æ¯”å¯¹
+ */
+export async function uploadImageForObject(context, cookies, puid, srcUri, onProgress, randomize = true) {
+    const token = await Sign.GetToken(cookies);
+    const fileName = ChaoxingUtils.generatePhotoName() + '.jpg';
+    const copyFilePath = context.cacheDir + '/' + fileName;
+    // ç›¸å†Œé€‰æ‹©å™¨è¿”å› file://media/... URIï¼ŒcopyFile ä¸æ”¯æŒ URI å…¥å‚ï¼Œéœ€å…ˆ openSync å– fd å†æŒ‰ fd å¤åˆ¶
+    const srcFile = fs.openSync(srcUri, fs.OpenMode.READ_ONLY);
+    try {
+        fs.copyFileSync(srcFile.fd, copyFilePath);
+    }
+    finally {
+        fs.closeSync(srcFile.fd);
+    }
+    // å›¾ç‰‡éšæœºå·®å¼‚åŒ–ï¼ˆissue #209ï¼šæœåŠ¡ç«¯æ–°å¢é‡å¤å›¾ç‰‡æ£€æµ‹ï¼Œæ•™å¸ˆç«¯ä¼šæ ‡çº¢ç›¸åŒå›¾ç‰‡ï¼‰ï¼š
+    // åŒä¸€å¼ æºå›¾å¤šæ¬¡ä¸Šä¼ æ—¶å†…å®¹å„ä¸ç›¸åŒï¼›éšæœºåŒ–å¤±è´¥ä¸é˜»æ–­ç­¾åˆ°ï¼Œå›é€€ä¸ºåŸå›¾ä¸Šä¼ 
+    if (randomize) {
+        try {
+            await enqueueRandomize(copyFilePath);
+        }
+        catch (e) {
+            hilog.warn(DOMAIN, TAG, 'randomize image failed, upload original: %{public}s', e.message);
+        }
+    }
+    const uploadConfig = {
+        url: `${ChaoXingApi.URL_UPLOAD_PHOTO.toString()}&_token=${token}`,
+        method: 'POST',
+        header: { 'Content-Type': 'multipart/form-data' },
+        files: [{
+                filename: fileName,
+                type: 'jpg',
+                name: 'file',
+                uri: `internal://cache/${fileName}`
+            }],
+        data: [{ name: 'puid', value: puid }]
+    };
+    const task = await request.uploadFile(context, uploadConfig);
+    return await new Promise((resolve, reject) => {
+        let settled = false;
+        if (onProgress) {
+            task.on('progress', (uploadedSize, totalSize) => {
+                hilog.info(DOMAIN, TAG, 'upload progress: %d/%d', uploadedSize, totalSize);
+                if (totalSize > 0 && uploadedSize <= totalSize) {
+                    onProgress(Math.min(100, Math.round(uploadedSize * 100 / totalSize)));
+                }
+            });
+        }
+        task.on('headerReceive', (value) => {
+            if (settled || !(value && value['body'])) {
+                return;
+            }
+            try {
+                const bodyObj = JSON.parse(value['body']);
+                const objectId = bodyObj['objectId'];
+                if (objectId) {
+                    settled = true;
+                    resolve(objectId);
+                }
+            }
+            catch (e) {
+                hilog.error(DOMAIN, TAG, 'Failed to parse upload response', e);
+            }
+        });
+        task.on('fail', () => {
+            if (!settled) {
+                settled = true;
+                reject(new Error('å›¾ç‰‡ä¸Šä¼ å¤±è´¥'));
+            }
+        });
+        setTimeout(() => {
+            if (!settled) {
+                settled = true;
+                reject(new Error('å›¾ç‰‡ä¸Šä¼ è¶…æ—¶'));
+            }
+        }, UPLOAD_TIMEOUT_MS);
+    });
+}
+//# sourceMappingURL=upload.js.mapÂ—Ù[ hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.request.d.tsÙ[ hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.file.fs.d.tsÙY hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.hilog.d.tsÙd hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.multimedia.image.d.tsÙUE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\PublicAPI.tsÙQE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\sign.etsÙQE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\utils.tsÙSE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\upload.etsÔrB›ªmoduleName±isLocalDependency¯isNodeEntryFile§pkgPath±belongProjectPath§pkgNameªpkgVersion±dependencyPkgInfo¯hostModulesInfo°belongModulePath¬shouldEmitJs¥entryÃÂÙ5E:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entryÙ/E:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT¥entry¥1.0.0Ô  ‘ÔrC’²hostDependencyName®hostModuleName¯../utils/upload¥entryÙ5E:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entryÃÃÚ import request from '@ohos.request';
+import fs from '@ohos.file.fs';
+import { Context } from '@kit.AbilityKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+import { image } from '@kit.ImageKit';
+import { ChaoXingApi } from './PublicAPI';
+import { Sign } from './sign';
+import { ChaoxingUtils } from './utils';
+
+const TAG = 'CloudUpload';
+const DOMAIN = 0x0011;
+const UPLOAD_TIMEOUT_MS = 30000;
+// éšæœºå·®å¼‚åŒ–å‚æ•°ï¼ˆissue #209ï¼šæœåŠ¡ç«¯æ–°å¢é‡å¤å›¾ç‰‡æ£€æµ‹ï¼‰ï¼Œè£å‰ªæ¯”ä¾‹ä¸ faceApi.randomizeFaceImage ä¿æŒä¸€è‡´
+const MAX_DECODE_EDGE = 2048;
+const JPEG_QUALITY_MIN = 85;
+const JPEG_QUALITY_MAX = 95;
+
+// éšæœºåŒ–ä¸²è¡Œé˜Ÿåˆ—ï¼šå¤šç”¨æˆ·å¹¶å‘ä¸Šä¼ æ—¶é™åˆ¶åŒæ—¶è§£ç å¤§å›¾çš„å†…å­˜å³°å€¼
+let randomizeChain: Promise<void> = Promise.resolve();
+
+/**
+ * æŠŠ EXIF Orientation(1-8) çƒ§å½•åˆ°åƒç´ ä¸­ã€‚
+ * è§£ç ä¸ä¼šè‡ªåŠ¨åº”ç”¨å›¾ç‰‡æ–¹å‘ï¼Œé‡ç¼–ç åˆä¼šä¸¢å¼ƒ EXIFï¼Œå¿…é¡»å…ˆæ—‹è½¬åˆ°ä½ï¼Œå¦åˆ™ç«–æ‹ç…§ç‰‡ä¼šä»¥æ¨ªå‘ä¸Šä¼ 
+ */
+async function applyExifOrientation(pixelMap: image.PixelMap, orientation: number): Promise<void> {
+  switch (orientation) {
+    case 2:
+      await pixelMap.flip(true, false);
+      break;
+    case 3:
+      await pixelMap.rotate(180);
+      break;
+    case 4:
+      await pixelMap.flip(false, true);
+      break;
+    case 5:
+      await pixelMap.rotate(90);
+      await pixelMap.flip(true, false);
+      break;
+    case 6:
+      await pixelMap.rotate(90);
+      break;
+    case 7:
+      await pixelMap.rotate(270);
+      await pixelMap.flip(true, false);
+      break;
+    case 8:
+      await pixelMap.rotate(270);
+      break;
+    default:
+      break;
+  }
+}
+
+/**
+ * å¯¹ç¼“å­˜å›¾ç‰‡åšéšæœºå·®å¼‚åŒ–å¤„ç†ï¼ˆéšæœºè£å‰ª 90%~99% + éšæœºè´¨é‡é‡ç¼–ç ï¼‰ï¼ŒåŸåœ°è¦†ç›–ã€‚
+ * åŒä¸€å¼ æºå›¾æ¯æ¬¡å¤„ç†ç»“æœéƒ½ä¸åŒï¼Œè§„é¿æœåŠ¡ç«¯é‡å¤å›¾ç‰‡æ£€æµ‹ï¼›æå°å›¾ç›´æ¥è·³è¿‡ä¿ç•™åŸå›¾
+ */
+export async function randomizeImageInPlace(filePath: string): Promise<void> {
+  const imageSource = image.createImageSource(filePath);
+  let pixelMap: image.PixelMap | null = null;
+  let imagePacker: image.ImagePacker | null = null;
+  try {
+    let orientation = 1;
+    try {
+      const parsed = Number.parseInt(await imageSource.getImageProperty('Orientation'), 10);
+      if (!Number.isNaN(parsed)) {
+        orientation = parsed;
+      }
+    } catch {
+      // æ—  EXIFï¼ˆå¦‚ PNGï¼‰æ—¶å¿½ç•¥æ–¹å‘å¤„ç†
+    }
+
+    // é™åˆ¶è§£ç å°ºå¯¸ï¼Œé¿å…é«˜åƒç´ ç…§ç‰‡è§£ç æ—¶å†…å­˜å³°å€¼è¿‡é«˜
+    const srcInfo = await imageSource.getImageInfo();
+    const srcW = srcInfo.size.width;
+    const srcH = srcInfo.size.height;
+    let decodeW = srcW;
+    let decodeH = srcH;
+    if (Math.max(srcW, srcH) > MAX_DECODE_EDGE) {
+      const k = MAX_DECODE_EDGE / Math.max(srcW, srcH);
+      decodeW = Math.max(1, Math.floor(srcW * k));
+      decodeH = Math.max(1, Math.floor(srcH * k));
+    }
+    pixelMap = await imageSource.createPixelMap({ desiredSize: { width: decodeW, height: decodeH }, editable: true });
+    await applyExifOrientation(pixelMap, orientation);
+
+    const info = await pixelMap.getImageInfo();
+    const width = info.size.width;
+    const height = info.size.height;
+    const cropWidth = Math.floor(width * (0.9 + Math.random() * 0.09));
+    const cropHeight = Math.floor(height * (0.9 + Math.random() * 0.09));
+    if (cropWidth < 1 || cropHeight < 1) {
+      return;
+    }
+    const cropX = Math.floor(Math.random() * (width - cropWidth));
+    const cropY = Math.floor(Math.random() * (height - cropHeight));
+    await pixelMap.crop({ x: cropX, y: cropY, size: { width: cropWidth, height: cropHeight } });
+
+    const quality = JPEG_QUALITY_MIN + Math.floor(Math.random() * (JPEG_QUALITY_MAX - JPEG_QUALITY_MIN + 1));
+    imagePacker = image.createImagePacker();
+    const packedBuffer = await imagePacker.packToData(pixelMap, { format: 'image/jpeg', quality: quality });
+    const file = fs.openSync(filePath, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+    try {
+      fs.writeSync(file.fd, packedBuffer);
+    } finally {
+      fs.closeSync(file);
+    }
+    hilog.info(DOMAIN, TAG, 'image randomized: %dx%d -> crop(%d,%d,%dx%d) q%d',
+      srcW, srcH, cropX, cropY, cropWidth, cropHeight, quality);
+  } finally {
+    pixelMap?.release();
+    imagePacker?.release();
+    imageSource.release();
+  }
+}
+
+/** æ’é˜Ÿæ‰§è¡ŒéšæœºåŒ–ï¼›å•ä¸ªå¤±è´¥ä¸é˜»æ–­é˜Ÿåˆ—ä¸­çš„åç»­ä»»åŠ¡ */
+function enqueueRandomize(filePath: string): Promise<void> {
+  const task: Promise<void> = randomizeChain.then(() => randomizeImageInPlace(filePath));
+  randomizeChain = task.catch(() => {
+  });
+  return task;
+}
+
+/**
+ * ä¸Šä¼ å›¾ç‰‡åˆ°è¶…æ˜Ÿäº‘ç›˜ï¼Œè¿”å› objectId
+ * ï¼ˆæ‹ç…§ç­¾åˆ°ä¸äººè„¸ç…§ç‰‡å…±ç”¨ï¼›å†…éƒ¨å®Œæˆ _token è·å–ä¸ multipart ä¸Šä¼ ï¼‰
+ *
+ * @param context UIAbilityContext
+ * @param cookies ç”¨æˆ· Cookie
+ * @param puid ç”¨æˆ· puid
+ * @param srcUri æœ¬åœ°å›¾ç‰‡è·¯å¾„æˆ–åª’ä½“åº“ URI
+ * @param onProgress å¯é€‰ï¼Œä¸Šä¼ è¿›åº¦å›è°ƒï¼ˆ0-100ï¼‰
+ * @param randomize å¯é€‰ï¼Œä¸Šä¼ å‰æ˜¯å¦åšéšæœºå·®å¼‚åŒ–å¤„ç†ï¼ˆé»˜è®¤ trueï¼‰ï¼›
+ *   å·²ç”± randomizeFaceImage éšæœºåŒ–è¿‡çš„äººè„¸å›¾åº”ä¼  falseï¼Œé¿å…äºŒæ¬¡è£å‰ªå½±å“äººè„¸æ¯”å¯¹
+ */
+export async function uploadImageForObject(context: Context, cookies: string, puid: string,
+  srcUri: string, onProgress?: (percent: number) => void, randomize: boolean = true): Promise<string> {
+  const token = await Sign.GetToken(cookies);
+  const fileName = ChaoxingUtils.generatePhotoName() + '.jpg';
+  const copyFilePath = context.cacheDir + '/' + fileName;
+  // ç›¸å†Œé€‰æ‹©å™¨è¿”å› file://media/... URIï¼ŒcopyFile ä¸æ”¯æŒ URI å…¥å‚ï¼Œéœ€å…ˆ openSync å– fd å†æŒ‰ fd å¤åˆ¶
+  const srcFile = fs.openSync(srcUri, fs.OpenMode.READ_ONLY);
+  try {
+    fs.copyFileSync(srcFile.fd, copyFilePath);
+  } finally {
+    fs.closeSync(srcFile.fd);
+  }
+  // å›¾ç‰‡éšæœºå·®å¼‚åŒ–ï¼ˆissue #209ï¼šæœåŠ¡ç«¯æ–°å¢é‡å¤å›¾ç‰‡æ£€æµ‹ï¼Œæ•™å¸ˆç«¯ä¼šæ ‡çº¢ç›¸åŒå›¾ç‰‡ï¼‰ï¼š
+  // åŒä¸€å¼ æºå›¾å¤šæ¬¡ä¸Šä¼ æ—¶å†…å®¹å„ä¸ç›¸åŒï¼›éšæœºåŒ–å¤±è´¥ä¸é˜»æ–­ç­¾åˆ°ï¼Œå›é€€ä¸ºåŸå›¾ä¸Šä¼ 
+  if (randomize) {
+    try {
+      await enqueueRandomize(copyFilePath);
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG, 'randomize image failed, upload original: %{public}s',
+        (e as Error).message);
+    }
+  }
+  const uploadConfig: request.UploadConfig = {
+    url: `${ChaoXingApi.URL_UPLOAD_PHOTO.toString()}&_token=${token}`,
+    method: 'POST',
+    header: { 'Content-Type': 'multipart/form-data' },
+    files: [{
+      filename: fileName,
+      type: 'jpg',
+      name: 'file',
+      uri: `internal://cache/${fileName}`
+    }],
+    data: [{ name: 'puid', value: puid }]
+  };
+  const task = await request.uploadFile(context, uploadConfig);
+  return await new Promise<string>((resolve, reject) => {
+    let settled = false;
+    if (onProgress) {
+      task.on('progress', (uploadedSize: number, totalSize: number) => {
+        hilog.info(DOMAIN, TAG, 'upload progress: %d/%d', uploadedSize, totalSize);
+        if (totalSize > 0 && uploadedSize <= totalSize) {
+          onProgress(Math.min(100, Math.round(uploadedSize * 100 / totalSize)));
+        }
+      });
+    }
+    task.on('headerReceive', (value) => {
+      if (settled || !(value && value['body'])) {
+        return;
+      }
+      try {
+        const bodyObj = JSON.parse(value['body']) as object;
+        const objectId = bodyObj['objectId'] as string;
+        if (objectId) {
+          settled = true;
+          resolve(objectId);
+        }
+      } catch (e) {
+        hilog.error(DOMAIN, TAG, 'Failed to parse upload response', e);
+      }
+    });
+    task.on('fail', () => {
+      if (!settled) {
+        settled = true;
+        reject(new Error('å›¾ç‰‡ä¸Šä¼ å¤±è´¥'));
+      }
+    });
+    setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        reject(new Error('å›¾ç‰‡ä¸Šä¼ è¶…æ—¶'));
+      }
+    }, UPLOAD_TIMEOUT_MS);
+  });
+}
+ÀÔrD—­@ohos.request­@ohos.file.fs«@ohos.hilog¶@ohos.multimedia.image«./PublicAPI§./utils¦./signÔrE—ªassertions¨external¢id¤meta±moduleSideEffectsªresolvedByµsyntheticNamedExportsAÃÙ[ hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.request.d.tsÔrF‘¯hostModulesInfo‘C­@ohos.request¥entryÃªoh-resolveÂEAÃÙ[ hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.file.fs.d.tsAÃªoh-resolveÂEAÃÙY hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.hilog.d.tsAÃªoh-resolveÂEAÃÙd hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.multimedia.image.d.tsAÃªoh-resolveÂEAÂÙUE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\PublicAPI.tsAÃªoh-resolveÂEAÂÙQE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\utils.tsAÃªoh-resolveÂEAÂÙQE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\sign.etsAÃªoh-resolveÂ“ÔrG–§version¤fileªsourceRoot§sources¥names¨mappings©upload.js ‘ªupload.etsÜ Ì–”    ”  ”  ”  ”#  #”$  $–”   ” ”	 	” ” ” –”   ” 	” ” ” 3”  4–”   ” 	” ” ”* %”+ &˜”   ” ”	 	” ” ” ”) )”* *˜”   ” ”	 	” ” ” ” ” ˜”   ” ”	 	” ” ” ”' '”( (–”  	 ” 	”	 		” 	” 	” 	–”  
+ ” 
+” 
+” 
+” 
+” 
+–”   ” ” ” ” ”   ’”   ”ÌH ÌH–”   ” ” ” ” ” –”   ” ” ” ” ” –”   ” ” ” ” ” ’”   ”   ™”   ” ” ” $” +” ,”$ 3”& 5”' 6‘”   ‘” ˜”   ” ” ”# #”$ $”, <”. >”9 ÌQ”” ” 
+” ” “” ” 	” 
+›” ” ” ” ” ”  ”$ ”&  ”+ %”, &”- '’” ” “” ” 	” 
+™” ” ” ” ”! ”" ”% ”&  ”' !’” ” “”  ”  	”  
+›” !” !” !” !” !”  !”% !”' !!”+ !%”, !&”- !'’” "” "“” #” #	” #
+™” $” $” $” $”! $”" $”$ $”% $”& $ ›” %” %” %” %” %”  %”$ %”& % ”+ %%”, %&”- %'’” &” &“” '” '	” '
+™” (” (” (” (”! (”" (”$ (”% (”& ( ’” )” )“” *” *	” *
+™” +” +” +” +”! +”" +”% +”& + ”' +!›” ,” ,” ,” ,” ,”  ,”$ ,”& , ”+ ,%”, ,&”- ,'’” -” -“” .” .	” .
+™” /” /” /” /”! /”" /”% /”& / ”' /!’” 0” 0‘” 1’” 2” 2‘” 3’”  4 ” 4‘”  6 ‘” 9˜”  : ” :” :” :” :”+ :+”, :,”4 :<›” ;”
+ ;” ;” ;” ;” ;”/ ;-”0 ;.”8 ;6”9 ;7”: ;8–” <” <” <” <(” <,” <-–” =” =” =” =.” =2” =3’” >” >–” ?” ?” ?” ?” ?” ?’” Ì@” Ì@Ü ” ÌA” ÌA” ÌA” ÌA”! ÌA”" ÌA”* ÌA$”+ ÌA%”1 ÌA+”< ÌA6”= ÌA7”ÌM ÌAÌG”ÌN ÌAÌH”Ì[ ÌAÌU”Ì\ ÌAÌV”Ì^ ÌAÌX”Ì` ÌAÌZ”Ìa ÌAÌ[”Ìb ÌAÌ\š” ÌB” ÌB
+” ÌB” ÌB” ÌB” ÌB” ÌB”$ ÌB”% ÌB”' ÌB!•” ÌC” ÌC” ÌC”$ ÌC”% ÌC‘” ÌD‘”	 ÌE’” ÌE” ÌE’” ÌF”# ÌF‘”	 ÌG’” ÌI”" ÌIš” ÌJ” ÌJ
+” ÌJ” ÌJ” ÌJ”) ÌJ%”* ÌJ&”6 ÌJ2”8 ÌJ4”9 ÌJ5š” ÌK” ÌK
+” ÌK” ÌK” ÌK” ÌK”! ÌK”" ÌK”' ÌK#”( ÌK$š” ÌL” ÌL
+” ÌL” ÌL” ÌL” ÌL”! ÌL”" ÌL”( ÌL$”) ÌL%–” ÌM” ÌM” ÌM” ÌM” ÌM” ÌM–” ÌN” ÌN” ÌN” ÌN” ÌN” ÌN” ÌO” ÌO” ÌO” ÌO” ÌO” ÌO” ÌO” ÌO” ÌO”  ÌO”# ÌO”2 ÌO.”4 ÌO0Ÿ” ÌP” ÌP” ÌP” ÌP”% ÌP”( ÌP"”, ÌP&”- ÌP'”0 ÌP*”1 ÌP+”5 ÌP/”7 ÌP1”; ÌP5”< ÌP6”= ÌP7Ü ” ÌQ” ÌQ” ÌQ” ÌQ” ÌQ” ÌQ” ÌQ”  ÌQ”" ÌQ”& ÌQ ”' ÌQ!”, ÌQ&”- ÌQ'”1 ÌQ+”4 ÌQ.”5 ÌQ/”6 ÌQ0”7 ÌQ1”8 ÌQ2Ü ” ÌR” ÌR” ÌR” ÌR” ÌR” ÌR” ÌR”  ÌR”" ÌR”& ÌR ”' ÌR!”, ÌR&”- ÌR'”1 ÌR+”4 ÌR.”5 ÌR/”6 ÌR0”7 ÌR1”8 ÌR2‘”	 ÌSÜ ” ÌT” ÌT” ÌT” ÌT”$ ÌT ”% ÌT!”3 ÌT/”4 ÌT0”6 ÌT2”ÌA ÌT=”ÌC ÌT?”ÌE ÌTÌA”ÌJ ÌTÌF”ÌL ÌTÌH”ÌS ÌTÌO”ÌU ÌTÌQ”Ì[ ÌTÌW”Ì] ÌTÌY”Ìd ÌTÌ`”Ìf ÌTÌb”Ìh ÌTÌd”Ìp ÌTÌl”Ìr ÌTÌn”Ìv ÌTÌr”Ìx ÌTÌt”Ìy ÌTÌu”Ìz ÌTÌv™” ÌU” ÌU
+”" ÌU”# ÌU”+ ÌU'”- ÌU)”8 ÌU4”9 ÌU5”: ÌU6š” ÌW” ÌW
+” ÌW” ÌW” ÌW”# ÌW”$ ÌW ”0 ÌW,”2 ÌW.”3 ÌW/š” ÌX” ÌX
+” ÌX” ÌX” ÌX” ÌX” ÌX”  ÌX”% ÌX!”& ÌX"š” ÌY” ÌY
+” ÌY” ÌY” ÌY” ÌY”  ÌY”! ÌY”' ÌY#”( ÌY$Ü ” ÌZ” ÌZ
+” ÌZ” ÌZ” ÌZ” ÌZ”$ ÌZ ”% ÌZ!”* ÌZ&”- ÌZ)”. ÌZ*”1 ÌZ-”4 ÌZ0”8 ÌZ4”9 ÌZ5”? ÌZ;”ÌA ÌZ=”ÌD ÌZÌ@”ÌH ÌZÌD”ÌI ÌZÌE”ÌJ ÌZÌF”ÌK ÌZÌGÜ ” Ì[” Ì[
+” Ì[” Ì[” Ì[”  Ì[”% Ì[!”& Ì["”, Ì[(”/ Ì[+”0 Ì[,”3 Ì[/”6 Ì[2”: Ì[6”; Ì[7”ÌA Ì[=”ÌC Ì[?”ÌF Ì[ÌB”ÌJ Ì[ÌF”ÌK Ì[ÌG”ÌL Ì[ÌH”ÌM Ì[ÌIš” Ì\” Ì\” Ì\” Ì\” Ì\” Ì\”' Ì\#”* Ì\&”+ Ì\'”- Ì\)’” Ì]” Ì]‘”	 Ì^Ü ” Ì_” Ì_
+” Ì_” Ì_” Ì_” Ì_”  Ì_”! Ì_”% Ì_!”& Ì_"”, Ì_(”. Ì_*”1 Ì_-”2 Ì_.”7 Ì_3”: Ì_6”ÌC Ì_?”ÌD Ì_Ì@”ÌE Ì_ÌA”ÌF Ì_ÌBÜ ” Ì`” Ì`
+” Ì`” Ì`” Ì`” Ì`”  Ì`”! Ì`”% Ì`!”& Ì`"”, Ì`(”. Ì`*”1 Ì`-”2 Ì`.”8 Ì`4”; Ì`7”ÌE Ì`ÌA”ÌF Ì`ÌB”ÌG Ì`ÌC”ÌH Ì`ÌDÜ ” Ìa” Ìa
+” Ìa” Ìa” Ìa” Ìa” Ìa” Ìa”! Ìa”& Ìa"”( Ìa$”) Ìa%”+ Ìa'”0 Ìa,”2 Ìa.”6 Ìa2”8 Ìa4”: Ìa6”? Ìa;”ÌA Ìa=”ÌJ ÌaÌF”ÌL ÌaÌH”ÌR ÌaÌN”ÌT ÌaÌP”Ì^ ÌaÌZ”Ì` ÌaÌ\”Ìb ÌaÌ^”Ìc ÌaÌ_”Ìd ÌaÌ`Ü ” Ìc” Ìc
+” Ìc” Ìc”( Ìc$”+ Ìc'”/ Ìc+”0 Ìc,”5 Ìc1”6 Ìc2”: Ìc6”; Ìc7”ÌA Ìc=”ÌC Ìc?”ÌF ÌcÌB”ÌG ÌcÌC”ÌW ÌcÌS”ÌZ ÌcÌV”Ìj ÌcÌf”Ìm ÌcÌi”Ìn ÌcÌj”Ìo ÌcÌk”Ìp ÌcÌl”Ìq ÌcÌm˜” Ìd” Ìd” Ìd” Ìd” Ìd”- Ìd)”/ Ìd+”0 Ìd,Ü ” Ìe” Ìe
+” Ìe” Ìe”# Ìe”. Ìe*”/ Ìe+”9 Ìe5”: Ìe6”ÌB Ìe>”ÌD ÌeÌ@”ÌF ÌeÌB”ÌL ÌeÌH”ÌN ÌeÌJ”ÌZ ÌeÌV”Ì\ ÌeÌX”Ìc ÌeÌ_”Ìe ÌeÌa”Ìl ÌeÌh”Ìn ÌeÌj”Ìo ÌeÌk”Ìp ÌeÌlÜ ” Ìf” Ìf
+” Ìf” Ìf” Ìf” Ìf”  Ìf”! Ìf”) Ìf%”+ Ìf'”- Ìf)”. Ìf*”6 Ìf2”7 Ìf3”ÌA Ìf=”ÌD ÌfÌ@”ÌF ÌfÌB”ÌG ÌfÌC”ÌO ÌfÌK”ÌP ÌfÌL”ÌV ÌfÌR”ÌY ÌfÌU”Ì[ ÌfÌW”Ì\ ÌfÌX”Ìd ÌfÌ`”Ìe ÌfÌa”Ìj ÌfÌf”Ìk ÌfÌg”Ìl ÌfÌh’” Ìg” Ìgœ” Ìh” Ìh” Ìh	” Ìh” Ìh” Ìh” Ìh”  Ìh”" Ìh”. Ìh(”/ Ìh)”0 Ìh*‘”	 Ìi‘” Ìi˜” Ìj” Ìj” Ìj	” Ìj” Ìj” Ìj” Ìj” Ìj‘”	 ÌkÜ ” Ìl” Ìl	” Ìl
+” Ìl” Ìl” Ìl” Ìl” Ìl”  Ìl”ÌR ÌlÌN”ÌT Ìm”ÌX Ìm
+”ÌZ Ìm”Ì^ Ìm”Ì` Ìm”Ìe Ìm”Ìg Ìm”Ìl Ìm”Ìn Ìm ”Ìw Ìm)”Ìy Ìm+”Ìƒ Ìm5”Ì… Ìm7”ÌŒ Ìm>”Ì Ìm?”Ì ÌmÌ@‘” Ìn‘” Ìn–” Ìo” Ìo” Ìo” Ìo” Ìo” Ìo–” Ìp” Ìp” Ìp” Ìp” Ìp” Ìp–” Ìq” Ìq” Ìq” Ìq” Ìq” Ìq‘” Ìr’”  Ìs ” Ìs’”  Ìu ” Ìu•”  Ìv ”	 Ìv	” Ìv” Ìv”" Ìv*Ü ” Ìw”
+ Ìw” Ìw” Ìw” Ìw,”  Ìw-”$ Ìw1”% Ìw2”( Ìw5”* Ìw7”+ Ìw8”Ì@ ÌwÌM”ÌA ÌwÌN”ÌI ÌwÌV”ÌJ ÌwÌW”ÌK ÌwÌX”ÌL ÌwÌY™” Ìx” Ìx” Ìx” Ìx” Ìx” Ìx”  Ìx”# Ìx!”% Ìx#”” Ìy” Ìy” Ìy” Ìy”” Ìz” Ìz	” Ìz” Ìz’”  Ì{ ” Ì{‘”  Ì} ‘” ÌˆÜ ”  Ì‰ ” Ì‰” Ì‰” Ì‰” Ì‰”* Ì‰*”+ Ì‰+”2 Ì‰;”4 Ì‰=”; Ì‰ÌL”= Ì‰ÌN”ÌA Ì‰ÌZ”ÌC ÌŠ”ÌI ÌŠ”ÌK ÌŠ”ÌU ÌŠ8”ÌW ÌŠ:”Ìc ÌŠÌO”Ìg ÌŠÌSœ” Ì‹”
+ Ì‹” Ì‹” Ì‹” Ì‹” Ì‹” Ì‹”% Ì‹#”& Ì‹$”- Ì‹+”. Ì‹,”/ Ì‹-›” ÌŒ”
+ ÌŒ” ÌŒ” ÌŒ”" ÌŒ ”# ÌŒ!”4 ÌŒ2”6 ÌŒ4”9 ÌŒ7”? ÌŒ=”Ì@ ÌŒ>œ” Ì”
+ Ì” Ì” Ì”  Ì”! Ì”) Ì'”, Ì*”/ Ì-”2 Ì0”: Ì8”; Ì9’” Ì”ÌQ ÌÌOÜ ” Ì”
+ Ì” Ì” Ì” Ì” Ì” Ì”  Ì”& Ì$”( Ì&”* Ì(”+ Ì)”3 Ì1”4 Ì2”= Ì;”> Ì<”? Ì=’” Ì” Ìœ” Ì‘”
+ Ì‘” Ì‘” Ì‘” Ì‘” Ì‘”  Ì‘”" Ì‘”$ Ì‘ ”0 Ì‘,”1 Ì‘-”2 Ì‘.‘” Ì’‘” Ì’š” Ì“”
+ Ì“” Ì“” Ì“” Ì“” Ì“” Ì“” Ì“”  Ì“”! Ì“‘” Ì”’” Ì•”2 Ì•0’” Ì–”* Ì–(”” Ì—” Ì—” Ì—” Ì—’” Ì˜” Ì˜—” Ì™” Ì™”" Ì™”# Ì™”/ Ì™)”0 Ì™*”1 Ì™+‘”	 Ìš”” Ìš” Ìš” Ìš” ÌšÜ ” Ì›” Ì›” Ì›” Ì›” Ì›” Ì›” Ì›”" Ì›”$ Ì›”ÌY Ì›ÌS”Ì[ Ìœ	”Ì\ Ìœ”Ì] Ìœ”Ìd Ìœ”Ìe Ìœ”Ìf Ìœ‘”	 Ì‘” Ì”” ÌŸ”
+ ÌŸ” ÌŸ” ÌŸ-” Ì ” Ì ” Ì 	” Ì ” Ì ” Ì ”, Ì (”- Ì )”5 Ì 1”7 Ì 3”ÌB Ì >”ÌG Ì ÌC”ÌI Ì ÌE”” Ì¡” Ì¡
+” Ì¡” Ì¡˜” Ì¢” Ì¢
+” Ì¢” Ì¢”  Ì¢”" Ì¢”7 Ì¢3”9 Ì¢5”” Ì£” Ì£	” Ì£” Ì£”” Ì¤” Ì¤” Ì¤”" Ì¤”” Ì¥” Ì¥
+” Ì¥” Ì¥”” Ì¦” Ì¦
+” Ì¦” Ì¦–” Ì§” Ì§	” Ì§”) Ì§”1 Ì§'”3 Ì§)’” Ì¨” Ì¨” Ì©” Ì©” Ì©
+” Ì©” Ì©” Ì©” Ì©” Ì©” Ì©”$ Ì© ”& Ì©"”* Ì©&”, Ì©(”- Ì©)’” Ìª” Ìª” Ì«”
+ Ì«” Ì«” Ì«” Ì«” Ì«” Ì«”) Ì«'”* Ì«(”1 Ì«/”3 Ì«1”? Ì«=”Ì@ Ì«>”ÌA Ì«?œ” Ì¬” Ì¬	” Ì¬” Ì¬” Ì¬” Ì¬#” Ì¬$”% Ì¬+”' Ì¬-”- Ì¬3”/ Ì¬5”1 Ì¬7–” Ì­” Ì­” Ì­” Ì­” Ì­” Ì­”” Ì®” Ì®” Ì®” Ì®” Ì¯” Ì¯
+” Ì¯” Ì¯” Ì¯” Ì¯”  Ì¯”! Ì¯”- Ì¯/”/ Ì¯1”8 Ì¯ÌB”: Ì¯ÌD”< Ì¯ÌFÜ ” Ì°” Ì°” Ì°” Ì°” Ì°”! Ì°”# Ì°”& Ì°”( Ì° ”Ì@ Ì°8”ÌB Ì°:”ÌN Ì°ÌF”ÌP Ì°ÌH”ÌY Ì°ÌQ”ÌZ Ì°ÌR”Ì[ Ì°ÌSš” Ì±” Ì±” Ì±”  Ì±”! Ì±”% Ì±”1 Ì±)”5 Ì±-”> Ì±6”Ì@ Ì±8Ü ” Ì²
+” Ì²” Ì²”# Ì²”$ Ì²”' Ì²”( Ì²”+ Ì²!”- Ì²#”1 Ì²'”2 Ì²(”7 Ì²-”8 Ì².”ÌD Ì²:”ÌG Ì²=”ÌJ Ì²Ì@”ÌM Ì²ÌC”ÌV Ì²ÌL”ÌW Ì²ÌM”ÌX Ì²ÌN”ÌY Ì²ÌO”ÌZ Ì²ÌP‘” Ì³	”” Ì´” Ì´” Ì´” Ì´	‘”	 Ìµ›” Ì¶” Ì¶” Ì¶	” Ì¶” Ì¶” Ì¶”! Ì¶”" Ì¶”' Ì¶#”) Ì¶%”+ Ì¶'” Ì·” Ì·
+” Ì·” Ì·” Ì·” Ì·”" Ì·”& Ì· ”+ Ì·%”, Ì·&”2 Ì·,”3 Ì·-”4 Ì·.”6 Ì·0’” Ì¸” Ì¸‘” Ì¹’” Ìº” Ìº
+” Ì»” Ì»” Ì»”  Ì»”$ Ì»”% Ì»”* Ì»"”+ Ì»#”0 Ì»(”1 Ì»)”7 Ì»/”8 Ì»0”9 Ì»;”: Ì»<™” Ì¼” Ì¼” Ì¼”! Ì¼”( Ì¼ ”) Ì¼!”3 Ì¼+”4 Ì¼6”5 Ì¼7”” Ì½” Ì½” Ì½” Ì½•” Ì¾
+” Ì¾” Ì¾”" Ì¾”# Ì¾–” Ì¿
+” Ì¿” Ì¿”$ Ì¿”% Ì¿”& Ì¿‘” ÌÀ	‘” ÌÁ”” ÌÁ” ÌÁ” ÌÁ” ÌÁ” ÌÂ” ÌÂ” ÌÂ” ÌÂ” ÌÂ”" ÌÂ”$ ÌÂ”' ÌÂ”) ÌÂ!”ÌJ ÌÂÌB”ÌL ÌÂÌD”ÌM ÌÂÌE”ÌN ÌÂÌF”ÌO ÌÂÌG‘” ÌÃ”” ÌÄ”	 ÌÄ”
+ ÌÄ” ÌÄ™” ÌÅ” ÌÅ” ÌÅ	” ÌÅ” ÌÅ” ÌÅ” ÌÅ” ÌÅ” ÌÅ•” ÌÆ” ÌÆ
+” ÌÆ” ÌÆ” ÌÆ•” ÌÇ” ÌÇ” ÌÇ” ÌÇ” ÌÇš” ÌÈ” ÌÈ” ÌÈ” ÌÈ”  ÌÈ”! ÌÈ”) ÌÈ!”* ÌÈ"”+ ÌÈ#”, ÌÈ$‘” ÌÉ”” ÌÊ”	 ÌÊ”
+ ÌÊ” ÌÊ•” ÌË” ÌË” ÌË” ÌË” ÌË•” ÌÌ” ÌÌ
+” ÌÌ” ÌÌ” ÌÌ•” ÌÍ” ÌÍ” ÌÍ” ÌÍ” ÌÍš” ÌÎ” ÌÎ” ÌÎ” ÌÎ”  ÌÎ”! ÌÎ”) ÌÎ!”* ÌÎ"”+ ÌÎ#”, ÌÎ$‘” ÌÏ–” ÌĞ”	 ÌĞ” ÌĞ” ÌĞ” ÌĞ” ÌĞ”” ÌÑ” ÌÑ” ÌÑ” ÌÑ’”  ÌÒ ” ÌÒÔrH–§version¤file§sources®sourcesContent¥names¨mappingsÀ‘À‘ÀÜ Í‘”    ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”  	 ‘”  
+ ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”    ‘”  ! ‘”  " ‘”  # ‘”  $ ‘”  % ‘”  & ‘”  ' ‘”  ( ‘”  ) ‘”  * ‘”  + ‘”  , ‘”  - ‘”  . ‘”  / ‘”  0 ‘”  1 ‘”  2 ‘”  3 ‘”  4 ‘”  5 ‘”  6 ‘”  7 ‘”  8 ‘”  9 ‘”  : ‘”  ; ‘”  < ‘”  = ‘”  > ‘”  ? ‘”  Ì@ ‘”  ÌA ‘”  ÌB ‘”  ÌC ‘”  ÌD ‘”  ÌE ‘”  ÌF ‘”  ÌG ‘”  ÌH ‘”  ÌI ‘”  ÌJ ‘”  ÌK ‘”  ÌL ‘”  ÌM ‘”  ÌN ‘”  ÌO ‘”  ÌP ‘”  ÌQ ‘”  ÌR ‘”  ÌS ‘”  ÌT ‘”  ÌU ‘”  ÌV ‘”  ÌW ‘”  ÌX ‘”  ÌY ‘”  ÌZ ‘”  Ì[ ‘”  Ì\ ‘”  Ì] ‘”  Ì^ ‘”  Ì_ ‘”  Ì` ‘”  Ìa ‘”  Ìb ‘”  Ìc ‘”  Ìd ‘”  Ìe ‘”  Ìf ‘”  Ìg ‘”  Ìh ‘”  Ìi ‘”  Ìj ‘”  Ìk ‘”  Ìl ‘”  Ìm ‘”  Ìn ‘”  Ìo ‘”  Ìp ‘”  Ìq ‘”  Ìr ‘”  Ìs ‘”  Ìt ‘”  Ìu ‘”  Ìv ‘”  Ìw ‘”  Ìx ‘”  Ìy ‘”  Ìz ‘”  Ì{ ‘”  Ì| ‘”  Ì} ‘”  Ì~ ‘”  Ì ‘”  Ì€ ‘”  Ì ‘”  Ì‚ ‘”  Ìƒ ‘”  Ì„ ‘”  Ì… ‘”  Ì† ‘”  Ì‡ ‘”  Ìˆ ‘”  Ì‰ ‘”  ÌŠ ‘”  Ì‹ ‘”  ÌŒ ‘”  Ì ‘”  Ì ‘”  Ì ‘”  Ì ‘”  Ì‘ ‘”  Ì’ ‘”  Ì“ ‘”  Ì” ‘”  Ì• ‘”  Ì– ‘”  Ì— ‘”  Ì˜ ‘”  Ì™ ‘”  Ìš ‘”  Ì› ‘”  Ìœ ‘”  Ì ‘”  Ì ‘”  ÌŸ ‘”  Ì  ‘”  Ì¡ ‘”  Ì¢ ‘”  Ì£ ‘”  Ì¤ ‘”  Ì¥ ‘”  Ì¦ ‘”  Ì§ ‘”  Ì¨ ‘”  Ì© ‘”  Ìª ‘”  Ì« ‘”  Ì¬ ‘”  Ì­ ‘”  Ì® ‘”  Ì¯ ‘”  Ì° ‘”  Ì± ‘”  Ì² ‘”  Ì³ ‘”  Ì´ ‘”  Ìµ ‘”  Ì¶ ‘”  Ì· ‘”  Ì¸ ‘”  Ì¹ ‘”  Ìº ‘”  Ì» ‘”  Ì¼ ‘”  Ì½ ‘”  Ì¾ ‘”  Ì¿ ‘”  ÌÀ ‘”  ÌÁ ‘”  ÌÂ ‘”  ÌÃ ‘”  ÌÄ ‘”  ÌÅ ‘”  ÌÆ ‘”  ÌÇ ‘”  ÌÈ ‘”  ÌÉ ‘”  ÌÊ ‘”  ÌË ‘”  ÌÌ ÔrI’§missing¦pluginÃ¦genAbcÂÔ  ÔrJ”²dynamicImportCache¹exportAllDeclarationCache»exportNamedDeclarationCache«importCache’ÔrK–¤type¥start£end«declarationªspecifiers¦source¶ExportNamedDeclarationÍ,ÍCÔrL™¤type¥start£end¢idªexpression©generator¥async¦params¤body³FunctionDeclarationÍ3ÍCÔrM”¤type¥start£end¤nameªIdentifierÍBÍWµrandomizeImageInPlaceÂÂÃ‘MªIdentifierÍXÍ`¨filePathÔrN”¤type¥start£end¤body®BlockStatementÍbÍC”ÔrO•¤type¥start£end¬declarations¤kind³VariableDeclarationÍiÍŸ‘ÔrP•¤type¥start£end¢id¤init²VariableDeclaratorÍoÍMªIdentifierÍoÍz«imageSourceÔrQ–¤type¥start£end¦callee©arguments¨optional®CallExpressionÍ}ÍÔrR—¤type¥start£end¦object¨property¨computed¨optional°MemberExpressionÍ}Í”MªIdentifierÍ}Í‚¥imageMªIdentifierÍƒÍ”±createImageSourceÂÂ‘MªIdentifierÍ•Í¨filePathÂ¥constO³VariableDeclarationÍ¥Í¹‘P²VariableDeclaratorÍ©Í¸MªIdentifierÍ©Í±¨pixelMapÔrS•¤type¥start£end¥value£raw§LiteralÍ´Í¸À¤null£letO³VariableDeclarationÍ¿ÍÖ‘P²VariableDeclaratorÍÃÍÕMªIdentifierÍÃÍÎ«imagePackerS§LiteralÍÑÍÕÀ¤null£letÔrT–¤type¥start£end¥block§handler©finalizer¬TryStatementÍÜÍ@N®BlockStatementÍàÍËÜ O³VariableDeclarationÍëÍÿ‘P²VariableDeclaratorÍïÍşMªIdentifierÍïÍú«orientationS§LiteralÍıÍş¡1£letT¬TryStatementÍ	ÍN®BlockStatementÍÍİ’O³VariableDeclarationÍÍr‘P²VariableDeclaratorÍ"ÍqMªIdentifierÍ"Í(¦parsedQ®CallExpressionÍ+ÍqR°MemberExpressionÍ+Í:MªIdentifierÍ+Í1¦NumberMªIdentifierÍ2Í:¨parseIntÂÂ’ÔrU”¤type¥start£end¨argument¯AwaitExpressionÍ;ÍlQ®CallExpressionÍAÍlR°MemberExpressionÍAÍ]MªIdentifierÍAÍL«imageSourceMªIdentifierÍMÍ]°getImagePropertyÂÂ‘S§LiteralÍ^Ík«Orientation­'Orientation'ÂS§LiteralÍnÍp
+¢10Â¥constÔrV–¤type¥start£end¤testªconsequent©alternate«IfStatementÍ€ÍÒÔrW–¤type¥start£end¨operator¦prefix¨argument¯UnaryExpressionÍ„Í™¡!ÃQ®CallExpressionÍ…Í™R°MemberExpressionÍ…Í‘MªIdentifierÍ…Í‹¦NumberMªIdentifierÍŒÍ‘¥isNaNÂÂ‘MªIdentifierÍ’Í˜¦parsedÂN®BlockStatementÍ›ÍÒ‘ÔrX”¤type¥start£endªexpression³ExpressionStatementÍ®ÍÃÔrY–¤type¥start£end¨operator¤left¥right´AssignmentExpressionÍ®ÍÂ¡=MªIdentifierÍ®Í¹«orientationMªIdentifierÍ¼ÍÂ¦parsedÀÔrZ•¤type¥start£end¥param¤body«CatchClauseÍçÍÀN®BlockStatementÍíÍÀO³VariableDeclarationÍLÍ}‘P²VariableDeclaratorÍRÍ|MªIdentifierÍRÍY§srcInfoU¯AwaitExpressionÍ\Í|Q®CallExpressionÍbÍ|R°MemberExpressionÍbÍzMªIdentifierÍbÍm«imageSourceMªIdentifierÍnÍz¬getImageInfoÂÂÂ¥constO³VariableDeclarationÍ‡Í§‘P²VariableDeclaratorÍÍ¦MªIdentifierÍÍ‘¤srcWR°MemberExpressionÍ”Í¦R°MemberExpressionÍ”Í MªIdentifierÍ”Í›§srcInfoMªIdentifierÍœÍ ¤sizeÂÂMªIdentifierÍ¡Í¦¥widthÂÂ¥constO³VariableDeclarationÍ±ÍÒ‘P²VariableDeclaratorÍ·ÍÑMªIdentifierÍ·Í»¤srcHR°MemberExpressionÍ¾ÍÑR°MemberExpressionÍ¾ÍÊMªIdentifierÍ¾ÍÅ§srcInfoMªIdentifierÍÆÍÊ¤sizeÂÂMªIdentifierÍËÍÑ¦heightÂÂ¥constO³VariableDeclarationÍÜÍï‘P²VariableDeclaratorÍàÍîMªIdentifierÍàÍç§decodeWMªIdentifierÍêÍî¤srcW£letO³VariableDeclarationÍùÍ	‘P²VariableDeclaratorÍıÍ	MªIdentifierÍıÍ	§decodeHMªIdentifierÍ	Í	¤srcH£letV«IfStatementÍ	Í
+Ôr[–¤type¥start£end¤left¨operator¥right°BinaryExpressionÍ	Í	@Q®CallExpressionÍ	Í	.R°MemberExpressionÍ	Í	"MªIdentifierÍ	Í	¤MathMªIdentifierÍ	Í	"£maxÂÂ’MªIdentifierÍ	#Í	'¤srcWMªIdentifierÍ	)Í	-¤srcHÂ¡>MªIdentifierÍ	1Í	@¯MAX_DECODE_EDGEN®BlockStatementÍ	BÍ
+“O³VariableDeclarationÍ	QÍ	‚‘P²VariableDeclaratorÍ	WÍ	MªIdentifierÍ	WÍ	X¡k[°BinaryExpressionÍ	[Í	MªIdentifierÍ	[Í	j¯MAX_DECODE_EDGE¡/Q®CallExpressionÍ	mÍ	R°MemberExpressionÍ	mÍ	uMªIdentifierÍ	mÍ	q¤MathMªIdentifierÍ	rÍ	u£maxÂÂ’MªIdentifierÍ	vÍ	z¤srcWMªIdentifierÍ	|Í	€¤srcHÂ¥constX³ExpressionStatementÍ	Í	¼Y´AssignmentExpressionÍ	Í	»¡=MªIdentifierÍ	Í	—§decodeWQ®CallExpressionÍ	šÍ	»R°MemberExpressionÍ	šÍ	¢MªIdentifierÍ	šÍ	¤MathMªIdentifierÍ	ŸÍ	¢£maxÂÂ’S§LiteralÍ	£Í	¤¡1Q®CallExpressionÍ	¦Í	ºR°MemberExpressionÍ	¦Í	°MªIdentifierÍ	¦Í	ª¤MathMªIdentifierÍ	«Í	°¥floorÂÂ‘[°BinaryExpressionÍ	±Í	¹MªIdentifierÍ	±Í	µ¤srcW¡*MªIdentifierÍ	¸Í	¹¡kÂÂX³ExpressionStatementÍ	ÊÍ	öY´AssignmentExpressionÍ	ÊÍ	õ¡=MªIdentifierÍ	ÊÍ	Ñ§decodeHQ®CallExpressionÍ	ÔÍ	õR°MemberExpressionÍ	ÔÍ	ÜMªIdentifierÍ	ÔÍ	Ø¤MathMªIdentifierÍ	ÙÍ	Ü£maxÂÂ’S§LiteralÍ	İÍ	Ş¡1Q®CallExpressionÍ	àÍ	ôR°MemberExpressionÍ	àÍ	êMªIdentifierÍ	àÍ	ä¤MathMªIdentifierÍ	åÍ	ê¥floorÂÂ‘[°BinaryExpressionÍ	ëÍ	óMªIdentifierÍ	ëÍ	ï¤srcH¡*MªIdentifierÍ	òÍ	ó¡kÂÂÀX³ExpressionStatementÍ
+Í
+}Y´AssignmentExpressionÍ
+Í
+|¡=MªIdentifierÍ
+Í
+¨pixelMapU¯AwaitExpressionÍ
+Í
+|Q®CallExpressionÍ
+Í
+|R°MemberExpressionÍ
+Í
+6MªIdentifierÍ
+Í
+'«imageSourceMªIdentifierÍ
+(Í
+6®createPixelMapÂÂ‘Ôr\”¤type¥start£endªproperties°ObjectExpressionÍ
+7Í
+{’Ôr]™¤type¥start£end¦method©shorthand¨computed£key¥value¤kind¨PropertyÍ
+9Í
+iÂÂÂMªIdentifierÍ
+9Í
+D«desiredSize\°ObjectExpressionÍ
+FÍ
+i’]¨PropertyÍ
+HÍ
+VÂÂÂMªIdentifierÍ
+HÍ
+M¥widthMªIdentifierÍ
+OÍ
+V§decodeW¤init]¨PropertyÍ
+XÍ
+gÂÂÂMªIdentifierÍ
+XÍ
+^¦heightMªIdentifierÍ
+`Í
+g§decodeH¤init¤init]¨PropertyÍ
+kÍ
+yÂÂÂMªIdentifierÍ
+kÍ
+s¨editableS§LiteralÍ
+uÍ
+yÃ¤true¤initÂX³ExpressionStatementÍ
+‡Í
+¹U¯AwaitExpressionÍ
+‡Í
+¸Q®CallExpressionÍ
+Í
+¸MªIdentifierÍ
+Í
+¡´applyExifOrientation’MªIdentifierÍ
+¢Í
+ª¨pixelMapMªIdentifierÍ
+¬Í
+·«orientationÂO³VariableDeclarationÍ
+ÃÍ
+î‘P²VariableDeclaratorÍ
+ÉÍ
+íMªIdentifierÍ
+ÉÍ
+Í¤infoU¯AwaitExpressionÍ
+ĞÍ
+íQ®CallExpressionÍ
+ÖÍ
+íR°MemberExpressionÍ
+ÖÍ
+ëMªIdentifierÍ
+ÖÍ
+Ş¨pixelMapMªIdentifierÍ
+ßÍ
+ë¬getImageInfoÂÂÂ¥constO³VariableDeclarationÍ
+øÍ‘P²VariableDeclaratorÍ
+şÍMªIdentifierÍ
+şÍ¥widthR°MemberExpressionÍÍR°MemberExpressionÍÍMªIdentifierÍÍ
+¤infoMªIdentifierÍÍ¤sizeÂÂMªIdentifierÍÍ¥widthÂÂ¥constO³VariableDeclarationÍ Í@‘P²VariableDeclaratorÍ&Í?MªIdentifierÍ&Í,¦heightR°MemberExpressionÍ/Í?R°MemberExpressionÍ/Í8MªIdentifierÍ/Í3¤infoMªIdentifierÍ4Í8¤sizeÂÂMªIdentifierÍ9Í?¦heightÂÂ¥constO³VariableDeclarationÍJÍ‘P²VariableDeclaratorÍPÍŒMªIdentifierÍPÍY©cropWidthQ®CallExpressionÍ\ÍŒR°MemberExpressionÍ\ÍfMªIdentifierÍ\Í`¤MathMªIdentifierÍaÍf¥floorÂÂ‘[°BinaryExpressionÍgÍ‹MªIdentifierÍgÍl¥width¡*[°BinaryExpressionÍpÍŠS§LiteralÍpÍsË?ìÌÌÌÌÌÍ£0.9¡+[°BinaryExpressionÍvÍŠQ®CallExpressionÍvÍƒR°MemberExpressionÍvÍMªIdentifierÍvÍz¤MathMªIdentifierÍ{Í¦randomÂÂÂ¡*S§LiteralÍ†ÍŠË?·
+=p£×
+¤0.09Â¥constO³VariableDeclarationÍ—ÍÜ‘P²VariableDeclaratorÍÍÛMªIdentifierÍÍ§ªcropHeightQ®CallExpressionÍªÍÛR°MemberExpressionÍªÍ´MªIdentifierÍªÍ®¤MathMªIdentifierÍ¯Í´¥floorÂÂ‘[°BinaryExpressionÍµÍÚMªIdentifierÍµÍ»¦height¡*[°BinaryExpressionÍ¿ÍÙS§LiteralÍ¿ÍÂË?ìÌÌÌÌÌÍ£0.9¡+[°BinaryExpressionÍÅÍÙQ®CallExpressionÍÅÍÒR°MemberExpressionÍÅÍĞMªIdentifierÍÅÍÉ¤MathMªIdentifierÍÊÍĞ¦randomÂÂÂ¡*S§LiteralÍÕÍÙË?·
+=p£×
+¤0.09Â¥constV«IfStatementÍæÍ,[±LogicalExpressionÍêÍ	[°BinaryExpressionÍêÍ÷MªIdentifierÍêÍó©cropWidth¡<S§LiteralÍöÍ÷¡1¢||[°BinaryExpressionÍûÍ	MªIdentifierÍûÍªcropHeight¡<S§LiteralÍÍ	¡1N®BlockStatementÍÍ,‘U¯ReturnStatementÍÍ!ÀÀO³VariableDeclarationÍ6Ít‘P²VariableDeclaratorÍ<ÍsMªIdentifierÍ<ÍA¥cropXQ®CallExpressionÍDÍsR°MemberExpressionÍDÍNMªIdentifierÍDÍH¤MathMªIdentifierÍIÍN¥floorÂÂ‘[°BinaryExpressionÍOÍrQ®CallExpressionÍOÍ\R°MemberExpressionÍOÍZMªIdentifierÍOÍS¤MathMªIdentifierÍTÍZ¦randomÂÂÂ¡*[°BinaryExpressionÍ`ÍqMªIdentifierÍ`Íe¥width¡-MªIdentifierÍhÍq©cropWidthÂ¥constO³VariableDeclarationÍ~Í¾‘P²VariableDeclaratorÍ„Í½MªIdentifierÍ„Í‰¥cropYQ®CallExpressionÍŒÍ½R°MemberExpressionÍŒÍ–MªIdentifierÍŒÍ¤MathMªIdentifierÍ‘Í–¥floorÂÂ‘[°BinaryExpressionÍ—Í¼Q®CallExpressionÍ—Í¤R°MemberExpressionÍ—Í¢MªIdentifierÍ—Í›¤MathMªIdentifierÍœÍ¢¦randomÂÂÂ¡*[°BinaryExpressionÍ¨Í»MªIdentifierÍ¨Í®¦height¡-MªIdentifierÍ±Í»ªcropHeightÂ¥constX³ExpressionStatementÍÈÍ$U¯AwaitExpressionÍÈÍ#Q®CallExpressionÍÎÍ#R°MemberExpressionÍÎÍÛMªIdentifierÍÎÍÖ¨pixelMapMªIdentifierÍ×ÍÛ¤cropÂÂ‘\°ObjectExpressionÍÜÍ"“]¨PropertyÍŞÍæÂÂÂMªIdentifierÍŞÍß¡xMªIdentifierÍáÍæ¥cropX¤init]¨PropertyÍèÍğÂÂÂMªIdentifierÍèÍé¡yMªIdentifierÍëÍğ¥cropY¤init]¨PropertyÍòÍ ÂÂÂMªIdentifierÍòÍö¤size\°ObjectExpressionÍøÍ ’]¨PropertyÍúÍ
+ÂÂÂMªIdentifierÍúÍÿ¥widthMªIdentifierÍÍ
+©cropWidth¤init]¨PropertyÍÍÂÂÂMªIdentifierÍÍ¦heightMªIdentifierÍÍªcropHeight¤init¤initÂO³VariableDeclarationÍ.Í—‘P²VariableDeclaratorÍ4Í–MªIdentifierÍ4Í;§quality[°BinaryExpressionÍ>Í–MªIdentifierÍ>ÍN°JPEG_QUALITY_MIN¡+Q®CallExpressionÍQÍ–R°MemberExpressionÍQÍ[MªIdentifierÍQÍU¤MathMªIdentifierÍVÍ[¥floorÂÂ‘[°BinaryExpressionÍ\Í•Q®CallExpressionÍ\ÍiR°MemberExpressionÍ\ÍgMªIdentifierÍ\Í`¤MathMªIdentifierÍaÍg¦randomÂÂÂ¡*[°BinaryExpressionÍmÍ”[°BinaryExpressionÍmÍMªIdentifierÍmÍ}°JPEG_QUALITY_MAX¡-MªIdentifierÍ€Í°JPEG_QUALITY_MIN¡+S§LiteralÍ“Í”¡1Â¥constX³ExpressionStatementÍ¡ÍÉY´AssignmentExpressionÍ¡ÍÈ¡=MªIdentifierÍ¡Í¬«imagePackerQ®CallExpressionÍ¯ÍÈR°MemberExpressionÍ¯ÍÆMªIdentifierÍ¯Í´¥imageMªIdentifierÍµÍÆ±createImagePackerÂÂÂO³VariableDeclarationÍÓÍ;‘P²VariableDeclaratorÍÙÍ:MªIdentifierÍÙÍå¬packedBufferU¯AwaitExpressionÍèÍ:Q®CallExpressionÍîÍ:R°MemberExpressionÍîÍMªIdentifierÍîÍù«imagePackerMªIdentifierÍúÍªpackToDataÂÂ’MªIdentifierÍÍ¨pixelMap\°ObjectExpressionÍÍ9’]¨PropertyÍÍ%ÂÂÂMªIdentifierÍÍ¦formatS§LiteralÍÍ%ªimage/jpeg¬'image/jpeg'¤init]¨PropertyÍ'Í7ÂÂÂMªIdentifierÍ'Í.§qualityMªIdentifierÍ0Í7§quality¤initÂ¥constO³VariableDeclarationÍEÍ©‘P²VariableDeclaratorÍKÍ¨MªIdentifierÍKÍO¤fileQ®CallExpressionÍRÍ¨R°MemberExpressionÍRÍ]MªIdentifierÍRÍT¢fsMªIdentifierÍUÍ]¨openSyncÂÂ’MªIdentifierÍ^Íf¨filePath[°BinaryExpressionÍhÍ§[°BinaryExpressionÍhÍ“R°MemberExpressionÍhÍ~R°MemberExpressionÍhÍsMªIdentifierÍhÍj¢fsMªIdentifierÍkÍs¨OpenModeÂÂMªIdentifierÍtÍ~ªREAD_WRITEÂÂ¡|R°MemberExpressionÍÍ“R°MemberExpressionÍÍŒMªIdentifierÍÍƒ¢fsMªIdentifierÍ„ÍŒ¨OpenModeÂÂMªIdentifierÍÍ“¦CREATEÂÂ¡|R°MemberExpressionÍ–Í§R°MemberExpressionÍ–Í¡MªIdentifierÍ–Í˜¢fsMªIdentifierÍ™Í¡¨OpenModeÂÂMªIdentifierÍ¢Í§¥TRUNCÂÂÂ¥constT¬TryStatementÍ³Í4N®BlockStatementÍ·Íõ‘X³ExpressionStatementÍÆÍêQ®CallExpressionÍÆÍéR°MemberExpressionÍÆÍÒMªIdentifierÍÆÍÈ¢fsMªIdentifierÍÉÍÒ©writeSyncÂÂ’R°MemberExpressionÍÓÍÚMªIdentifierÍÓÍ×¤fileMªIdentifierÍØÍÚ¢fdÂÂMªIdentifierÍÜÍè¬packedBufferÂÀN®BlockStatementÍÍ4‘X³ExpressionStatementÍÍ)Q®CallExpressionÍÍ(R°MemberExpressionÍÍ"MªIdentifierÍÍ¢fsMªIdentifierÍÍ"©closeSyncÂÂ‘MªIdentifierÍ#Í'¤fileÂX³ExpressionStatementÍ>ÍÄQ®CallExpressionÍ>ÍÃR°MemberExpressionÍ>ÍHMªIdentifierÍ>ÍC¥hilogMªIdentifierÍDÍH¤infoÂÂšMªIdentifierÍIÍO¦DOMAINMªIdentifierÍQÍT£TAGS§LiteralÍVÍˆÙ0image randomized: %dx%d -> crop(%d,%d,%dx%d) q%dÙ2'image randomized: %dx%d -> crop(%d,%d,%dx%d) q%d'MªIdentifierÍŠÍ¤srcWMªIdentifierÍÍ”¤srcHMªIdentifierÍ–Í›¥cropXMªIdentifierÍÍ¢¥cropYMªIdentifierÍ¤Í­©cropWidthMªIdentifierÍ¯Í¹ªcropHeightMªIdentifierÍ»ÍÂ§qualityÂÀN®BlockStatementÍÙÍ@“X³ExpressionStatementÍäÍøX¯ChainExpressionÍäÍ÷Q®CallExpressionÍäÍ÷R°MemberExpressionÍäÍõMªIdentifierÍäÍì¨pixelMapMªIdentifierÍîÍõ§releaseÂÃÂX³ExpressionStatementÍÍX¯ChainExpressionÍÍQ®CallExpressionÍÍR°MemberExpressionÍÍMªIdentifierÍÍ«imagePackerMªIdentifierÍÍ§releaseÂÃÂX³ExpressionStatementÍ#Í9Q®CallExpressionÍ#Í8R°MemberExpressionÍ#Í6MªIdentifierÍ#Í.«imageSourceMªIdentifierÍ/Í6§releaseÂÂÂÀK¶ExportNamedDeclarationÍƒÍeL³FunctionDeclarationÍŠÍeMªIdentifierÍ™Í­´uploadImageForObjectÂÂÃ–MªIdentifierÍ®Íµ§contextMªIdentifierÍ·Í¾§cookiesMªIdentifierÍÀÍÄ¤puidMªIdentifierÍÆÍÌ¦srcUriMªIdentifierÍÎÍØªonProgressÔr^•¤type¥start£end¤left¥right±AssignmentPatternÍÚÍêMªIdentifierÍÚÍã©randomizeS§LiteralÍæÍêÃ¤trueN®BlockStatementÍìÍe™O³VariableDeclarationÍóÍ‘P²VariableDeclaratorÍùÍMªIdentifierÍùÍş¥tokenU¯AwaitExpressionÍÍQ®CallExpressionÍÍR°MemberExpressionÍÍMªIdentifierÍÍ¤SignMªIdentifierÍÍ¨GetTokenÂÂ‘MªIdentifierÍÍ§cookiesÂ¥constO³VariableDeclarationÍ$Í`‘P²VariableDeclaratorÍ*Í_MªIdentifierÍ*Í2¨fileName[°BinaryExpressionÍ5Í_Q®CallExpressionÍ5ÍVR°MemberExpressionÍ5ÍTMªIdentifierÍ5ÍB­ChaoxingUtilsMªIdentifierÍCÍT±generatePhotoNameÂÂÂ¡+S§LiteralÍYÍ_¤.jpg¦'.jpg'¥constO³VariableDeclarationÍfÍ‘P²VariableDeclaratorÍlÍœMªIdentifierÍlÍx¬copyFilePath[°BinaryExpressionÍ{Íœ[°BinaryExpressionÍ{Í‘R°MemberExpressionÍ{Í‹MªIdentifierÍ{Í‚§contextMªIdentifierÍƒÍ‹¨cacheDirÂÂ¡+S§LiteralÍÍ‘¡/£'/'¡+MªIdentifierÍ”Íœ¨fileName¥constO³VariableDeclarationÍöÍ1‘P²VariableDeclaratorÍüÍ0MªIdentifierÍüÍ§srcFileQ®CallExpressionÍÍ0R°MemberExpressionÍÍMªIdentifierÍÍ¢fsMªIdentifierÍ	Í¨openSyncÂÂ’MªIdentifierÍÍ¦srcUriR°MemberExpressionÍÍ/R°MemberExpressionÍÍ%MªIdentifierÍÍ¢fsMªIdentifierÍÍ%¨OpenModeÂÂMªIdentifierÍ&Í/©READ_ONLYÂÂÂ¥constT¬TryStatementÍ7Í°N®BlockStatementÍ;Íw‘X³ExpressionStatementÍFÍpQ®CallExpressionÍFÍoR°MemberExpressionÍFÍUMªIdentifierÍFÍH¢fsMªIdentifierÍIÍU¬copyFileSyncÂÂ’R°MemberExpressionÍVÍ`MªIdentifierÍVÍ]§srcFileMªIdentifierÍ^Í`¢fdÂÂMªIdentifierÍbÍn¬copyFilePathÂÀN®BlockStatementÍ…Í°‘X³ExpressionStatementÍÍ©Q®CallExpressionÍÍ¨R°MemberExpressionÍÍœMªIdentifierÍÍ’¢fsMªIdentifierÍ“Íœ©closeSyncÂÂ‘R°MemberExpressionÍÍ§MªIdentifierÍÍ¤§srcFileMªIdentifierÍ¥Í§¢fdÂÂÂV«IfStatementÍÍMªIdentifierÍÍ#©randomizeN®BlockStatementÍ%Í‘T¬TryStatementÍ0ÍûN®BlockStatementÍ4Ís‘X³ExpressionStatementÍCÍhU¯AwaitExpressionÍCÍgQ®CallExpressionÍIÍgMªIdentifierÍIÍY°enqueueRandomize‘MªIdentifierÍZÍf¬copyFilePathÂZ«CatchClauseÍ}ÍûMªIdentifierÍ„Í…¡eN®BlockStatementÍ‡Íû‘X³ExpressionStatementÍ–ÍğQ®CallExpressionÍ–ÍïR°MemberExpressionÍ–Í MªIdentifierÍ–Í›¥hilogMªIdentifierÍœÍ ¤warnÂÂ”MªIdentifierÍ¡Í§¦DOMAINMªIdentifierÍ©Í¬£TAGS§LiteralÍ®ÍãÙ3randomize image failed, upload original: %{public}sÙ5'randomize image failed, upload original: %{public}s'R°MemberExpressionÍåÍîMªIdentifierÍåÍæ¡eMªIdentifierÍçÍî§messageÂÂÂÀÀO³VariableDeclarationÍÍ±‘P²VariableDeclaratorÍÍ°MªIdentifierÍÍ¬uploadConfig\°ObjectExpressionÍÍ°•]¨PropertyÍ(ÍiÂÂÂMªIdentifierÍ(Í+£urlÔr_•¤type¥start£end«expressions¦quasis¯TemplateLiteralÍ-Íi’Q®CallExpressionÍ0ÍWR°MemberExpressionÍ0ÍUR°MemberExpressionÍ0ÍLMªIdentifierÍ0Í;«ChaoXingApiMªIdentifierÍ<ÍL°URL_UPLOAD_PHOTOÂÂMªIdentifierÍMÍU¨toStringÂÂÂMªIdentifierÍbÍg¥token“Ôr`•¤type¥start£end¥value¤tail¯TemplateElementÍ.Í.Ôra’£raw¦cooked  Â`¯TemplateElementÍXÍ`a¨&_token=¨&_token=Â`¯TemplateElementÍhÍha  Ã¤init]¨PropertyÍtÍ‚ÂÂÂMªIdentifierÍtÍz¦methodS§LiteralÍ|Í‚¤POST¦'POST'¤init]¨PropertyÍÍ¾ÂÂÂMªIdentifierÍÍ“¦header\°ObjectExpressionÍ•Í¾‘]¨PropertyÍ—Í¼ÂÂÂS§LiteralÍ—Í¥¬Content-Type®'Content-Type'S§LiteralÍ§Í¼³multipart/form-dataµ'multipart/form-data'¤init¤init]¨PropertyÍÉÍyÂÂÂMªIdentifierÍÉÍÎ¥filesÔrb”¤type¥start£end¨elements¯ArrayExpressionÍĞÍy‘\°ObjectExpressionÍÑÍx”]¨PropertyÍäÍöÂÂÂMªIdentifierÍäÍì¨filenameMªIdentifierÍîÍö¨fileName¤init]¨PropertyÍ	ÍÂÂÂMªIdentifierÍ	Í¤typeS§LiteralÍÍ£jpg¥'jpg'¤init]¨PropertyÍ'Í3ÂÂÂMªIdentifierÍ'Í+¤nameS§LiteralÍ-Í3¤file¦'file'¤init]¨PropertyÍFÍiÂÂÂMªIdentifierÍFÍI£uri_¯TemplateLiteralÍKÍi‘MªIdentifierÍ_Íg¨fileName’`¯TemplateElementÍLÍ]a±internal://cache/±internal://cache/Â`¯TemplateElementÍhÍha  Ã¤init¤init]¨PropertyÍ„Í©ÂÂÂMªIdentifierÍ„Íˆ¤datab¯ArrayExpressionÍŠÍ©‘\°ObjectExpressionÍ‹Í¨’]¨PropertyÍÍ™ÂÂÂMªIdentifierÍÍ‘¤nameS§LiteralÍ“Í™¤puid¦'puid'¤init]¨PropertyÍ›Í¦ÂÂÂMªIdentifierÍ›Í ¥valueMªIdentifierÍ¢Í¦¤puid¤init¤init¥constO³VariableDeclarationÍ·Íô‘P²VariableDeclaratorÍ½ÍóMªIdentifierÍ½ÍÁ¤taskU¯AwaitExpressionÍÄÍóQ®CallExpressionÍÊÍóR°MemberExpressionÍÊÍÜMªIdentifierÍÊÍÑ§requestMªIdentifierÍÒÍÜªuploadFileÂÂ’MªIdentifierÍİÍä§contextMªIdentifierÍæÍò¬uploadConfigÂ¥constU¯ReturnStatementÍúÍbU¯AwaitExpressionÍÍaÔrc•¤type¥start£end¦callee©arguments­NewExpressionÍÍaMªIdentifierÍÍ§Promise‘L·ArrowFunctionExpressionÍÍ`ÀÂÂÂ’MªIdentifierÍÍ§resolveMªIdentifierÍÍ#¦rejectN®BlockStatementÍ(Í`•O³VariableDeclarationÍ3ÍG‘P²VariableDeclaratorÍ7ÍFMªIdentifierÍ7Í>§settledS§LiteralÍAÍFÂ¥false£letV«IfStatementÍQÍÍMªIdentifierÍUÍ_ªonProgressN®BlockStatementÍaÍÍ‘X³ExpressionStatementÍpÍÂQ®CallExpressionÍpÍÁR°MemberExpressionÍpÍwMªIdentifierÍpÍt¤taskMªIdentifierÍuÍw¢onÂÂ’S§LiteralÍxÍ‚¨progressª'progress'L·ArrowFunctionExpressionÍ„ÍÀÀÂÂÂ’MªIdentifierÍ…Í‘¬uploadedSizeMªIdentifierÍ“Íœ©totalSizeN®BlockStatementÍ¡ÍÀ’X³ExpressionStatementÍ´ÍÿQ®CallExpressionÍ´ÍşR°MemberExpressionÍ´Í¾MªIdentifierÍ´Í¹¥hilogMªIdentifierÍºÍ¾¤infoÂÂ•MªIdentifierÍ¿ÍÅ¦DOMAINMªIdentifierÍÇÍÊ£TAGS§LiteralÍÌÍä¶upload progress: %d/%d¸'upload progress: %d/%d'MªIdentifierÍæÍò¬uploadedSizeMªIdentifierÍôÍı©totalSizeÂV«IfStatementÍÍ±[±LogicalExpressionÍÍ?[°BinaryExpressionÍÍ"MªIdentifierÍÍ©totalSize¡>S§LiteralÍ!Í" ¡0¢&&[°BinaryExpressionÍ&Í?MªIdentifierÍ&Í2¬uploadedSize¢<=MªIdentifierÍ6Í?©totalSizeN®BlockStatementÍAÍ±‘X³ExpressionStatementÍXÍQ®CallExpressionÍXÍMªIdentifierÍXÍbªonProgress‘Q®CallExpressionÍcÍœR°MemberExpressionÍcÍkMªIdentifierÍcÍg¤MathMªIdentifierÍhÍk£minÂÂ’S§LiteralÍlÍoÌd£100Q®CallExpressionÍqÍ›R°MemberExpressionÍqÍ{MªIdentifierÍqÍu¤MathMªIdentifierÍvÍ{¥roundÂÂ‘[°BinaryExpressionÍ|Íš[°BinaryExpressionÍ|ÍMªIdentifierÍ|Íˆ¬uploadedSize¡*S§LiteralÍ‹ÍÌd£100¡/MªIdentifierÍ‘Íš©totalSizeÂÂÂÀÂÀX³ExpressionStatementÍ×ÍùQ®CallExpressionÍ×ÍøR°MemberExpressionÍ×ÍŞMªIdentifierÍ×ÍÛ¤taskMªIdentifierÍÜÍŞ¢onÂÂ’S§LiteralÍßÍî­headerReceive¯'headerReceive'L·ArrowFunctionExpressionÍğÍ÷ÀÂÂÂ‘MªIdentifierÍñÍö¥valueN®BlockStatementÍûÍ÷’V«IfStatementÍ
+Í][±LogicalExpressionÍÍ2MªIdentifierÍÍ§settled¢||W¯UnaryExpressionÍÍ2¡!Ã[±LogicalExpressionÍÍ1MªIdentifierÍÍ ¥value¢&&R°MemberExpressionÍ$Í1MªIdentifierÍ$Í)¥valueS§LiteralÍ*Í0¤body¦'body'ÃÂN®BlockStatementÍ4Í]‘U¯ReturnStatementÍGÍNÀÀT¬TryStatementÍkÍìN®BlockStatementÍoÍs“O³VariableDeclarationÍ‚Í¬‘P²VariableDeclaratorÍˆÍ«MªIdentifierÍˆÍ§bodyObjQ®CallExpressionÍ’Í«R°MemberExpressionÍ’ÍœMªIdentifierÍ’Í–¤JSONMªIdentifierÍ—Íœ¥parseÂÂ‘R°MemberExpressionÍÍªMªIdentifierÍÍ¢¥valueS§LiteralÍ£Í©¤body¦'body'ÃÂÂ¥constO³VariableDeclarationÍ¾Íã‘P²VariableDeclaratorÍÄÍâMªIdentifierÍÄÍÌ¨objectIdR°MemberExpressionÍÏÍâMªIdentifierÍÏÍÖ§bodyObjS§LiteralÍ×Íá¨objectIdª'objectId'ÃÂ¥constV«IfStatementÍõÍdMªIdentifierÍùÍ¨objectIdN®BlockStatementÍÍd’X³ExpressionStatementÍÍ)Y´AssignmentExpressionÍÍ(¡=MªIdentifierÍÍ!§settledS§LiteralÍ$Í(Ã¤trueX³ExpressionStatementÍ?ÍQQ®CallExpressionÍ?ÍPMªIdentifierÍ?ÍF§resolve‘MªIdentifierÍGÍO¨objectIdÂÀZ«CatchClauseÍÍìMªIdentifierÍˆÍ‰¡eN®BlockStatementÍ‹Íì‘X³ExpressionStatementÍÍİQ®CallExpressionÍÍÜR°MemberExpressionÍÍ©MªIdentifierÍÍ£¥hilogMªIdentifierÍ¤Í©¥errorÂÂ”MªIdentifierÍªÍ°¦DOMAINMªIdentifierÍ²Íµ£TAGS§LiteralÍ·ÍØ¿Failed to parse upload responseÙ!'Failed to parse upload response'MªIdentifierÍÚÍÛ¡eÂÀÂX³ExpressionStatementÍÍ¢Q®CallExpressionÍÍ¡R°MemberExpressionÍÍ
+MªIdentifierÍÍ¤taskMªIdentifierÍÍ
+¢onÂÂ’S§LiteralÍÍ¤fail¦'fail'L·ArrowFunctionExpressionÍÍ ÀÂÂÂN®BlockStatementÍÍ ‘V«IfStatementÍ(Í•W¯UnaryExpressionÍ,Í4¡!ÃMªIdentifierÍ-Í4§settledN®BlockStatementÍ6Í•’X³ExpressionStatementÍIÍXY´AssignmentExpressionÍIÍW¡=MªIdentifierÍIÍP§settledS§LiteralÍSÍWÃ¤trueX³ExpressionStatementÍjÍ†Q®CallExpressionÍjÍ…MªIdentifierÍjÍp¦reject‘c­NewExpressionÍqÍ„MªIdentifierÍuÍz¥Error‘S§LiteralÍ{Íƒ²å›¾ç‰‡ä¸Šä¼ å¤±è´¥´'å›¾ç‰‡ä¸Šä¼ å¤±è´¥'ÂÀÂX³ExpressionStatementÍ¬ÍYQ®CallExpressionÍ¬ÍXMªIdentifierÍ¬Í¶ªsetTimeout’L·ArrowFunctionExpressionÍ·ÍDÀÂÂÂN®BlockStatementÍ½ÍD‘V«IfStatementÍÌÍ9W¯UnaryExpressionÍĞÍØ¡!ÃMªIdentifierÍÑÍØ§settledN®BlockStatementÍÚÍ9’X³ExpressionStatementÍíÍüY´AssignmentExpressionÍíÍû¡=MªIdentifierÍíÍô§settledS§LiteralÍ÷ÍûÃ¤trueX³ExpressionStatementÍÍ*Q®CallExpressionÍÍ)MªIdentifierÍÍ¦reject‘c­NewExpressionÍÍ(MªIdentifierÍÍ¥Error‘S§LiteralÍÍ'²å›¾ç‰‡ä¸Šä¼ è¶…æ—¶´'å›¾ç‰‡ä¸Šä¼ è¶…æ—¶'ÂÀMªIdentifierÍFÍW±UPLOAD_TIMEOUT_MSÂÀ—Ôrd•¤type¥start£endªspecifiers¦source±ImportDeclaration $‘Ôre”¤type¥start£end¥local¶ImportDefaultSpecifierMªIdentifier§requestS§Literal#­@ohos.request¯'@ohos.request'd±ImportDeclaration&ÌE‘e¶ImportDefaultSpecifier-/MªIdentifier-/¢fsS§Literal5ÌD­@ohos.file.fs¯'@ohos.file.fs'd±ImportDeclarationÌGÌg‘e¶ImportDefaultSpecifierÌNÌSMªIdentifierÌNÌS¥hilogS§LiteralÌYÌf«@ohos.hilog­"@ohos.hilog"d±ImportDeclarationÌiÌ”‘e¶ImportDefaultSpecifierÌpÌuMªIdentifierÌpÌu¥imageS§LiteralÌ{Ì“¶@ohos.multimedia.image¸"@ohos.multimedia.image"d±ImportDeclarationÌ–ÌÀ‘Ôrf•¤type¥start£end¨imported¥local¯ImportSpecifierÌŸÌªMªIdentifierÌŸÌª«ChaoXingApiMªIdentifierÌŸÌª«ChaoXingApiS§LiteralÌ²Ì¿«./PublicAPI­'./PublicAPI'd±ImportDeclarationÌÂÌà‘f¯ImportSpecifierÌËÌÏMªIdentifierÌËÌÏ¤SignMªIdentifierÌËÌÏ¤SignS§LiteralÌ×Ìß¦./sign¨'./sign'd±ImportDeclarationÌâÍ
+‘f¯ImportSpecifierÌëÌøMªIdentifierÌëÌø­ChaoxingUtilsMªIdentifierÌëÌø­ChaoxingUtilsS§LiteralÍ Í	§./utils©'./utils'

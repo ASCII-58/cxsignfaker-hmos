@@ -1,0 +1,781 @@
+Ôr@Ÿªassertions¤code´customTransformCache¬dependencies¢id¤meta±moduleSideEffects¬originalCode±originalSourcemap«resolvedIds®sourcemapChainµsyntheticNamedExportsµtransformDependencies®transformFiles¨cacheAstÔrAÚGóif (!("finalizeConstruction" in ViewPU.prototype)) {
+    Reflect.set(ViewPU.prototype, "finalizeConstruction", () => { });
+}
+import { Sign } from '../utils/sign';
+import hilog from "@ohos.hilog";
+import promptAction from "@ohos.promptAction";
+import { LightButton } from './LightButton';
+const TAG = 'GestureSignComponent';
+const DOMAIN = 0x0009;
+const GESTURE_GRID_SIZE = 9; // æ‰‹åŠ¿ç½‘æ ¼å¤§å°ï¼ˆ3x3ï¼‰
+const GESTURE_AREA_SIZE = 250; // æ‰‹åŠ¿ç»˜åˆ¶åŒºåŸŸè¾¹é•¿ï¼ˆvpï¼‰
+const CELL_PITCH = 90; // ç›¸é‚»åœ†ç‚¹ä¸­å¿ƒè·ï¼š250 = 3*70 + 2*20
+const FIRST_CENTER = 35; // é¦–ä¸ªåœ†ç‚¹ä¸­å¿ƒåæ ‡
+const HIT_RADIUS = 45; // æ»‘åŠ¨æ—¶å‘½ä¸­åœ†ç‚¹çš„åˆ¤å®šåŠå¾„ï¼ˆvpï¼‰
+export class GestureSignComponent extends ViewPU {
+    constructor(parent, params, __localStorage, elmtId = -1, paramsLambda = undefined, extraInfo) {
+        super(parent, __localStorage, elmtId, extraInfo);
+        if (typeof paramsLambda === "function") {
+            this.paramsGenerator_ = paramsLambda;
+        }
+        this.__activityId = new SynchedPropertySimpleOneWayPU(params.activityId, this, "activityId");
+        this.__hostCookies = new SynchedPropertySimpleOneWayPU(params.hostCookies, this, "hostCookies");
+        this.onSignCode = undefined;
+        this.__gesturePattern = new ObservedPropertyObjectPU([], this, "gesturePattern");
+        this.__gesturePoints = new ObservedPropertyObjectPU(Array(GESTURE_GRID_SIZE).fill(false), this, "gesturePoints");
+        this.__codeReady = new ObservedPropertySimplePU(false, this, "codeReady");
+        this.__resultMsg = new ObservedPropertySimplePU('', this, "resultMsg");
+        this.__isValidating = new ObservedPropertySimplePU(false, this, "isValidating");
+        this.setInitiallyProvidedValue(params);
+        this.finalizeConstruction();
+    }
+    setInitiallyProvidedValue(params) {
+        if (params.onSignCode !== undefined) {
+            this.onSignCode = params.onSignCode;
+        }
+        if (params.gesturePattern !== undefined) {
+            this.gesturePattern = params.gesturePattern;
+        }
+        if (params.gesturePoints !== undefined) {
+            this.gesturePoints = params.gesturePoints;
+        }
+        if (params.codeReady !== undefined) {
+            this.codeReady = params.codeReady;
+        }
+        if (params.resultMsg !== undefined) {
+            this.resultMsg = params.resultMsg;
+        }
+        if (params.isValidating !== undefined) {
+            this.isValidating = params.isValidating;
+        }
+    }
+    updateStateVars(params) {
+        this.__activityId.reset(params.activityId);
+        this.__hostCookies.reset(params.hostCookies);
+    }
+    purgeVariableDependenciesOnElmtId(rmElmtId) {
+        this.__activityId.purgeDependencyOnElmtId(rmElmtId);
+        this.__hostCookies.purgeDependencyOnElmtId(rmElmtId);
+        this.__gesturePattern.purgeDependencyOnElmtId(rmElmtId);
+        this.__gesturePoints.purgeDependencyOnElmtId(rmElmtId);
+        this.__codeReady.purgeDependencyOnElmtId(rmElmtId);
+        this.__resultMsg.purgeDependencyOnElmtId(rmElmtId);
+        this.__isValidating.purgeDependencyOnElmtId(rmElmtId);
+    }
+    aboutToBeDeleted() {
+        this.__activityId.aboutToBeDeleted();
+        this.__hostCookies.aboutToBeDeleted();
+        this.__gesturePattern.aboutToBeDeleted();
+        this.__gesturePoints.aboutToBeDeleted();
+        this.__codeReady.aboutToBeDeleted();
+        this.__resultMsg.aboutToBeDeleted();
+        this.__isValidating.aboutToBeDeleted();
+        SubscriberManager.Get().delete(this.id__());
+        this.aboutToBeDeletedInternal();
+    }
+    get activityId() {
+        return this.__activityId.get();
+    }
+    set activityId(newValue) {
+        this.__activityId.set(newValue);
+    }
+    get hostCookies() {
+        return this.__hostCookies.get();
+    }
+    set hostCookies(newValue) {
+        this.__hostCookies.set(newValue);
+    }
+    get gesturePattern() {
+        return this.__gesturePattern.get();
+    }
+    set gesturePattern(newValue) {
+        this.__gesturePattern.set(newValue);
+    }
+    get gesturePoints() {
+        return this.__gesturePoints.get();
+    }
+    set gesturePoints(newValue) {
+        this.__gesturePoints.set(newValue);
+    }
+    get codeReady() {
+        return this.__codeReady.get();
+    }
+    set codeReady(newValue) {
+        this.__codeReady.set(newValue);
+    }
+    get resultMsg() {
+        return this.__resultMsg.get();
+    }
+    set resultMsg(newValue) {
+        this.__resultMsg.set(newValue);
+    }
+    get isValidating() {
+        return this.__isValidating.get();
+    }
+    set isValidating(newValue) {
+        this.__isValidating.set(newValue);
+    }
+    /** åœ†ç‚¹ç¼–å·ï¼ˆ1~9ï¼‰å¯¹åº”çš„ä¸­å¿ƒåæ ‡ï¼ˆç›¸å¯¹ç»˜åˆ¶åŒºåŸŸï¼‰ */
+    centerOf(pointNo) {
+        const idx = pointNo - 1;
+        return [FIRST_CENTER + (idx % 3) * CELL_PITCH, FIRST_CENTER + Math.floor(idx / 3) * CELL_PITCH];
+    }
+    polylinePoints() {
+        return this.gesturePattern.map((n) => this.centerOf(n));
+    }
+    /** å‘½ä¸­æ£€æµ‹ï¼šè¿”å›åæ ‡ä¸‹çš„åœ†ç‚¹ç¼–å·ï¼ˆ1~9ï¼‰ï¼Œæœªå‘½ä¸­è¿”å› 0 */
+    hitTest(x, y) {
+        const col = Math.round((x - FIRST_CENTER) / CELL_PITCH);
+        const row = Math.round((y - FIRST_CENTER) / CELL_PITCH);
+        if (col < 0 || col > 2 || row < 0 || row > 2) {
+            return 0;
+        }
+        const cx = FIRST_CENTER + col * CELL_PITCH;
+        const cy = FIRST_CENTER + row * CELL_PITCH;
+        if ((x - cx) * (x - cx) + (y - cy) * (y - cy) > HIT_RADIUS * HIT_RADIUS) {
+            return 0;
+        }
+        return row * 3 + col + 1;
+    }
+    addPoint(pointNo) {
+        if (this.codeReady || pointNo <= 0 || pointNo > GESTURE_GRID_SIZE) {
+            return;
+        }
+        if (!this.gesturePoints[pointNo - 1]) {
+            this.gesturePoints[pointNo - 1] = true;
+            this.gesturePattern.push(pointNo);
+            hilog.debug(DOMAIN, TAG, `Gesture pattern: ${this.gesturePattern.join(',')}`);
+        }
+    }
+    onGesturePointClick(index) {
+        this.addPoint(index + 1);
+    }
+    /** æ»‘åŠ¨/æŒ‰ä¸‹æ—¶æŒ‰è§¦æ‘¸ç‚¹å‘½ä¸­åœ†ç‚¹ï¼ŒæŠ¬æ‰‹è‡ªåŠ¨æ ¡éªŒï¼›TouchObject.x/y ç›¸å¯¹å½“å‰ç»„ä»¶ */
+    onTouchPoint(event) {
+        if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+            // æŠ¬æ‰‹è‡ªåŠ¨æ ¡éªŒï¼›æ ¡éªŒå¤±è´¥ä¼šåœ¨ submitGesture å†…è‡ªåŠ¨é‡ç½®
+            if (this.gesturePattern.length > 0 && !this.codeReady && !this.isValidating) {
+                this.submitGesture();
+            }
+            return;
+        }
+        if (event.type !== TouchType.Down && event.type !== TouchType.Move) {
+            return;
+        }
+        if (event.touches.length === 0) {
+            return;
+        }
+        const touch = event.touches[0];
+        this.addPoint(this.hitTest(touch.x, touch.y));
+    }
+    resetGesture() {
+        this.gesturePoints = Array(GESTURE_GRID_SIZE).fill(false);
+        this.gesturePattern = [];
+        this.resultMsg = '';
+        if (this.codeReady) {
+            this.codeReady = false;
+            this.onSignCode?.('');
+        }
+    }
+    async submitGesture() {
+        if (this.gesturePattern.length === 0) {
+            promptAction.showToast({ message: 'è¯·ç»˜åˆ¶æ‰‹åŠ¿' });
+            return;
+        }
+        try {
+            this.isValidating = true;
+            const gestureCode = this.gesturePattern.join('');
+            const isCorrect = await Sign.CheckSignCode(this.hostCookies, this.activityId, gestureCode);
+            if (!isCorrect) {
+                promptAction.showToast({ message: 'æ‰‹åŠ¿é”™è¯¯ï¼Œè¯·é‡æ–°ç»˜åˆ¶' });
+                this.resetGesture();
+                return;
+            }
+            this.resultMsg = 'æ‰‹åŠ¿æ ¡éªŒé€šè¿‡ï¼Œè¯·ç‚¹å‡»ä¸‹æ–¹æŒ‰é’®ç­¾åˆ°';
+            this.codeReady = true;
+            this.onSignCode?.(gestureCode);
+        }
+        catch (e) {
+            hilog.error(DOMAIN, TAG, `Gesture validate failed: ${e.message}`);
+            this.resultMsg = `æ‰‹åŠ¿æ ¡éªŒå¤±è´¥: ${e.message}`;
+        }
+        finally {
+            this.isValidating = false;
+        }
+    }
+    initialRender() {
+        this.observeComponentCreation2((elmtId, isInitialRender) => {
+            Column.create();
+            Column.width('100%');
+            Column.padding(20);
+        }, Column);
+        this.observeComponentCreation2((elmtId, isInitialRender) => {
+            Text.create('è¯·åœ¨åœ†ç‚¹ä¸Šæ»‘åŠ¨ç»˜åˆ¶æ‰‹åŠ¿å›¾æ¡ˆï¼ˆä¸ºæ‰€æœ‰å‹¾é€‰ç”¨æˆ·ä»£ç­¾ï¼‰');
+            Text.fontSize(14);
+            Text.fontColor({ "id": 16777254, "type": 10001, params: [], "bundleName": "com.xhub.chaoxingsignfaker", "moduleName": "entry" });
+            Text.margin({ bottom: 24 });
+        }, Text);
+        Text.pop();
+        this.observeComponentCreation2((elmtId, isInitialRender) => {
+            // æ‰‹åŠ¿ç»˜åˆ¶åŒºåŸŸï¼šæ»‘åŠ¨ï¼ˆPanGestureï¼‰+ ç‚¹å‡»ï¼ˆonClickï¼‰ä¸¤ç§è¾“å…¥æ–¹å¼
+            Stack.create();
+            // æ‰‹åŠ¿ç»˜åˆ¶åŒºåŸŸï¼šæ»‘åŠ¨ï¼ˆPanGestureï¼‰+ ç‚¹å‡»ï¼ˆonClickï¼‰ä¸¤ç§è¾“å…¥æ–¹å¼
+            Stack.width(GESTURE_AREA_SIZE);
+            // æ‰‹åŠ¿ç»˜åˆ¶åŒºåŸŸï¼šæ»‘åŠ¨ï¼ˆPanGestureï¼‰+ ç‚¹å‡»ï¼ˆonClickï¼‰ä¸¤ç§è¾“å…¥æ–¹å¼
+            Stack.height(GESTURE_AREA_SIZE);
+            // æ‰‹åŠ¿ç»˜åˆ¶åŒºåŸŸï¼šæ»‘åŠ¨ï¼ˆPanGestureï¼‰+ ç‚¹å‡»ï¼ˆonClickï¼‰ä¸¤ç§è¾“å…¥æ–¹å¼
+            Stack.onTouch((event) => this.onTouchPoint(event));
+            // æ‰‹åŠ¿ç»˜åˆ¶åŒºåŸŸï¼šæ»‘åŠ¨ï¼ˆPanGestureï¼‰+ ç‚¹å‡»ï¼ˆonClickï¼‰ä¸¤ç§è¾“å…¥æ–¹å¼
+            Stack.margin({ bottom: 24 });
+        }, Stack);
+        this.observeComponentCreation2((elmtId, isInitialRender) => {
+            Grid.create();
+            Grid.columnsTemplate('1fr 1fr 1fr');
+            Grid.rowsTemplate('1fr 1fr 1fr');
+            Grid.width(GESTURE_AREA_SIZE);
+            Grid.height(GESTURE_AREA_SIZE);
+            Grid.columnsGap(20);
+            Grid.rowsGap(20);
+        }, Grid);
+        this.observeComponentCreation2((elmtId, isInitialRender) => {
+            ForEach.create();
+            const forEachItemGenFunction = _item => {
+                const index = _item;
+                {
+                    const itemCreation2 = (elmtId, isInitialRender) => {
+                        GridItem.create(() => { }, false);
+                    };
+                    const observedDeepRender = () => {
+                        this.observeComponentCreation2(itemCreation2, GridItem);
+                        this.observeComponentCreation2((elmtId, isInitialRender) => {
+                            Circle.create({ width: 60, height: 60 });
+                            Circle.fill(this.gesturePoints[index] ? { "id": 16777255, "type": 10001, params: [], "bundleName": "com.xhub.chaoxingsignfaker", "moduleName": "entry" } : { "id": 16777258, "type": 10001, params: [], "bundleName": "com.xhub.chaoxingsignfaker", "moduleName": "entry" });
+                            Circle.onClick(() => this.onGesturePointClick(index));
+                        }, Circle);
+                        GridItem.pop();
+                    };
+                    observedDeepRender();
+                }
+            };
+            this.forEachUpdateFunction(elmtId, Array.from({ length: GESTURE_GRID_SIZE }, (_, i) => i), forEachItemGenFunction);
+        }, ForEach);
+        ForEach.pop();
+        Grid.pop();
+        this.observeComponentCreation2((elmtId, isInitialRender) => {
+            If.create();
+            // å·²é€‰åœ†ç‚¹è¿çº¿
+            if (this.gesturePattern.length > 1) {
+                this.ifElseBranchUpdateFunction(0, () => {
+                    this.observeComponentCreation2((elmtId, isInitialRender) => {
+                        Polyline.create({ width: GESTURE_AREA_SIZE, height: GESTURE_AREA_SIZE });
+                        Polyline.points(this.polylinePoints());
+                        Polyline.stroke({ "id": 16777255, "type": 10001, params: [], "bundleName": "com.xhub.chaoxingsignfaker", "moduleName": "entry" });
+                        Polyline.strokeWidth(4);
+                        Polyline.fillOpacity(0);
+                        Polyline.hitTestBehavior(HitTestMode.None);
+                    }, Polyline);
+                });
+            }
+            else {
+                this.ifElseBranchUpdateFunction(1, () => {
+                });
+            }
+        }, If);
+        If.pop();
+        // æ‰‹åŠ¿ç»˜åˆ¶åŒºåŸŸï¼šæ»‘åŠ¨ï¼ˆPanGestureï¼‰+ ç‚¹å‡»ï¼ˆonClickï¼‰ä¸¤ç§è¾“å…¥æ–¹å¼
+        Stack.pop();
+        this.observeComponentCreation2((elmtId, isInitialRender) => {
+            If.create();
+            // æ‰‹åŠ¿é¡ºåºæ˜¾ç¤º
+            if (this.gesturePattern.length > 0) {
+                this.ifElseBranchUpdateFunction(0, () => {
+                    this.observeComponentCreation2((elmtId, isInitialRender) => {
+                        Text.create(`æ‰‹åŠ¿é¡ºåº: ${this.gesturePattern.join(' â†’ ')}`);
+                        Text.fontSize(14);
+                        Text.fontColor({ "id": 16777253, "type": 10001, params: [], "bundleName": "com.xhub.chaoxingsignfaker", "moduleName": "entry" });
+                        Text.margin({ bottom: 16 });
+                    }, Text);
+                    Text.pop();
+                });
+            }
+            // æ ¡éªŒç»“æœä¿¡æ¯
+            else {
+                this.ifElseBranchUpdateFunction(1, () => {
+                });
+            }
+        }, If);
+        If.pop();
+        this.observeComponentCreation2((elmtId, isInitialRender) => {
+            If.create();
+            // æ ¡éªŒç»“æœä¿¡æ¯
+            if (this.resultMsg) {
+                this.ifElseBranchUpdateFunction(0, () => {
+                    this.observeComponentCreation2((elmtId, isInitialRender) => {
+                        Text.create(this.resultMsg);
+                        Text.fontSize(14);
+                        Text.fontColor(this.codeReady ? { "id": 16777255, "type": 10001, params: [], "bundleName": "com.xhub.chaoxingsignfaker", "moduleName": "entry" } : { "id": 16777232, "type": 10001, params: [], "bundleName": "com.xhub.chaoxingsignfaker", "moduleName": "entry" });
+                        Text.margin({ bottom: 16 });
+                    }, Text);
+                    Text.pop();
+                });
+            }
+            // æ“ä½œæŒ‰é’®
+            else {
+                this.ifElseBranchUpdateFunction(1, () => {
+                });
+            }
+        }, If);
+        If.pop();
+        this.observeComponentCreation2((elmtId, isInitialRender) => {
+            // æ“ä½œæŒ‰é’®
+            Row.create();
+            // æ“ä½œæŒ‰é’®
+            Row.margin({ bottom: 8 });
+        }, Row);
+        this.observeComponentCreation2((elmtId, isInitialRender) => {
+            __Common__.create();
+            __Common__.width(100);
+            __Common__.margin({ right: 10 });
+        }, __Common__);
+        {
+            this.observeComponentCreation2((elmtId, isInitialRender) => {
+                if (isInitialRender) {
+                    let componentCall = new LightButton(this, {
+                        label: 'é‡ç½®',
+                        btnEnabled: true,
+                        onButton: () => {
+                            this.resetGesture();
+                        }
+                    }, undefined, elmtId, () => { }, { page: "entry/src/main/ets/Component/GestureSignComponent.ets", line: 193, col: 9 });
+                    ViewPU.create(componentCall);
+                    let paramsLambda = () => {
+                        return {
+                            label: 'é‡ç½®',
+                            btnEnabled: true,
+                            onButton: () => {
+                                this.resetGesture();
+                            }
+                        };
+                    };
+                    componentCall.paramsGenerator_ = paramsLambda;
+                }
+                else {
+                    this.updateStateVarsOfChildByElmtId(elmtId, {
+                        label: 'é‡ç½®',
+                        btnEnabled: true
+                    });
+                }
+            }, { name: "LightButton" });
+        }
+        __Common__.pop();
+        this.observeComponentCreation2((elmtId, isInitialRender) => {
+            __Common__.create();
+            __Common__.width(120);
+        }, __Common__);
+        {
+            this.observeComponentCreation2((elmtId, isInitialRender) => {
+                if (isInitialRender) {
+                    let componentCall = new LightButton(this, {
+                        label: this.isValidating ? 'æ ¡éªŒä¸­...' : 'æ ¡éªŒæ‰‹åŠ¿',
+                        btnEnabled: !this.codeReady && this.gesturePattern.length > 0 && !this.isValidating,
+                        onButton: () => {
+                            this.submitGesture();
+                        }
+                    }, undefined, elmtId, () => { }, { page: "entry/src/main/ets/Component/GestureSignComponent.ets", line: 203, col: 9 });
+                    ViewPU.create(componentCall);
+                    let paramsLambda = () => {
+                        return {
+                            label: this.isValidating ? 'æ ¡éªŒä¸­...' : 'æ ¡éªŒæ‰‹åŠ¿',
+                            btnEnabled: !this.codeReady && this.gesturePattern.length > 0 && !this.isValidating,
+                            onButton: () => {
+                                this.submitGesture();
+                            }
+                        };
+                    };
+                    componentCall.paramsGenerator_ = paramsLambda;
+                }
+                else {
+                    this.updateStateVarsOfChildByElmtId(elmtId, {
+                        label: this.isValidating ? 'æ ¡éªŒä¸­...' : 'æ ¡éªŒæ‰‹åŠ¿',
+                        btnEnabled: !this.codeReady && this.gesturePattern.length > 0 && !this.isValidating
+                    });
+                }
+            }, { name: "LightButton" });
+        }
+        __Common__.pop();
+        // æ“ä½œæŒ‰é’®
+        Row.pop();
+        Column.pop();
+    }
+    rerender() {
+        this.updateDirtyElements();
+    }
+}
+//# sourceMappingURL=GestureSignComponent.js.mapÂ”ÙQE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\sign.etsÙY hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.hilog.d.tsÙ` hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.promptAction.d.tsÙ\E:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\Component\LightButton.etsÙeE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\Component\GestureSignComponent.etsÔrB›ªmoduleName±isLocalDependency¯isNodeEntryFile§pkgPath±belongProjectPath§pkgNameªpkgVersion±dependencyPkgInfo¯hostModulesInfo°belongModulePath¬shouldEmitJs¥entryÃÂÙ5E:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entryÙ/E:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT¥entry¥1.0.0Ô  ‘ÔrC’²hostDependencyName®hostModuleNameÙ!../Component/GestureSignComponent¥entryÙ5E:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entryÃÃÚòimport { Sign } from '../utils/sign';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+import { promptAction } from '@kit.ArkUI';
+import { LightButton } from './LightButton';
+
+const TAG = 'GestureSignComponent';
+const DOMAIN = 0x0009;
+const GESTURE_GRID_SIZE = 9; // æ‰‹åŠ¿ç½‘æ ¼å¤§å°ï¼ˆ3x3ï¼‰
+const GESTURE_AREA_SIZE = 250; // æ‰‹åŠ¿ç»˜åˆ¶åŒºåŸŸè¾¹é•¿ï¼ˆvpï¼‰
+const CELL_PITCH = 90; // ç›¸é‚»åœ†ç‚¹ä¸­å¿ƒè·ï¼š250 = 3*70 + 2*20
+const FIRST_CENTER = 35; // é¦–ä¸ªåœ†ç‚¹ä¸­å¿ƒåæ ‡
+const HIT_RADIUS = 45; // æ»‘åŠ¨æ—¶å‘½ä¸­åœ†ç‚¹çš„åˆ¤å®šåŠå¾„ï¼ˆvpï¼‰
+
+/**
+ * æ‰‹åŠ¿ç­¾åˆ°è¾“å…¥ç»„ä»¶ï¼ˆçº¯è¾“å…¥ï¼‰ï¼š
+ * æ”¯æŒåœ¨ 3x3 åœ†ç‚¹ä¸Šæ»‘åŠ¨ç»˜åˆ¶æˆ–é€ç‚¹ç‚¹å‡»ï¼Œæ ¡éªŒé€šè¿‡åé€šè¿‡ onSignCode å›ä¼ æ‰‹åŠ¿ç ï¼›
+ * ç­¾åˆ°æ‰§è¡Œç”± SignerPage ç»Ÿä¸€ç¼–æ’ï¼Œç»„ä»¶ä¸å‘èµ·ç­¾åˆ°è¯·æ±‚ã€‚
+ */
+@Component
+export struct GestureSignComponent {
+  @Prop activityId: string;
+  /** ä¸»ç”¨æˆ· Cookieï¼Œä»…ç”¨äºå³æ—¶æ ¡éªŒæ‰‹åŠ¿ç  */
+  @Prop hostCookies: string;
+  /** æ ¡éªŒé€šè¿‡å›ä¼ æ‰‹åŠ¿ç ï¼Œé‡ç½®/å¤±æ•ˆå›ä¼  '' */
+  onSignCode?: (code: string) => void
+
+  @State gesturePattern: number[] = []; // æ‰‹åŠ¿é¡ºåºï¼ˆ1~9ï¼‰
+  @State gesturePoints: boolean[] = Array(GESTURE_GRID_SIZE).fill(false);
+  @State codeReady: boolean = false;
+  @State resultMsg: string = '';
+  @State isValidating: boolean = false;
+
+  /** åœ†ç‚¹ç¼–å·ï¼ˆ1~9ï¼‰å¯¹åº”çš„ä¸­å¿ƒåæ ‡ï¼ˆç›¸å¯¹ç»˜åˆ¶åŒºåŸŸï¼‰ */
+  private centerOf(pointNo: number): number[] {
+    const idx = pointNo - 1;
+    return [FIRST_CENTER + (idx % 3) * CELL_PITCH, FIRST_CENTER + Math.floor(idx / 3) * CELL_PITCH];
+  }
+
+  private polylinePoints(): Array<number[]> {
+    return this.gesturePattern.map((n: number): number[] => this.centerOf(n));
+  }
+
+  /** å‘½ä¸­æ£€æµ‹ï¼šè¿”å›åæ ‡ä¸‹çš„åœ†ç‚¹ç¼–å·ï¼ˆ1~9ï¼‰ï¼Œæœªå‘½ä¸­è¿”å› 0 */
+  private hitTest(x: number, y: number): number {
+    const col = Math.round((x - FIRST_CENTER) / CELL_PITCH);
+    const row = Math.round((y - FIRST_CENTER) / CELL_PITCH);
+    if (col < 0 || col > 2 || row < 0 || row > 2) {
+      return 0;
+    }
+    const cx = FIRST_CENTER + col * CELL_PITCH;
+    const cy = FIRST_CENTER + row * CELL_PITCH;
+    if ((x - cx) * (x - cx) + (y - cy) * (y - cy) > HIT_RADIUS * HIT_RADIUS) {
+      return 0;
+    }
+    return row * 3 + col + 1;
+  }
+
+  private addPoint(pointNo: number) {
+    if (this.codeReady || pointNo <= 0 || pointNo > GESTURE_GRID_SIZE) {
+      return;
+    }
+    if (!this.gesturePoints[pointNo - 1]) {
+      this.gesturePoints[pointNo - 1] = true;
+      this.gesturePattern.push(pointNo);
+      hilog.debug(DOMAIN, TAG, `Gesture pattern: ${this.gesturePattern.join(',')}`);
+    }
+  }
+
+  onGesturePointClick(index: number) {
+    this.addPoint(index + 1);
+  }
+
+  /** æ»‘åŠ¨/æŒ‰ä¸‹æ—¶æŒ‰è§¦æ‘¸ç‚¹å‘½ä¸­åœ†ç‚¹ï¼ŒæŠ¬æ‰‹è‡ªåŠ¨æ ¡éªŒï¼›TouchObject.x/y ç›¸å¯¹å½“å‰ç»„ä»¶ */
+  private onTouchPoint(event: TouchEvent) {
+    if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+      // æŠ¬æ‰‹è‡ªåŠ¨æ ¡éªŒï¼›æ ¡éªŒå¤±è´¥ä¼šåœ¨ submitGesture å†…è‡ªåŠ¨é‡ç½®
+      if (this.gesturePattern.length > 0 && !this.codeReady && !this.isValidating) {
+        this.submitGesture();
+      }
+      return;
+    }
+    if (event.type !== TouchType.Down && event.type !== TouchType.Move) {
+      return;
+    }
+    if (event.touches.length === 0) {
+      return;
+    }
+    const touch = event.touches[0];
+    this.addPoint(this.hitTest(touch.x, touch.y));
+  }
+
+  resetGesture() {
+    this.gesturePoints = Array(GESTURE_GRID_SIZE).fill(false);
+    this.gesturePattern = [];
+    this.resultMsg = '';
+    if (this.codeReady) {
+      this.codeReady = false;
+      this.onSignCode?.('');
+    }
+  }
+
+  async submitGesture() {
+    if (this.gesturePattern.length === 0) {
+      promptAction.showToast({ message: 'è¯·ç»˜åˆ¶æ‰‹åŠ¿' });
+      return;
+    }
+
+    try {
+      this.isValidating = true;
+      const gestureCode = this.gesturePattern.join('');
+
+      const isCorrect = await Sign.CheckSignCode(this.hostCookies, this.activityId, gestureCode);
+
+      if (!isCorrect) {
+        promptAction.showToast({ message: 'æ‰‹åŠ¿é”™è¯¯ï¼Œè¯·é‡æ–°ç»˜åˆ¶' });
+        this.resetGesture();
+        return;
+      }
+
+      this.resultMsg = 'æ‰‹åŠ¿æ ¡éªŒé€šè¿‡ï¼Œè¯·ç‚¹å‡»ä¸‹æ–¹æŒ‰é’®ç­¾åˆ°';
+      this.codeReady = true;
+      this.onSignCode?.(gestureCode);
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, `Gesture validate failed: ${(e as Error).message}`);
+      this.resultMsg = `æ‰‹åŠ¿æ ¡éªŒå¤±è´¥: ${(e as Error).message}`;
+    } finally {
+      this.isValidating = false;
+    }
+  }
+
+  build() {
+    Column() {
+      Text('è¯·åœ¨åœ†ç‚¹ä¸Šæ»‘åŠ¨ç»˜åˆ¶æ‰‹åŠ¿å›¾æ¡ˆï¼ˆä¸ºæ‰€æœ‰å‹¾é€‰ç”¨æˆ·ä»£ç­¾ï¼‰')
+        .fontSize(14)
+        .fontColor($r('app.color.secondary_text'))
+        .margin({ bottom: 24 })
+
+      // æ‰‹åŠ¿ç»˜åˆ¶åŒºåŸŸï¼šæ»‘åŠ¨ï¼ˆPanGestureï¼‰+ ç‚¹å‡»ï¼ˆonClickï¼‰ä¸¤ç§è¾“å…¥æ–¹å¼
+      Stack() {
+        Grid() {
+          ForEach(Array.from<number, number>({ length: GESTURE_GRID_SIZE }, (_, i: number) => i), (index: number) => {
+            GridItem() {
+              Circle({ width: 60, height: 60 })
+                .fill(this.gesturePoints[index] ?
+                  $r('app.color.selected') :
+                  $r('app.color.text_field_bg'))
+                .onClick(() => this.onGesturePointClick(index))
+            }
+          })
+        }
+        .columnsTemplate('1fr 1fr 1fr')
+        .rowsTemplate('1fr 1fr 1fr')
+        .width(GESTURE_AREA_SIZE)
+        .height(GESTURE_AREA_SIZE)
+        .columnsGap(20)
+        .rowsGap(20)
+
+        // å·²é€‰åœ†ç‚¹è¿çº¿
+        if (this.gesturePattern.length > 1) {
+          Polyline({ width: GESTURE_AREA_SIZE, height: GESTURE_AREA_SIZE })
+            .points(this.polylinePoints())
+            .stroke($r('app.color.selected'))
+            .strokeWidth(4)
+            .fillOpacity(0)
+            .hitTestBehavior(HitTestMode.None)
+        }
+      }
+      .width(GESTURE_AREA_SIZE)
+      .height(GESTURE_AREA_SIZE)
+      .onTouch((event: TouchEvent) => this.onTouchPoint(event))
+      .margin({ bottom: 24 })
+
+      // æ‰‹åŠ¿é¡ºåºæ˜¾ç¤º
+      if (this.gesturePattern.length > 0) {
+        Text(`æ‰‹åŠ¿é¡ºåº: ${this.gesturePattern.join(' â†’ ')}`)
+          .fontSize(14)
+          .fontColor($r('app.color.primary_text'))
+          .margin({ bottom: 16 })
+      }
+
+      // æ ¡éªŒç»“æœä¿¡æ¯
+      if (this.resultMsg) {
+        Text(this.resultMsg)
+          .fontSize(14)
+          .fontColor(this.codeReady ?
+            $r('app.color.selected') :
+            $r('app.color.beta_badge'))
+          .margin({ bottom: 16 })
+      }
+
+      // æ“ä½œæŒ‰é’®
+      Row() {
+        LightButton({
+          label: 'é‡ç½®',
+          btnEnabled: true,
+          onButton: () => {
+            this.resetGesture()
+          }
+        })
+          .width(100)
+          .margin({ right: 10 })
+
+        LightButton({
+          label: this.isValidating ? 'æ ¡éªŒä¸­...' : 'æ ¡éªŒæ‰‹åŠ¿',
+          btnEnabled: !this.codeReady && this.gesturePattern.length > 0 && !this.isValidating,
+          onButton: () => {
+            this.submitGesture()
+          }
+        })
+          .width(120)
+      }
+      .margin({ bottom: 8 })
+    }
+    .width('100%')
+    .padding(20)
+  }
+}
+ÀÔrD”«@ohos.hilog²@ohos.promptAction­../utils/sign­./LightButtonÔrE—ªassertions¨external¢id¤meta±moduleSideEffectsªresolvedByµsyntheticNamedExportsAÃÙY hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.hilog.d.tsAÃªoh-resolveÂEAÃÙ` hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.promptAction.d.tsAÃªoh-resolveÂEAÂÙQE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\sign.etsAÃªoh-resolveÂEAÂÙ\E:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\Component\LightButton.etsAÃªoh-resolveÂ“ÔrF–§version¤fileªsourceRoot§sources¥names¨mappings·GestureSignComponent.js ‘¸GestureSignComponent.etsÜ™˜”    ”  ”	  	”  ”  ”  ”$  $”%  %–”   ” 	” ” ” 3”  4–”   ” 	” ” ”- )”. *˜”   ” ”	 	” ” ” ”+ +”, ,–”   ” ”	 	” ”" "”# #–”   ” ” ” ” ” ˜”   ” ” ” ” ” ” ”+ +˜”   ” ” ” ” ” ” ”. .˜”  	 ” 	” 	” 	” 	” 	” 	”3 	3˜”  
+ ” 
+” 
+” 
+” 
+” 
+” 
+”$ 
+$˜”   ” ” ” ” ” ” ”* *””   ” ” ”! "‘”  ’”= $”? &š”< $”ÌA )”ÌB *”ÌS ;”ÌT <”ÌU =”ÌY ÌA”ÌZ ÌB”Ì_ ÌG”Ì` ÌH’”8 ”= #’”8 ”: ’”; !”Ì@ &‘” ’”' ”1 ’”( ”3 ’” ” ’” ” ’” ” ’” ” ’” 	” ’” 	” ’” 	” ’” 	” ’” 	” ’” 	” ’” 	” ’” 	” ’” 	” ’” 	” ’”  ”#  !”” !
+” !” !” !"˜” "” "
+” "” "” "” "” "”  "Ü ” #” #” #” #” #”  #”# #”& #"”' ##”( #$”+ #'”5 #1”7 #3”ÌC #?”ÌF #ÌB”ÌJ #ÌF”ÌK #ÌG”ÌP #ÌL”ÌQ #ÌM”ÌT #ÌP”ÌW #ÌS”ÌX #ÌT”ÌY #ÌU”Ì\ #ÌX”Ìf #Ìb”Ìg #Ìc”Ìh #Ìd’” $” $’” &
+” &Ü ” '” '” '” '”" '”# '”& '"”' '#”( '$”) '-”+ '9”- ';”. '<”2 'Ì@”3 'ÌA”; 'ÌI”< 'ÌJ”= 'ÌK”> 'ÌL”? 'ÌM”Ì@ 'ÌN’” (” (’” *”' *%–” +
+” +” +” +” +” +&Ü ” ,” ,
+” ,” ,” ,” ,” ,” ,”  ,”! ,”$ , ”0 ,,”1 ,-”4 ,0”> ,:”? ,;”Ì@ ,<Ü ” -” -
+” -” -” -” -” -” -”  -”! -”$ - ”0 -,”1 --”4 -0”> -:”? -;”Ì@ -<Ü ” .” .” .” .” .” .” .” .” .”" .”% .!”( .$”) .%”- .)”0 .,”3 ./”4 .0”6 .2”” /” /” /” /‘”	 0š” 1” 1
+” 1” 1” 1”" 1”% 1!”( 1$”2 1.”3 1/š” 2” 2
+” 2” 2” 2”" 2”% 2!”( 2$”2 2.”3 2/Ü ” 3” 3” 3	” 3
+” 3” 3” 3” 3” 3” 3” 3” 3” 3”" 3”# 3”$ 3 ”' 3#”) 3%”* 3&”- 3)”. 3*”/ 3+”2 3.”4 30”5 31”8 34”ÌB 3>”ÌE 3ÌA”ÌO 3ÌK”ÌQ 3ÌM”” 4” 4” 4” 4‘”	 5š” 6” 6” 6” 6” 6” 6” 6” 6”  6”! 6’” 7” 7”” 9
+” 9” 9” 9"” :” :” :” :” :” :”% :!”) :%”* :&”. :*”5 :1”8 :4”ÌI :ÌE”ÌK :ÌG’” ;” ;‘”	 <œ” =” =” =	” =” =” =”  =”' =#”* =&”+ ='”, =(”. =*œ” >” >
+” >” >” >”& > ”) >#”* >$”+ >%”. >(”2 >,”3 >-š” ?” ?
+” ?” ?”  ?”$ ?”% ?”, ?&”- ?'”. ?(Ü ” Ì@” Ì@” Ì@” Ì@” Ì@” Ì@”  Ì@”# Ì@”% Ì@”9 Ì@3”= Ì@7”> Ì@8”ÌL Ì@ÌF”ÌM Ì@ÌG”ÌQ Ì@ÌK”ÌR Ì@ÌL”ÌU Ì@ÌO”ÌV Ì@ÌP”ÌX Ì@ÌR”ÌY Ì@ÌS”ÌZ Ì@ÌT‘”	 ÌA’” ÌB” ÌB”” ÌD” ÌD” ÌD” ÌD#š” ÌE” ÌE” ÌE	” ÌE” ÌE” ÌE” ÌE” ÌE”  ÌE”! ÌE’” ÌF” ÌF’” ÌH”7 ÌH5”” ÌI
+” ÌI” ÌI” ÌI(Ü ” ÌJ” ÌJ” ÌJ” ÌJ” ÌJ” ÌJ”$ ÌJ ”% ÌJ!”' ÌJ#”+ ÌJ'”0 ÌJ,”1 ÌJ-”5 ÌJ1”: ÌJ6”ÌC ÌJ?”ÌD ÌJÌ@”ÌJ ÌJÌF”ÌL ÌJÌH’” ÌK”0 ÌK*Ü ” ÌL” ÌL
+” ÌL” ÌL”# ÌL”$ ÌL”* ÌL$”- ÌL'”. ÌL(”2 ÌL,”3 ÌL-”7 ÌL1”8 ÌL2”ÌA ÌL;”ÌE ÌL?”ÌF ÌLÌ@”ÌJ ÌLÌD”ÌK ÌLÌE”ÌW ÌLÌQ”ÌY ÌLÌS–” ÌM” ÌM” ÌM”" ÌM”$ ÌM”% ÌM‘” ÌN’” ÌO” ÌO‘”	 ÌPÜ ” ÌQ” ÌQ” ÌQ” ÌQ” ÌQ” ÌQ”$ ÌQ ”% ÌQ!”) ÌQ%”- ÌQ)”2 ÌQ.”3 ÌQ/”7 ÌQ3”< ÌQ8”ÌE ÌQÌA”ÌF ÌQÌB”ÌJ ÌQÌF”ÌL ÌQÌH’” ÌR” ÌR‘”	 ÌSš” ÌT” ÌT” ÌT” ÌT” ÌT” ÌT”  ÌT”% ÌT!”& ÌT"”( ÌT$’” ÌU” ÌU‘”	 ÌV›” ÌW” ÌW
+” ÌW” ÌW” ÌW” ÌW”# ÌW”$ ÌW ”% ÌW!”& ÌW"”' ÌW#Ü ” ÌX” ÌX” ÌX	” ÌX” ÌX” ÌX” ÌX”" ÌX”# ÌX”( ÌX$”) ÌX%”* ÌX&”, ÌX(”1 ÌX-”2 ÌX.”3 ÌX/”4 ÌX0”5 ÌX1”6 ÌX2’” ÌY” ÌY’” Ì[” Ì[Ÿ” Ì\” Ì\” Ì\	” Ì\” Ì\”" Ì\”# Ì\”4 Ì\0”5 Ì\1”6 Ì\2”: Ì\6”; Ì\7”Ì@ Ì\<”ÌA Ì\=”ÌB Ì\>—” Ì]” Ì]” Ì]	” Ì]” Ì]”  Ì]”! Ì]—” Ì^” Ì^” Ì^	” Ì^” Ì^” Ì^” Ì^–” Ì_” Ì_” Ì_” Ì_” Ì_” Ì_—” Ì`” Ì`
+” Ì`” Ì`” Ì`”" Ì`”# Ì`™” Ìa” Ìa
+” Ìa” Ìa” Ìa” Ìa”  Ìa”! Ìa”" Ìa‘”	 Ìb’” Ìc” Ìc”” Ìe”	 Ìe”
+ Ìe” Ìeš” Ìf” Ìf” Ìf” Ìf” Ìf”  Ìf”& Ìf"”+ Ìf'”, Ìf(”. Ìf*œ” Ìg” Ìg” Ìg”" Ìg”# Ìg”% Ìg”, Ìg&”. Ìg(”5 Ìg/”7 Ìg1”8 Ìg2”9 Ìg3’” Ìh” Ìh‘”	 Ìi’” Ìk” Ìk—” Ìl” Ìl
+” Ìl” Ìl”  Ìl”$ Ìl”% Ìl” Ìm” Ìm” Ìm”  Ìm”$ Ìm”% Ìm”3 Ìm-”4 Ìm.”8 Ìm2”9 Ìm3”; Ìm5”< Ìm6”= Ìm7Ü ” Ìo” Ìo” Ìo” Ìo”$ Ìo”( Ìo"”) Ìo#”6 Ìo0”7 Ìo1”; Ìo5”< Ìo6”ÌG ÌoÌA”ÌI ÌoÌC”ÌM ÌoÌG”ÌN ÌoÌH”ÌX ÌoÌR”ÌZ ÌoÌT”Ìe ÌoÌ_”Ìf ÌoÌ`”Ìg ÌoÌa•” Ìq” Ìq
+” Ìq” Ìq” Ìqœ” Ìr” Ìr” Ìr”& Ìr”' Ìr”) Ìr!”0 Ìr(”2 Ìr*”> Ìr6”Ì@ Ìr8”ÌA Ìr9”ÌB Ìr:–” Ìs” Ìs” Ìs”! Ìs”# Ìs”$ Ìs’” Ìt” Ìt‘” Ìu—” Ìw” Ìw
+” Ìw” Ìw” Ìw”/ Ìw)”0 Ìw*—” Ìx” Ìx
+” Ìx” Ìx” Ìx”! Ìx”" Ìx™” Ìy” Ìy
+” Ìy” Ìy” Ìy” Ìy”) Ìy#”* Ìy$”+ Ìy%‘”	 Ìz”” Ìz” Ìz” Ìz” ÌzÜ ” Ì{” Ì{” Ì{” Ì{” Ì{” Ì{”  Ì{”# Ì{”% Ì{”ÌA Ì{<”ÌB Ì{ÌG”ÌC Ì{ÌH”ÌJ Ì{ÌO”ÌL Ì{ÌQ”ÌM Ì{ÌR”ÌN Ì{ÌS›” Ì|” Ì|
+” Ì|” Ì|” Ì|”( Ì|#”) Ì|.”* Ì|/”1 Ì|6”3 Ì|8”4 Ì|9‘”	 Ì}‘” Ì}—” Ì~” Ì~
+” Ì~” Ì~”  Ì~”% Ì~”& Ì~ ‘”	 Ì’” Ì€” Ì€‘” Ì‚’” Ìƒ” Ìƒ
+–” Ìƒ” Ìƒ
+” ÌÕ” ÌÕ
+” ÌÕ” ÌÕ–” Ìƒ” Ìƒ
+” ÌÖ” ÌÖ” ÌÖ” ÌÖ”” Ì„” Ì„
+” Ì„”2 Ì„%–” Ì„” Ì„
+” Ì…	” Ì…” Ì…” Ì…”” Ì„” Ì„
+” Ì†	” Ì†š” Ì„” Ì„
+” Ì‡	” Ì‡” Ì‡” Ì‡”  Ì‡”" Ì‡”$ Ì‡”& Ì‡’” Ì„” Ì„
+’” Ì‰”7 Ì‰1’” ÌŠ” ÌŠ’” Ì‰”7 Ì‰1–” ÌŠ” ÌŠ” Ì§” Ì§” Ì§”) Ì§’” Ì‰”7 Ì‰1–” ÌŠ” ÌŠ” Ì¨” Ì¨” Ì¨”* Ì¨’” Ì‰”7 Ì‰1Ü ” ÌŠ” ÌŠ” Ì©” Ì©” Ì©” Ì©”  Ì©!”" Ì©#”$ Ì©%”% Ì©&”) Ì©*”* Ì©+”6 Ì©7”7 Ì©8”< Ì©=”= Ì©>’” Ì‰”7 Ì‰1š” ÌŠ” ÌŠ” Ìª” Ìª” Ìª” Ìª”! Ìª”# Ìª”% Ìª”' Ìª’” Ì‹” Ì‹–” Ì‹” Ì‹” Ì–	”  Ì–”! Ì–”. Ì–&–” Ì‹” Ì‹” Ì—	” Ì—” Ì—”+ Ì—#–” Ì‹” Ì‹” Ì˜	” Ì˜” Ì˜”( Ì˜ –” Ì‹” Ì‹” Ì™	” Ì™” Ì™”) Ì™!–” Ì‹” Ì‹” Ìš	” Ìš” Ìš” Ìš–” Ì‹” Ì‹” Ì›	” Ì›” Ì›” Ì›’” ÌŒ
+” ÌŒœ” Ì”" Ì”* Ì”, Ì”1 Ì”3 Ì”5 Ì ”7 Ì"”= Ì(”? Ì*”ÌA Ì,”ÌC Ì.Ü ” Ì”" Ì”# Ì”' Ì”( Ì”, Ì”- Ì”: Ì(”; Ì)”Ì@ Ì.”ÌA Ì/”ÌB Ì0”ÌC Ì1”Ìµ Ì+”Ì¶ Ì,”Í' Ì‘/” Ì”" Ì”# Ì’”* Ì’”+ Ì’”. Ì’”0 Ì’”1 Ì’”5 Ì’#”6 Ì’$”ÌI Ì’7”ÌJ Ì’8”ÌO Ì’=”ÌP Ì’>’” Ì”  ÌÜ ”/ ÌŒ”4 ÌŒ”5 ÌŒ”9 ÌŒ”: ÌŒ-”< ÌŒ/”ÌB ÌŒ5”ÌD ÌŒ7”ÌU ÌŒÌH”ÌW ÌŒÌJ”ÌY ÌŒÌL”ÌZ ÌŒÌM”Ì[ ÌŒÌN”Ì] ÌŒÌP”Ì^ ÌŒÌY”Ì` ÌŒÌ[”Ìb ÌŒÌ]”Ìc ÌŒÌ^”Ìd ÌŒÌ_”Ìe ÌŒÌ`’” ÌŒ
+” ÌŒ’” Ì‹” Ì‹’” Ì” Ìš” Ì” Ì” Ì” Ì”# Ì”$ Ì ”* Ì&”- Ì)”. Ì*”0 Ì,œ” ÌŸ
+”  ÌŸ”( ÌŸ”* ÌŸ”/ ÌŸ”1 ÌŸ”ÌB ÌŸ-”ÌD ÌŸ/”ÌJ ÌŸ5”ÌL ÌŸ7”Ì] ÌŸÌH”Ì_ ÌŸÌJ™” ÌŸ
+”  ÌŸ”! Ì ”' Ì ”( Ì ”, Ì ”- Ì ”; Ì '”= Ì )”” ÌŸ
+”  ÌŸ”! Ì¡”' Ì¡–” ÌŸ
+”  ÌŸ”! Ì¢”, Ì¢”- Ì¢”. Ì¢–” ÌŸ
+”  ÌŸ”! Ì£”, Ì£”- Ì£”. Ì£˜” ÌŸ
+”  ÌŸ”! Ì¤”0 Ì¤”1 Ì¤”< Ì¤(”= Ì¤)”ÌA Ì¤-‘” Ì¥	‘” Ì¥	’” Ì‰”3 Ì‰1’” ÌŠ” ÌŠ’” Ì¬” Ì¬š” Ì­” Ì­
+” Ì­” Ì­”# Ì­”$ Ì­”* Ì­$”- Ì­'”. Ì­(”0 Ì­*” Ì®” Ì®”$ Ì®”- Ì®”1 Ì®”2 Ì®”Ì@ Ì®)”ÌA Ì®*”ÌE Ì®.”ÌF Ì®/”ÌK Ì®4”ÌL Ì®5”ÌN Ì®7–” Ì®” Ì®” Ì¯”% Ì¯”& Ì¯”( Ì¯”” Ì®” Ì®” Ì°”& Ì°š” Ì®” Ì®” Ì±”# Ì±”$ Ì±”& Ì±”, Ì±”. Ì±”0 Ì±”2 Ì± ’” Ì®” Ì®‘” Ì²’” Ì´” Ì´‘” Ì²’” Ì´” Ì´–” Ìµ” Ìµ
+” Ìµ” Ìµ” Ìµ”  Ìµ–” Ì¶” Ì¶”$ Ì¶”( Ì¶”) Ì¶”2 Ì¶–” Ì¶” Ì¶” Ì·”% Ì·”& Ì·”( Ì·” Ì¶” Ì¶” Ì¸”& Ì¸”' Ì¸”+ Ì¸”, Ì¸”5 Ì¸#”6 Ì¸$”7 Ì¸%”Ì© Ì¹%”Ìª Ì¹&”Í Ìº&š” Ì¶” Ì¶” Ì»”# Ì»”$ Ì»”& Ì»”, Ì»”. Ì»”0 Ì»”2 Ì» ’” Ì¶” Ì¶‘” Ì¼’” Ì¾” Ì¾‘” Ì¼’” Ì¾” Ì¾’” Ì¿” Ì¿	’” Ì¾” Ì¾š” Ì¿” Ì¿	” ÌÓ” ÌÓ” ÌÓ” ÌÓ” ÌÓ”! ÌÓ”" ÌÓ”$ ÌÓ”” ÌÇ” ÌÇ” ÌÇ”  ÌÇ˜” ÌÈ” ÌÈ” ÌÈ”  ÌÈ”% ÌÈ”' ÌÈ”) ÌÈ”+ ÌÈ“”, ÌÀ”7 ÌÀ”> ÌÀ”” ÌÁ
+” ÌÁ” ÌÁ”# ÌÁ”” ÌÂ
+”" ÌÂ”$ ÌÂ”( ÌÂ•” ÌÃ
+”  ÌÃ”" ÌÃ”% ÌÃ”' ÌÃ–” ÌÄ”  ÌÄ”! ÌÄ”- ÌÄ”/ ÌÄ”0 ÌÄ’” ÌÅ
+” ÌÅ‘” ÌÆ	”” ÌÁ
+”! ÌÁ”# ÌÁ”' ÌÁ”” ÌÂ
+”& ÌÂ”( ÌÂ”, ÌÂ•” ÌÃ
+”$ ÌÃ”& ÌÃ”) ÌÃ”+ ÌÃ–”  ÌÄ”$ ÌÄ”% ÌÄ”1 ÌÄ”3 ÌÄ”4 ÌÄ’” ÌÅ
+” ÌÅ”” ÌÁ
+” ÌÁ” ÌÁ”# ÌÁ”” ÌÂ
+”" ÌÂ”$ ÌÂ”( ÌÂ”” ÌÑ” ÌÑ” ÌÑ”  ÌÑ“”, ÌÊ”7 ÌÊ”> ÌÊ” ÌË
+” ÌË” ÌË”# ÌË”$ ÌË”0 ÌË"”1 ÌË#”2 ÌË$”3 ÌË%”; ÌË-”< ÌË.”= ÌË/”> ÌË0”ÌD ÌË6Ü ” ÌÌ
+”" ÌÌ”$ ÌÌ”% ÌÌ”) ÌÌ”* ÌÌ”3 ÌÌ%”7 ÌÌ)”; ÌÌ-”< ÌÌ.”ÌJ ÌÌ<”ÌK ÌÌ=”ÌQ ÌÌÌC”ÌT ÌÌÌF”ÌU ÌÌÌG”ÌY ÌÌÌK”ÌZ ÌÌÌL”Ì^ ÌÌÌP”Ì_ ÌÌÌQ”Ìk ÌÌÌ]•” ÌÍ
+”  ÌÍ”" ÌÍ”% ÌÍ”' ÌÍ–” ÌÎ”  ÌÎ”! ÌÎ”. ÌÎ”0 ÌÎ ”1 ÌÎ ’” ÌÏ
+” ÌÏ‘” ÌĞ	” ÌË
+”! ÌË”# ÌË”' ÌË”( ÌË”4 ÌË"”5 ÌË#”6 ÌË$”7 ÌË%”? ÌË-”Ì@ ÌË.”ÌA ÌË/”ÌB ÌË0”ÌH ÌË6Ü ” ÌÌ
+”& ÌÌ”( ÌÌ”) ÌÌ”- ÌÌ”. ÌÌ”7 ÌÌ%”; ÌÌ)”? ÌÌ-”Ì@ ÌÌ.”ÌN ÌÌ<”ÌO ÌÌ=”ÌU ÌÌÌC”ÌX ÌÌÌF”ÌY ÌÌÌG”Ì] ÌÌÌK”Ì^ ÌÌÌL”Ìb ÌÌÌP”Ìc ÌÌÌQ”Ìo ÌÌÌ]•” ÌÍ
+”$ ÌÍ”& ÌÍ”) ÌÍ”+ ÌÍ–”  ÌÎ”$ ÌÎ”% ÌÎ”2 ÌÎ”4 ÌÎ ”5 ÌÎ ’” ÌÏ
+” ÌÏ” ÌË
+” ÌË” ÌË”# ÌË”$ ÌË”0 ÌË"”1 ÌË#”2 ÌË$”3 ÌË%”; ÌË-”< ÌË.”= ÌË/”> ÌË0”ÌD ÌË6Ü ” ÌÌ
+”" ÌÌ”$ ÌÌ”% ÌÌ”) ÌÌ”* ÌÌ”3 ÌÌ%”7 ÌÌ)”; ÌÌ-”< ÌÌ.”ÌJ ÌÌ<”ÌK ÌÌ=”ÌQ ÌÌÌC”ÌT ÌÌÌF”ÌU ÌÌÌG”ÌY ÌÌÌK”ÌZ ÌÌÌL”Ì^ ÌÌÌP”Ì_ ÌÌÌQ”Ìk ÌÌÌ]’” Ì¾” Ì¾’” Ì¿” Ì¿	’” Ìƒ” Ìƒ
+‘” Ì×ÔrG–§version¤file§sources®sourcesContent¥names¨mappingsÀ‘À‘ÀÜ‘”    ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”  	 ‘”  
+ ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”    ‘”  ! ‘”  " ‘”  # ‘”  $ ‘”  % ‘”  & ‘”  ' ‘”  ( ‘”  ) ‘”  * ‘”  + ‘”  , ‘”  - ‘”  . ‘”  / ‘”  0 ‘”  1 ‘”  2 ‘”  3 ‘”  4 ‘”  5 ‘”  6 ‘”  7 ‘”  8 ‘”  9 ‘”  : ‘”  ; ‘”  < ‘”  = ‘”  > ‘”  ? ‘”  Ì@ ‘”  ÌA ‘”  ÌB ‘”  ÌC ‘”  ÌD ‘”  ÌE ‘”  ÌF ‘”  ÌG ‘”  ÌH ‘”  ÌI ‘”  ÌJ ‘”  ÌK ‘”  ÌL ‘”  ÌM ‘”  ÌN ‘”  ÌO ‘”  ÌP ‘”  ÌQ ‘”  ÌR ‘”  ÌS ‘”  ÌT ‘”  ÌU ‘”  ÌV ‘”  ÌW ‘”  ÌX ‘”  ÌY ‘”  ÌZ ‘”  Ì[ ‘”  Ì\ ‘”  Ì] ‘”  Ì^ ‘”  Ì_ ‘”  Ì` ‘”  Ìa ‘”  Ìb ‘”  Ìc ‘”  Ìd ‘”  Ìe ‘”  Ìf ‘”  Ìg ‘”  Ìh ‘”  Ìi ‘”  Ìj ‘”  Ìk ‘”  Ìl ‘”  Ìm ‘”  Ìn ‘”  Ìo ‘”  Ìp ‘”  Ìq ‘”  Ìr ‘”  Ìs ‘”  Ìt ‘”  Ìu ‘”  Ìv ‘”  Ìw ‘”  Ìx ‘”  Ìy ‘”  Ìz ‘”  Ì{ ‘”  Ì| ‘”  Ì} ‘”  Ì~ ‘”  Ì ‘”  Ì€ ‘”  Ì ‘”  Ì‚ ‘”  Ìƒ ‘”  Ì„ ‘”  Ì… ‘”  Ì† ‘”  Ì‡ ‘”  Ìˆ ‘”  Ì‰ ‘”  ÌŠ ‘”  Ì‹ ‘”  ÌŒ ‘”  Ì ‘”  Ì ‘”  Ì ‘”  Ì ‘”  Ì‘ ‘”  Ì’ ‘”  Ì“ ‘”  Ì” ‘”  Ì• ‘”  Ì– ‘”  Ì— ‘”  Ì˜ ‘”  Ì™ ‘”  Ìš ‘”  Ì› ‘”  Ìœ ‘”  Ì ‘”  Ì ‘”  ÌŸ ‘”  Ì  ‘”  Ì¡ ‘”  Ì¢ ‘”  Ì£ ‘”  Ì¤ ‘”  Ì¥ ‘”  Ì¦ ‘”  Ì§ ‘”  Ì¨ ‘”  Ì© ‘”  Ìª ‘”  Ì« ‘”  Ì¬ ‘”  Ì­ ‘”  Ì® ‘”  Ì¯ ‘”  Ì° ‘”  Ì± ‘”  Ì² ‘”  Ì³ ‘”  Ì´ ‘”  Ìµ ‘”  Ì¶ ‘”  Ì· ‘”  Ì¸ ‘”  Ì¹ ‘”  Ìº ‘”  Ì» ‘”  Ì¼ ‘”  Ì½ ‘”  Ì¾ ‘”  Ì¿ ‘”  ÌÀ ‘”  ÌÁ ‘”  ÌÂ ‘”  ÌÃ ‘”  ÌÄ ‘”  ÌÅ ‘”  ÌÆ ‘”  ÌÇ ‘”  ÌÈ ‘”  ÌÉ ‘”  ÌÊ ‘”  ÌË ‘”  ÌÌ ‘”  ÌÍ ‘”  ÌÎ ‘”  ÌÏ ‘”  ÌĞ ‘”  ÌÑ ‘”  ÌÒ ‘”  ÌÓ ‘”  ÌÔ ‘”  ÌÕ ‘”  ÌÖ ‘”  Ì× ‘”  ÌØ ‘”  ÌÙ ‘”  ÌÚ ‘”  ÌÛ ‘”  ÌÜ ‘”  Ìİ ‘”  ÌŞ ‘”  Ìß ‘”  Ìà ‘”  Ìá ‘”  Ìâ ‘”  Ìã ‘”  Ìä ‘”  Ìå ‘”  Ìæ ‘”  Ìç ‘”  Ìè ‘”  Ìé ‘”  Ìê ‘”  Ìë ‘”  Ìì ‘”  Ìí ‘”  Ìî ‘”  Ìï ‘”  Ìğ ‘”  Ìñ ‘”  Ìò ‘”  Ìó ‘”  Ìô ‘”  Ìõ ‘”  Ìö ‘”  Ì÷ ‘”  Ìø ‘”  Ìù ‘”  Ìú ‘”  Ìû ‘”  Ìü ‘”  Ìı ‘”  Ìş ‘”  Ìÿ ‘”  Í  ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í	 ‘”  Í
+ ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í  ‘”  Í! ‘”  Í" ‘”  Í# ‘”  Í$ ‘”  Í% ‘”  Í& ‘”  Í' ‘”  Í( ‘”  Í) ‘”  Í* ‘”  Í+ ‘”  Í, ‘”  Í- ‘”  Í. ‘”  Í/ ‘”  Í0 ‘”  Í1 ‘”  Í2 ‘”  Í3 ‘”  Í4 ‘”  Í5 ‘”  Í6 ‘”  Í7 ‘”  Í8 ‘”  Í9 ‘”  Í: ‘”  Í; ‘”  Í< ‘”  Í= ‘”  Í> ‘”  Í? ‘”  Í@ ‘”  ÍA ‘”  ÍB ‘”  ÍC ‘”  ÍD ‘”  ÍE ‘”  ÍF ‘”  ÍG ‘”  ÍH ‘”  ÍI ‘”  ÍJ ‘”  ÍK ‘”  ÍL ‘”  ÍM ‘”  ÍN ‘”  ÍO ‘”  ÍP ‘”  ÍQ ‘”  ÍR ‘”  ÍS ‘”  ÍT ‘”  ÍU ‘”  ÍV ‘”  ÍW ‘”  ÍX ‘”  ÍY ‘”  ÍZ ‘”  Í[ ‘”  Í\ ‘”  Í] ‘”  Í^ ‘”  Í_ ‘”  Í` ‘”  Ía ‘”  Íb ‘”  Íc ‘”  Íd ‘”  Íe ‘”  Íf ‘”  Íg ‘”  Íh ‘”  Íi ‘”  Íj ‘”  Ík ‘”  Íl ‘”  Ím ‘”  Ín ‘”  Ío ‘”  Íp ‘”  Íq ‘”  Ír ‘”  Ís ‘”  Ít ‘”  Íu ‘”  Ív ‘”  Íw ‘”  Íx ‘”  Íy ‘”  Íz ‘”  Í{ ‘”  Í| ‘”  Í} ‘”  Í~ ‘”  Í ‘”  Í€ ‘”  Í ‘”  Í‚ ‘”  Íƒ ‘”  Í„ ‘”  Í… ‘”  Í† ‘”  Í‡ ‘”  Íˆ ‘”  Í‰ ‘”  ÍŠ ‘”  Í‹ ‘”  ÍŒ ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í‘ ‘”  Í’ ‘”  Í“ ‘”  Í” ‘”  Í• ‘”  Í– ‘”  Í— ‘”  Í˜ ‘”  Í™ ‘”  Íš ‘”  Í› ‘”  Íœ ‘”  Í ÔrH’§missing¦pluginÃ¦genAbcÂÔ  ÔrI”²dynamicImportCache¹exportAllDeclarationCache»exportNamedDeclarationCache«importCache‘ÔrJ–¤type¥start£end«declarationªspecifiers¦source¶ExportNamedDeclarationÍHÍD©ÔrK–¤type¥start£end¢idªsuperClass¤body°ClassDeclarationÍOÍD©ÔrL”¤type¥start£end¤nameªIdentifierÍUÍi´GestureSignComponentLªIdentifierÍrÍx¦ViewPUÔrM”¤type¥start£end¤body©ClassBodyÍyÍD©Ü ÔrN˜¤type¥start£end¦static¨computed£key¤kind¥value°MethodDefinitionÍ€ÍµÂÂLªIdentifierÍ€Í‹«constructor«constructorÔrO™¤type¥start£end¢idªexpression©generator¥async¦params¤body²FunctionExpressionÍ‹ÍµÀÂÂÂ–LªIdentifierÍŒÍ’¦parentLªIdentifierÍ”Íš¦paramsLªIdentifierÍœÍª®__localStorageÔrP•¤type¥start£end¤left¥right±AssignmentPatternÍ¬Í·LªIdentifierÍ¬Í²¦elmtIdÔrQ–¤type¥start£end¨operator¦prefix¨argument¯UnaryExpressionÍµÍ·¡-ÃÔrR•¤type¥start£end¥value£raw§LiteralÍ¶Í·¡1P±AssignmentPatternÍ¹ÍÑLªIdentifierÍ¹ÍÅ¬paramsLambdaLªIdentifierÍÈÍÑ©undefinedLªIdentifierÍÓÍÜ©extraInfoM®BlockStatementÍŞÍµœÔrS”¤type¥start£endªexpression³ExpressionStatementÍéÍÔrT–¤type¥start£end¦callee©arguments¨optional®CallExpressionÍéÍÔrU“¤type¥start£end¥SuperÍéÍî”LªIdentifierÍïÍõ¦parentLªIdentifierÍ÷Í®__localStorageLªIdentifierÍÍ¦elmtIdLªIdentifierÍÍ©extraInfoÂÔrV–¤type¥start£end¤testªconsequent©alternate«IfStatementÍ$Í‹ÔrW–¤type¥start£end¤left¨operator¥right°BinaryExpressionÍ(ÍJQ¯UnaryExpressionÍ(Í;¦typeofÃLªIdentifierÍ/Í;¬paramsLambda£===R§LiteralÍ@ÍJ¨functionª"function"M®BlockStatementÍLÍ‹‘S³ExpressionStatementÍ[Í€ÔrX–¤type¥start£end¨operator¤left¥right´AssignmentExpressionÍ[Í¡=ÔrY—¤type¥start£end¦object¨property¨computed¨optional°MemberExpressionÍ[ÍpU®ThisExpressionÍ[Í_LªIdentifierÍ`Íp°paramsGenerator_ÂÂLªIdentifierÍsÍ¬paramsLambdaÀS³ExpressionStatementÍ•ÍòX´AssignmentExpressionÍ•Íñ¡=Y°MemberExpressionÍ•Í¦U®ThisExpressionÍ•Í™LªIdentifierÍšÍ¦¬__activityIdÂÂÔrZ•¤type¥start£end¦callee©arguments­NewExpressionÍ©ÍñLªIdentifierÍ­ÍÊ½SynchedPropertySimpleOneWayPU“Y°MemberExpressionÍËÍÜLªIdentifierÍËÍÑ¦paramsLªIdentifierÍÒÍÜªactivityIdÂÂU®ThisExpressionÍŞÍâR§LiteralÍäÍğªactivityId¬"activityId"S³ExpressionStatementÍüÍ\X´AssignmentExpressionÍüÍ[¡=Y°MemberExpressionÍüÍU®ThisExpressionÍüÍ LªIdentifierÍÍ­__hostCookiesÂÂZ­NewExpressionÍÍ[LªIdentifierÍÍ2½SynchedPropertySimpleOneWayPU“Y°MemberExpressionÍ3ÍELªIdentifierÍ3Í9¦paramsLªIdentifierÍ:ÍE«hostCookiesÂÂU®ThisExpressionÍGÍKR§LiteralÍMÍZ«hostCookies­"hostCookies"S³ExpressionStatementÍfÍ‚X´AssignmentExpressionÍfÍ¡=Y°MemberExpressionÍfÍuU®ThisExpressionÍfÍjLªIdentifierÍkÍuªonSignCodeÂÂLªIdentifierÍxÍ©undefinedS³ExpressionStatementÍŒÍİX´AssignmentExpressionÍŒÍÜ¡=Y°MemberExpressionÍŒÍ¡U®ThisExpressionÍŒÍLªIdentifierÍ‘Í¡°__gesturePatternÂÂZ­NewExpressionÍ¤ÍÜLªIdentifierÍ¨ÍÀ¸ObservedPropertyObjectPU“Ôr[”¤type¥start£end¨elements¯ArrayExpressionÍÁÍÃU®ThisExpressionÍÅÍÉR§LiteralÍËÍÛ®gesturePattern°"gesturePattern"S³ExpressionStatementÍçÍXX´AssignmentExpressionÍçÍW¡=Y°MemberExpressionÍçÍûU®ThisExpressionÍçÍëLªIdentifierÍìÍû¯__gesturePointsÂÂZ­NewExpressionÍşÍWLªIdentifierÍÍ¸ObservedPropertyObjectPU“T®CallExpressionÍÍ?Y°MemberExpressionÍÍ8T®CallExpressionÍÍ3LªIdentifierÍÍ ¥Array‘LªIdentifierÍ!Í2±GESTURE_GRID_SIZEÂLªIdentifierÍ4Í8¤fillÂÂ‘R§LiteralÍ9Í>Â¥falseÂU®ThisExpressionÍAÍER§LiteralÍGÍV­gesturePoints¯"gesturePoints"S³ExpressionStatementÍbÍ¬X´AssignmentExpressionÍbÍ«¡=Y°MemberExpressionÍbÍrU®ThisExpressionÍbÍfLªIdentifierÍgÍr«__codeReadyÂÂZ­NewExpressionÍuÍ«LªIdentifierÍyÍ‘¸ObservedPropertySimplePU“R§LiteralÍ’Í—Â¥falseU®ThisExpressionÍ™ÍR§LiteralÍŸÍª©codeReady«"codeReady"S³ExpressionStatementÍ¶ÍıX´AssignmentExpressionÍ¶Íü¡=Y°MemberExpressionÍ¶ÍÆU®ThisExpressionÍ¶ÍºLªIdentifierÍ»ÍÆ«__resultMsgÂÂZ­NewExpressionÍÉÍüLªIdentifierÍÍÍå¸ObservedPropertySimplePU“R§LiteralÍæÍè ¢''U®ThisExpressionÍêÍîR§LiteralÍğÍû©resultMsg«"resultMsg"S³ExpressionStatementÍÍWX´AssignmentExpressionÍÍV¡=Y°MemberExpressionÍÍU®ThisExpressionÍÍLªIdentifierÍÍ®__isValidatingÂÂZ­NewExpressionÍÍVLªIdentifierÍ!Í9¸ObservedPropertySimplePU“R§LiteralÍ:Í?Â¥falseU®ThisExpressionÍAÍER§LiteralÍGÍU¬isValidating®"isValidating"S³ExpressionStatementÍaÍˆT®CallExpressionÍaÍ‡Y°MemberExpressionÍaÍU®ThisExpressionÍaÍeLªIdentifierÍfÍ¹setInitiallyProvidedValueÂÂ‘LªIdentifierÍ€Í†¦paramsÂS³ExpressionStatementÍ’Í®T®CallExpressionÍ’Í­Y°MemberExpressionÍ’Í«U®ThisExpressionÍ’Í–LªIdentifierÍ—Í«´finalizeConstructionÂÂÂN°MethodDefinitionÍ»Í	ˆÂÂLªIdentifierÍ»ÍÔ¹setInitiallyProvidedValue¦methodO²FunctionExpressionÍÔÍ	ˆÀÂÂÂ‘LªIdentifierÍÕÍÛ¦paramsM®BlockStatementÍİÍ	ˆ–V«IfStatementÍèÍKW°BinaryExpressionÍìÍY°MemberExpressionÍìÍıLªIdentifierÍìÍò¦paramsLªIdentifierÍóÍıªonSignCodeÂÂ£!==LªIdentifierÍÍ©undefinedM®BlockStatementÍÍK‘S³ExpressionStatementÍÍ@X´AssignmentExpressionÍÍ?¡=Y°MemberExpressionÍÍ+U®ThisExpressionÍÍ LªIdentifierÍ!Í+ªonSignCodeÂÂY°MemberExpressionÍ.Í?LªIdentifierÍ.Í4¦paramsLªIdentifierÍ5Í?ªonSignCodeÂÂÀV«IfStatementÍUÍÄW°BinaryExpressionÍYÍ|Y°MemberExpressionÍYÍnLªIdentifierÍYÍ_¦paramsLªIdentifierÍ`Ín®gesturePatternÂÂ£!==LªIdentifierÍsÍ|©undefinedM®BlockStatementÍ~ÍÄ‘S³ExpressionStatementÍÍ¹X´AssignmentExpressionÍÍ¸¡=Y°MemberExpressionÍÍ U®ThisExpressionÍÍ‘LªIdentifierÍ’Í ®gesturePatternÂÂY°MemberExpressionÍ£Í¸LªIdentifierÍ£Í©¦paramsLªIdentifierÍªÍ¸®gesturePatternÂÂÀV«IfStatementÍÎÍ:W°BinaryExpressionÍÒÍôY°MemberExpressionÍÒÍæLªIdentifierÍÒÍØ¦paramsLªIdentifierÍÙÍæ­gesturePointsÂÂ£!==LªIdentifierÍëÍô©undefinedM®BlockStatementÍöÍ:‘S³ExpressionStatementÍÍ/X´AssignmentExpressionÍÍ.¡=Y°MemberExpressionÍÍU®ThisExpressionÍÍ	LªIdentifierÍ
+Í­gesturePointsÂÂY°MemberExpressionÍÍ.LªIdentifierÍÍ ¦paramsLªIdentifierÍ!Í.­gesturePointsÂÂÀV«IfStatementÍDÍ¤W°BinaryExpressionÍHÍfY°MemberExpressionÍHÍXLªIdentifierÍHÍN¦paramsLªIdentifierÍOÍX©codeReadyÂÂ£!==LªIdentifierÍ]Íf©undefinedM®BlockStatementÍhÍ¤‘S³ExpressionStatementÍwÍ™X´AssignmentExpressionÍwÍ˜¡=Y°MemberExpressionÍwÍ…U®ThisExpressionÍwÍ{LªIdentifierÍ|Í…©codeReadyÂÂY°MemberExpressionÍˆÍ˜LªIdentifierÍˆÍ¦paramsLªIdentifierÍÍ˜©codeReadyÂÂÀV«IfStatementÍ®Í	W°BinaryExpressionÍ²ÍĞY°MemberExpressionÍ²ÍÂLªIdentifierÍ²Í¸¦paramsLªIdentifierÍ¹ÍÂ©resultMsgÂÂ£!==LªIdentifierÍÇÍĞ©undefinedM®BlockStatementÍÒÍ	‘S³ExpressionStatementÍáÍ	X´AssignmentExpressionÍáÍ	¡=Y°MemberExpressionÍáÍïU®ThisExpressionÍáÍåLªIdentifierÍæÍï©resultMsgÂÂY°MemberExpressionÍòÍ	LªIdentifierÍòÍø¦paramsLªIdentifierÍùÍ	©resultMsgÂÂÀV«IfStatementÍ	Í	W°BinaryExpressionÍ	Í	=Y°MemberExpressionÍ	Í	/LªIdentifierÍ	Í	"¦paramsLªIdentifierÍ	#Í	/¬isValidatingÂÂ£!==LªIdentifierÍ	4Í	=©undefinedM®BlockStatementÍ	?Í	‘S³ExpressionStatementÍ	NÍ	vX´AssignmentExpressionÍ	NÍ	u¡=Y°MemberExpressionÍ	NÍ	_U®ThisExpressionÍ	NÍ	RLªIdentifierÍ	SÍ	_¬isValidatingÂÂY°MemberExpressionÍ	bÍ	uLªIdentifierÍ	bÍ	h¦paramsLªIdentifierÍ	iÍ	u¬isValidatingÂÂÀN°MethodDefinitionÍ	Í
+ÂÂLªIdentifierÍ	Í	¯updateStateVars¦methodO²FunctionExpressionÍ	Í
+ÀÂÂÂ‘LªIdentifierÍ	Í	¤¦paramsM®BlockStatementÍ	¦Í
+’S³ExpressionStatementÍ	±Í	ÜT®CallExpressionÍ	±Í	ÛY°MemberExpressionÍ	±Í	ÈY°MemberExpressionÍ	±Í	ÂU®ThisExpressionÍ	±Í	µLªIdentifierÍ	¶Í	Â¬__activityIdÂÂLªIdentifierÍ	ÃÍ	È¥resetÂÂ‘Y°MemberExpressionÍ	ÉÍ	ÚLªIdentifierÍ	ÉÍ	Ï¦paramsLªIdentifierÍ	ĞÍ	ÚªactivityIdÂÂÂS³ExpressionStatementÍ	æÍ
+T®CallExpressionÍ	æÍ
+Y°MemberExpressionÍ	æÍ	şY°MemberExpressionÍ	æÍ	øU®ThisExpressionÍ	æÍ	êLªIdentifierÍ	ëÍ	ø­__hostCookiesÂÂLªIdentifierÍ	ùÍ	ş¥resetÂÂ‘Y°MemberExpressionÍ	ÿÍ
+LªIdentifierÍ	ÿÍ
+¦paramsLªIdentifierÍ
+Í
+«hostCookiesÂÂÂN°MethodDefinitionÍ
+ ÍÂÂLªIdentifierÍ
+ Í
+AÙ!purgeVariableDependenciesOnElmtId¦methodO²FunctionExpressionÍ
+AÍÀÂÂÂ‘LªIdentifierÍ
+BÍ
+J¨rmElmtIdM®BlockStatementÍ
+LÍ—S³ExpressionStatementÍ
+WÍ
+‹T®CallExpressionÍ
+WÍ
+ŠY°MemberExpressionÍ
+WÍ
+€Y°MemberExpressionÍ
+WÍ
+hU®ThisExpressionÍ
+WÍ
+[LªIdentifierÍ
+\Í
+h¬__activityIdÂÂLªIdentifierÍ
+iÍ
+€·purgeDependencyOnElmtIdÂÂ‘LªIdentifierÍ
+Í
+‰¨rmElmtIdÂS³ExpressionStatementÍ
+•Í
+ÊT®CallExpressionÍ
+•Í
+ÉY°MemberExpressionÍ
+•Í
+¿Y°MemberExpressionÍ
+•Í
+§U®ThisExpressionÍ
+•Í
+™LªIdentifierÍ
+šÍ
+§­__hostCookiesÂÂLªIdentifierÍ
+¨Í
+¿·purgeDependencyOnElmtIdÂÂ‘LªIdentifierÍ
+ÀÍ
+È¨rmElmtIdÂS³ExpressionStatementÍ
+ÔÍT®CallExpressionÍ
+ÔÍY°MemberExpressionÍ
+ÔÍY°MemberExpressionÍ
+ÔÍ
+éU®ThisExpressionÍ
+ÔÍ
+ØLªIdentifierÍ
+ÙÍ
+é°__gesturePatternÂÂLªIdentifierÍ
+êÍ·purgeDependencyOnElmtIdÂÂ‘LªIdentifierÍÍ
+¨rmElmtIdÂS³ExpressionStatementÍÍMT®CallExpressionÍÍLY°MemberExpressionÍÍBY°MemberExpressionÍÍ*U®ThisExpressionÍÍLªIdentifierÍÍ*¯__gesturePointsÂÂLªIdentifierÍ+ÍB·purgeDependencyOnElmtIdÂÂ‘LªIdentifierÍCÍK¨rmElmtIdÂS³ExpressionStatementÍWÍŠT®CallExpressionÍWÍ‰Y°MemberExpressionÍWÍY°MemberExpressionÍWÍgU®ThisExpressionÍWÍ[LªIdentifierÍ\Íg«__codeReadyÂÂLªIdentifierÍhÍ·purgeDependencyOnElmtIdÂÂ‘LªIdentifierÍ€Íˆ¨rmElmtIdÂS³ExpressionStatementÍ”ÍÇT®CallExpressionÍ”ÍÆY°MemberExpressionÍ”Í¼Y°MemberExpressionÍ”Í¤U®ThisExpressionÍ”Í˜LªIdentifierÍ™Í¤«__resultMsgÂÂLªIdentifierÍ¥Í¼·purgeDependencyOnElmtIdÂÂ‘LªIdentifierÍ½ÍÅ¨rmElmtIdÂS³ExpressionStatementÍÑÍT®CallExpressionÍÑÍY°MemberExpressionÍÑÍüY°MemberExpressionÍÑÍäU®ThisExpressionÍÑÍÕLªIdentifierÍÖÍä®__isValidatingÂÂLªIdentifierÍåÍü·purgeDependencyOnElmtIdÂÂ‘LªIdentifierÍıÍ¨rmElmtIdÂN°MethodDefinitionÍÍàÂÂLªIdentifierÍÍ$°aboutToBeDeleted¦methodO²FunctionExpressionÍ$ÍàÀÂÂÂM®BlockStatementÍ'Íà™S³ExpressionStatementÍ2ÍWT®CallExpressionÍ2ÍVY°MemberExpressionÍ2ÍTY°MemberExpressionÍ2ÍCU®ThisExpressionÍ2Í6LªIdentifierÍ7ÍC¬__activityIdÂÂLªIdentifierÍDÍT°aboutToBeDeletedÂÂÂS³ExpressionStatementÍaÍ‡T®CallExpressionÍaÍ†Y°MemberExpressionÍaÍ„Y°MemberExpressionÍaÍsU®ThisExpressionÍaÍeLªIdentifierÍfÍs­__hostCookiesÂÂLªIdentifierÍtÍ„°aboutToBeDeletedÂÂÂS³ExpressionStatementÍ‘ÍºT®CallExpressionÍ‘Í¹Y°MemberExpressionÍ‘Í·Y°MemberExpressionÍ‘Í¦U®ThisExpressionÍ‘Í•LªIdentifierÍ–Í¦°__gesturePatternÂÂLªIdentifierÍ§Í·°aboutToBeDeletedÂÂÂS³ExpressionStatementÍÄÍìT®CallExpressionÍÄÍëY°MemberExpressionÍÄÍéY°MemberExpressionÍÄÍØU®ThisExpressionÍÄÍÈLªIdentifierÍÉÍØ¯__gesturePointsÂÂLªIdentifierÍÙÍé°aboutToBeDeletedÂÂÂS³ExpressionStatementÍöÍT®CallExpressionÍöÍY°MemberExpressionÍöÍY°MemberExpressionÍöÍU®ThisExpressionÍöÍúLªIdentifierÍûÍ«__codeReadyÂÂLªIdentifierÍÍ°aboutToBeDeletedÂÂÂS³ExpressionStatementÍ$ÍHT®CallExpressionÍ$ÍGY°MemberExpressionÍ$ÍEY°MemberExpressionÍ$Í4U®ThisExpressionÍ$Í(LªIdentifierÍ)Í4«__resultMsgÂÂLªIdentifierÍ5ÍE°aboutToBeDeletedÂÂÂS³ExpressionStatementÍRÍyT®CallExpressionÍRÍxY°MemberExpressionÍRÍvY°MemberExpressionÍRÍeU®ThisExpressionÍRÍVLªIdentifierÍWÍe®__isValidatingÂÂLªIdentifierÍfÍv°aboutToBeDeletedÂÂÂS³ExpressionStatementÍƒÍ¯T®CallExpressionÍƒÍ®Y°MemberExpressionÍƒÍ¡T®CallExpressionÍƒÍšY°MemberExpressionÍƒÍ˜LªIdentifierÍƒÍ”±SubscriberManagerLªIdentifierÍ•Í˜£GetÂÂÂLªIdentifierÍ›Í¡¦deleteÂÂ‘T®CallExpressionÍ¢Í­Y°MemberExpressionÍ¢Í«U®ThisExpressionÍ¢Í¦LªIdentifierÍ§Í«¤id__ÂÂÂÂS³ExpressionStatementÍ¹ÍÙT®CallExpressionÍ¹ÍØY°MemberExpressionÍ¹ÍÖU®ThisExpressionÍ¹Í½LªIdentifierÍ¾ÍÖ¸aboutToBeDeletedInternalÂÂÂN°MethodDefinitionÍæÍ(ÂÂLªIdentifierÍêÍôªactivityId£getO²FunctionExpressionÍôÍ(ÀÂÂÂM®BlockStatementÍ÷Í(‘Ôr\”¤type¥start£end¨argument¯ReturnStatementÍÍ!T®CallExpressionÍ	Í Y°MemberExpressionÍ	ÍY°MemberExpressionÍ	ÍU®ThisExpressionÍ	ÍLªIdentifierÍÍ¬__activityIdÂÂLªIdentifierÍÍ£getÂÂÂN°MethodDefinitionÍ.ÍyÂÂLªIdentifierÍ2Í<ªactivityId£setO²FunctionExpressionÍ<ÍyÀÂÂÂ‘LªIdentifierÍ=ÍE¨newValueM®BlockStatementÍGÍy‘S³ExpressionStatementÍRÍrT®CallExpressionÍRÍqY°MemberExpressionÍRÍgY°MemberExpressionÍRÍcU®ThisExpressionÍRÍVLªIdentifierÍWÍc¬__activityIdÂÂLªIdentifierÍdÍg£setÂÂ‘LªIdentifierÍhÍp¨newValueÂN°MethodDefinitionÍÍÃÂÂLªIdentifierÍƒÍ«hostCookies£getO²FunctionExpressionÍÍÃÀÂÂÂM®BlockStatementÍ‘ÍÃ‘\¯ReturnStatementÍœÍ¼T®CallExpressionÍ£Í»Y°MemberExpressionÍ£Í¹Y°MemberExpressionÍ£ÍµU®ThisExpressionÍ£Í§LªIdentifierÍ¨Íµ­__hostCookiesÂÂLªIdentifierÍ¶Í¹£getÂÂÂN°MethodDefinitionÍÉÍÂÂLªIdentifierÍÍÍØ«hostCookies£setO²FunctionExpressionÍØÍÀÂÂÂ‘LªIdentifierÍÙÍá¨newValueM®BlockStatementÍãÍ‘S³ExpressionStatementÍîÍT®CallExpressionÍîÍY°MemberExpressionÍîÍY°MemberExpressionÍîÍ U®ThisExpressionÍîÍòLªIdentifierÍóÍ ­__hostCookiesÂÂLªIdentifierÍÍ£setÂÂ‘LªIdentifierÍÍ¨newValueÂN°MethodDefinitionÍÍfÂÂLªIdentifierÍ Í.®gesturePattern£getO²FunctionExpressionÍ.ÍfÀÂÂÂM®BlockStatementÍ1Íf‘\¯ReturnStatementÍ<Í_T®CallExpressionÍCÍ^Y°MemberExpressionÍCÍ\Y°MemberExpressionÍCÍXU®ThisExpressionÍCÍGLªIdentifierÍHÍX°__gesturePatternÂÂLªIdentifierÍYÍ\£getÂÂÂN°MethodDefinitionÍlÍ¿ÂÂLªIdentifierÍpÍ~®gesturePattern£setO²FunctionExpressionÍ~Í¿ÀÂÂÂ‘LªIdentifierÍÍ‡¨newValueM®BlockStatementÍ‰Í¿‘S³ExpressionStatementÍ”Í¸T®CallExpressionÍ”Í·Y°MemberExpressionÍ”Í­Y°MemberExpressionÍ”Í©U®ThisExpressionÍ”Í˜LªIdentifierÍ™Í©°__gesturePatternÂÂLªIdentifierÍªÍ­£setÂÂ‘LªIdentifierÍ®Í¶¨newValueÂN°MethodDefinitionÍÅÍÂÂLªIdentifierÍÉÍÖ­gesturePoints£getO²FunctionExpressionÍÖÍÀÂÂÂM®BlockStatementÍÙÍ‘\¯ReturnStatementÍäÍT®CallExpressionÍëÍY°MemberExpressionÍëÍY°MemberExpressionÍëÍÿU®ThisExpressionÍëÍïLªIdentifierÍğÍÿ¯__gesturePointsÂÂLªIdentifierÍ Í£getÂÂÂN°MethodDefinitionÍÍdÂÂLªIdentifierÍÍ$­gesturePoints£setO²FunctionExpressionÍ$ÍdÀÂÂÂ‘LªIdentifierÍ%Í-¨newValueM®BlockStatementÍ/Íd‘S³ExpressionStatementÍ:Í]T®CallExpressionÍ:Í\Y°MemberExpressionÍ:ÍRY°MemberExpressionÍ:ÍNU®ThisExpressionÍ:Í>LªIdentifierÍ?ÍN¯__gesturePointsÂÂLªIdentifierÍOÍR£setÂÂ‘LªIdentifierÍSÍ[¨newValueÂN°MethodDefinitionÍjÍªÂÂLªIdentifierÍnÍw©codeReady£getO²FunctionExpressionÍwÍªÀÂÂÂM®BlockStatementÍzÍª‘\¯ReturnStatementÍ…Í£T®CallExpressionÍŒÍ¢Y°MemberExpressionÍŒÍ Y°MemberExpressionÍŒÍœU®ThisExpressionÍŒÍLªIdentifierÍ‘Íœ«__codeReadyÂÂLªIdentifierÍÍ £getÂÂÂN°MethodDefinitionÍ°ÍùÂÂLªIdentifierÍ´Í½©codeReady£setO²FunctionExpressionÍ½ÍùÀÂÂÂ‘LªIdentifierÍ¾ÍÆ¨newValueM®BlockStatementÍÈÍù‘S³ExpressionStatementÍÓÍòT®CallExpressionÍÓÍñY°MemberExpressionÍÓÍçY°MemberExpressionÍÓÍãU®ThisExpressionÍÓÍ×LªIdentifierÍØÍã«__codeReadyÂÂLªIdentifierÍäÍç£setÂÂ‘LªIdentifierÍèÍğ¨newValueÂN°MethodDefinitionÍÿÍ?ÂÂLªIdentifierÍÍ©resultMsg£getO²FunctionExpressionÍÍ?ÀÂÂÂM®BlockStatementÍÍ?‘\¯ReturnStatementÍÍ8T®CallExpressionÍ!Í7Y°MemberExpressionÍ!Í5Y°MemberExpressionÍ!Í1U®ThisExpressionÍ!Í%LªIdentifierÍ&Í1«__resultMsgÂÂLªIdentifierÍ2Í5£getÂÂÂN°MethodDefinitionÍEÍÂÂLªIdentifierÍIÍR©resultMsg£setO²FunctionExpressionÍRÍÀÂÂÂ‘LªIdentifierÍSÍ[¨newValueM®BlockStatementÍ]Í‘S³ExpressionStatementÍhÍ‡T®CallExpressionÍhÍ†Y°MemberExpressionÍhÍ|Y°MemberExpressionÍhÍxU®ThisExpressionÍhÍlLªIdentifierÍmÍx«__resultMsgÂÂLªIdentifierÍyÍ|£setÂÂ‘LªIdentifierÍ}Í…¨newValueÂN°MethodDefinitionÍ”ÍÚÂÂLªIdentifierÍ˜Í¤¬isValidating£getO²FunctionExpressionÍ¤ÍÚÀÂÂÂM®BlockStatementÍ§ÍÚ‘\¯ReturnStatementÍ²ÍÓT®CallExpressionÍ¹ÍÒY°MemberExpressionÍ¹ÍĞY°MemberExpressionÍ¹ÍÌU®ThisExpressionÍ¹Í½LªIdentifierÍ¾ÍÌ®__isValidatingÂÂLªIdentifierÍÍÍĞ£getÂÂÂN°MethodDefinitionÍàÍ/ÂÂLªIdentifierÍäÍğ¬isValidating£setO²FunctionExpressionÍğÍ/ÀÂÂÂ‘LªIdentifierÍñÍù¨newValueM®BlockStatementÍûÍ/‘S³ExpressionStatementÍÍ(T®CallExpressionÍÍ'Y°MemberExpressionÍÍY°MemberExpressionÍÍU®ThisExpressionÍÍ
+LªIdentifierÍÍ®__isValidatingÂÂLªIdentifierÍÍ£setÂÂ‘LªIdentifierÍÍ&¨newValueÂN°MethodDefinitionÍZÍ ÂÂLªIdentifierÍZÍb¨centerOf¦methodO²FunctionExpressionÍbÍ ÀÂÂÂ‘LªIdentifierÍcÍj§pointNoM®BlockStatementÍlÍ ’Ôr]•¤type¥start£end¬declarations¤kind³VariableDeclarationÍwÍ‘Ôr^•¤type¥start£end¢id¤init²VariableDeclaratorÍ}ÍLªIdentifierÍ}Í€£idxW°BinaryExpressionÍƒÍLªIdentifierÍƒÍŠ§pointNo¡-R§LiteralÍÍ¡1¥const\¯ReturnStatementÍ™Íù[¯ArrayExpressionÍ Íø’W°BinaryExpressionÍ¡ÍÆLªIdentifierÍ¡Í­¬FIRST_CENTER¡+W°BinaryExpressionÍ°ÍÆW°BinaryExpressionÍ±Í¸LªIdentifierÍ±Í´£idx¡%R§LiteralÍ·Í¸¡3¡*LªIdentifierÍ¼ÍÆªCELL_PITCHW°BinaryExpressionÍÈÍ÷LªIdentifierÍÈÍÔ¬FIRST_CENTER¡+W°BinaryExpressionÍ×Í÷T®CallExpressionÍ×ÍêY°MemberExpressionÍ×ÍáLªIdentifierÍ×ÍÛ¤MathLªIdentifierÍÜÍá¥floorÂÂ‘W°BinaryExpressionÍâÍéLªIdentifierÍâÍå£idx¡/R§LiteralÍèÍé¡3Â¡*LªIdentifierÍíÍ÷ªCELL_PITCHN°MethodDefinitionÍÍaÂÂLªIdentifierÍÍ®polylinePoints¦methodO²FunctionExpressionÍÍaÀÂÂÂM®BlockStatementÍÍa‘\¯ReturnStatementÍ"ÍZT®CallExpressionÍ)ÍYY°MemberExpressionÍ)Í@Y°MemberExpressionÍ)Í<U®ThisExpressionÍ)Í-LªIdentifierÍ.Í<®gesturePatternÂÂLªIdentifierÍ=Í@£mapÂÂ‘O·ArrowFunctionExpressionÍAÍXÀÃÂÂ‘LªIdentifierÍBÍC¡nT®CallExpressionÍHÍXY°MemberExpressionÍHÍUU®ThisExpressionÍHÍLLªIdentifierÍMÍU¨centerOfÂÂ‘LªIdentifierÍVÍW¡nÂÂN°MethodDefinitionÍÍˆÂÂLªIdentifierÍÍ—§hitTest¦methodO²FunctionExpressionÍ—ÍˆÀÂÂÂ’LªIdentifierÍ˜Í™¡xLªIdentifierÍ›Íœ¡yM®BlockStatementÍÍˆ—]³VariableDeclarationÍ©Íá‘^²VariableDeclaratorÍ¯ÍàLªIdentifierÍ¯Í²£colT®CallExpressionÍµÍàY°MemberExpressionÍµÍ¿LªIdentifierÍµÍ¹¤MathLªIdentifierÍºÍ¿¥roundÂÂ‘W°BinaryExpressionÍÀÍßW°BinaryExpressionÍÁÍÑLªIdentifierÍÁÍÂ¡x¡-LªIdentifierÍÅÍÑ¬FIRST_CENTER¡/LªIdentifierÍÕÍßªCELL_PITCHÂ¥const]³VariableDeclarationÍëÍ#‘^²VariableDeclaratorÍñÍ"LªIdentifierÍñÍô£rowT®CallExpressionÍ÷Í"Y°MemberExpressionÍ÷ÍLªIdentifierÍ÷Íû¤MathLªIdentifierÍüÍ¥roundÂÂ‘W°BinaryExpressionÍÍ!W°BinaryExpressionÍÍLªIdentifierÍÍ¡y¡-LªIdentifierÍÍ¬FIRST_CENTER¡/LªIdentifierÍÍ!ªCELL_PITCHÂ¥constV«IfStatementÍ-Í~W±LogicalExpressionÍ1ÍYW±LogicalExpressionÍ1ÍNW±LogicalExpressionÍ1ÍCW°BinaryExpressionÍ1Í8LªIdentifierÍ1Í4£col¡<R§LiteralÍ7Í8 ¡0¢||W°BinaryExpressionÍ<ÍCLªIdentifierÍ<Í?£col¡>R§LiteralÍBÍC¡2¢||W°BinaryExpressionÍGÍNLªIdentifierÍGÍJ£row¡<R§LiteralÍMÍN ¡0¢||W°BinaryExpressionÍRÍYLªIdentifierÍRÍU£row¡>R§LiteralÍXÍY¡2M®BlockStatementÍ[Í~‘\¯ReturnStatementÍjÍsR§LiteralÍqÍr ¡0À]³VariableDeclarationÍˆÍ³‘^²VariableDeclaratorÍÍ²LªIdentifierÍÍ¢cxW°BinaryExpressionÍ“Í²LªIdentifierÍ“ÍŸ¬FIRST_CENTER¡+W°BinaryExpressionÍ¢Í²LªIdentifierÍ¢Í¥£col¡*LªIdentifierÍ¨Í²ªCELL_PITCH¥const]³VariableDeclarationÍ½Íè‘^²VariableDeclaratorÍÃÍçLªIdentifierÍÃÍÅ¢cyW°BinaryExpressionÍÈÍçLªIdentifierÍÈÍÔ¬FIRST_CENTER¡+W°BinaryExpressionÍ×ÍçLªIdentifierÍ×ÍÚ£row¡*LªIdentifierÍİÍçªCELL_PITCH¥constV«IfStatementÍòÍ^W°BinaryExpressionÍöÍ9W°BinaryExpressionÍöÍW°BinaryExpressionÍöÍ	W°BinaryExpressionÍ÷ÍıLªIdentifierÍ÷Íø¡x¡-LªIdentifierÍûÍı¢cx¡*W°BinaryExpressionÍÍLªIdentifierÍÍ¡x¡-LªIdentifierÍÍ¢cx¡+W°BinaryExpressionÍÍW°BinaryExpressionÍÍLªIdentifierÍÍ¡y¡-LªIdentifierÍÍ¢cy¡*W°BinaryExpressionÍÍLªIdentifierÍÍ¡y¡-LªIdentifierÍÍ¢cy¡>W°BinaryExpressionÍ"Í9LªIdentifierÍ"Í,ªHIT_RADIUS¡*LªIdentifierÍ/Í9ªHIT_RADIUSM®BlockStatementÍ;Í^‘\¯ReturnStatementÍJÍSR§LiteralÍQÍR ¡0À\¯ReturnStatementÍhÍW°BinaryExpressionÍoÍ€W°BinaryExpressionÍoÍ|W°BinaryExpressionÍoÍvLªIdentifierÍoÍr£row¡*R§LiteralÍuÍv¡3¡+LªIdentifierÍyÍ|£col¡+R§LiteralÍÍ€¡1N°MethodDefinitionÍÍÂÂLªIdentifierÍÍ–¨addPoint¦methodO²FunctionExpressionÍ–ÍÀÂÂÂ‘LªIdentifierÍ—Í§pointNoM®BlockStatementÍ Í’V«IfStatementÍ«ÍW±LogicalExpressionÍ¯ÍìW±LogicalExpressionÍ¯ÍÍY°MemberExpressionÍ¯Í½U®ThisExpressionÍ¯Í³LªIdentifierÍ´Í½©codeReadyÂÂ¢||W°BinaryExpressionÍÁÍÍLªIdentifierÍÁÍÈ§pointNo¢<=R§LiteralÍÌÍÍ ¡0¢||W°BinaryExpressionÍÑÍìLªIdentifierÍÑÍØ§pointNo¡>LªIdentifierÍÛÍì±GESTURE_GRID_SIZEM®BlockStatementÍîÍ‘\¯ReturnStatementÍıÍÀÀV«IfStatementÍÍQ¯UnaryExpressionÍÍ=¡!ÃY°MemberExpressionÍÍ=Y°MemberExpressionÍÍ0U®ThisExpressionÍÍ"LªIdentifierÍ#Í0­gesturePointsÂÂW°BinaryExpressionÍ1Í<LªIdentifierÍ1Í8§pointNo¡-R§LiteralÍ;Í<¡1ÃÂM®BlockStatementÍ?Í“S³ExpressionStatementÍNÍuX´AssignmentExpressionÍNÍt¡=Y°MemberExpressionÍNÍmY°MemberExpressionÍNÍ`U®ThisExpressionÍNÍRLªIdentifierÍSÍ`­gesturePointsÂÂW°BinaryExpressionÍaÍlLªIdentifierÍaÍh§pointNo¡-R§LiteralÍkÍl¡1ÃÂR§LiteralÍpÍtÃ¤trueS³ExpressionStatementÍƒÍ¥T®CallExpressionÍƒÍ¤Y°MemberExpressionÍƒÍ›Y°MemberExpressionÍƒÍ–U®ThisExpressionÍƒÍ‡LªIdentifierÍˆÍ–®gesturePatternÂÂLªIdentifierÍ—Í›¤pushÂÂ‘LªIdentifierÍœÍ£§pointNoÂS³ExpressionStatementÍ³ÍT®CallExpressionÍ³Í Y°MemberExpressionÍ³Í¾LªIdentifierÍ³Í¸¥hilogLªIdentifierÍ¹Í¾¥debugÂÂ“LªIdentifierÍ¿ÍÅ¦DOMAINLªIdentifierÍÇÍÊ£TAGÔr_•¤type¥start£end«expressions¦quasis¯TemplateLiteralÍÌÍÿ‘T®CallExpressionÍàÍıY°MemberExpressionÍàÍøY°MemberExpressionÍàÍóU®ThisExpressionÍàÍäLªIdentifierÍåÍó®gesturePatternÂÂLªIdentifierÍôÍø¤joinÂÂ‘R§LiteralÍùÍü¡,£','Â’Ôr`•¤type¥start£end¥value¤tail¯TemplateElementÍÍÍŞÔra’£raw¦cooked±Gesture pattern: ±Gesture pattern: Â`¯TemplateElementÍşÍşa  ÃÂÀN°MethodDefinitionÍÍ_ÂÂLªIdentifierÍÍ,³onGesturePointClick¦methodO²FunctionExpressionÍ,Í_ÀÂÂÂ‘LªIdentifierÍ-Í2¥indexM®BlockStatementÍ4Í_‘S³ExpressionStatementÍ?ÍXT®CallExpressionÍ?ÍWY°MemberExpressionÍ?ÍLU®ThisExpressionÍ?ÍCLªIdentifierÍDÍL¨addPointÂÂ‘W°BinaryExpressionÍMÍVLªIdentifierÍMÍR¥index¡+R§LiteralÍUÍV¡1ÂN°MethodDefinitionÍÍÂÂLªIdentifierÍÍª¬onTouchPoint¦methodO²FunctionExpressionÍªÍÀÂÂÂ‘LªIdentifierÍ«Í°¥eventM®BlockStatementÍ²Í•V«IfStatementÍ½ÍæW±LogicalExpressionÍÁÍÿW°BinaryExpressionÍÁÍÜY°MemberExpressionÍÁÍËLªIdentifierÍÁÍÆ¥eventLªIdentifierÍÇÍË¤typeÂÂ£===Y°MemberExpressionÍĞÍÜLªIdentifierÍĞÍÙ©TouchTypeLªIdentifierÍÚÍÜ¢UpÂÂ¢||W°BinaryExpressionÍàÍÿY°MemberExpressionÍàÍêLªIdentifierÍàÍå¥eventLªIdentifierÍæÍê¤typeÂÂ£===Y°MemberExpressionÍïÍÿLªIdentifierÍïÍø©TouchTypeLªIdentifierÍùÍÿ¦CancelÂÂM®BlockStatementÍÍæ’V«IfStatementÍBÍÆW±LogicalExpressionÍFÍW±LogicalExpressionÍFÍwW°BinaryExpressionÍFÍdY°MemberExpressionÍFÍ`Y°MemberExpressionÍFÍYU®ThisExpressionÍFÍJLªIdentifierÍKÍY®gesturePatternÂÂLªIdentifierÍZÍ`¦lengthÂÂ¡>R§LiteralÍcÍd ¡0¢&&Q¯UnaryExpressionÍhÍw¡!ÃY°MemberExpressionÍiÍwU®ThisExpressionÍiÍmLªIdentifierÍnÍw©codeReadyÂÂ¢&&Q¯UnaryExpressionÍ{Í¡!ÃY°MemberExpressionÍ|ÍU®ThisExpressionÍ|Í€LªIdentifierÍÍ¬isValidatingÂÂM®BlockStatementÍÍÆ‘S³ExpressionStatementÍ¢Í·T®CallExpressionÍ¢Í¶Y°MemberExpressionÍ¢Í´U®ThisExpressionÍ¢Í¦LªIdentifierÍ§Í´­submitGestureÂÂÂÀ\¯ReturnStatementÍÔÍÛÀÀV«IfStatementÍğÍUW±LogicalExpressionÍôÍ2W°BinaryExpressionÍôÍY°MemberExpressionÍôÍşLªIdentifierÍôÍù¥eventLªIdentifierÍúÍş¤typeÂÂ£!==Y°MemberExpressionÍÍLªIdentifierÍÍ©TouchTypeLªIdentifierÍÍ¤DownÂÂ¢&&W°BinaryExpressionÍÍ2Y°MemberExpressionÍÍLªIdentifierÍÍ¥eventLªIdentifierÍÍ¤typeÂÂ£!==Y°MemberExpressionÍ$Í2LªIdentifierÍ$Í-©TouchTypeLªIdentifierÍ.Í2¤MoveÂÂM®BlockStatementÍ4ÍU‘\¯ReturnStatementÍCÍJÀÀV«IfStatementÍ_Í W°BinaryExpressionÍcÍ}Y°MemberExpressionÍcÍwY°MemberExpressionÍcÍpLªIdentifierÍcÍh¥eventLªIdentifierÍiÍp§touchesÂÂLªIdentifierÍqÍw¦lengthÂÂ£===R§LiteralÍ|Í} ¡0M®BlockStatementÍÍ ‘\¯ReturnStatementÍÍ•ÀÀ]³VariableDeclarationÍªÍÉ‘^²VariableDeclaratorÍ°ÍÈLªIdentifierÍ°Íµ¥touchY°MemberExpressionÍ¸ÍÈY°MemberExpressionÍ¸ÍÅLªIdentifierÍ¸Í½¥eventLªIdentifierÍ¾ÍÅ§touchesÂÂR§LiteralÍÆÍÇ ¡0ÃÂ¥constS³ExpressionStatementÍÓÍT®CallExpressionÍÓÍ Y°MemberExpressionÍÓÍàU®ThisExpressionÍÓÍ×LªIdentifierÍØÍà¨addPointÂÂ‘T®CallExpressionÍáÍÿY°MemberExpressionÍáÍíU®ThisExpressionÍáÍåLªIdentifierÍæÍí§hitTestÂÂ’Y°MemberExpressionÍîÍõLªIdentifierÍîÍó¥touchLªIdentifierÍôÍõ¡xÂÂY°MemberExpressionÍ÷ÍşLªIdentifierÍ÷Íü¥touchLªIdentifierÍıÍş¡yÂÂÂÂN°MethodDefinitionÍÍÂÂLªIdentifierÍÍ¬resetGesture¦methodO²FunctionExpressionÍÍÀÂÂÂM®BlockStatementÍÍ”S³ExpressionStatementÍ(ÍbX´AssignmentExpressionÍ(Ía¡=Y°MemberExpressionÍ(Í:U®ThisExpressionÍ(Í,LªIdentifierÍ-Í:­gesturePointsÂÂT®CallExpressionÍ=ÍaY°MemberExpressionÍ=ÍZT®CallExpressionÍ=ÍULªIdentifierÍ=ÍB¥Array‘LªIdentifierÍCÍT±GESTURE_GRID_SIZEÂLªIdentifierÍVÍZ¤fillÂÂ‘R§LiteralÍ[Í`Â¥falseÂS³ExpressionStatementÍlÍ…X´AssignmentExpressionÍlÍ„¡=Y°MemberExpressionÍlÍU®ThisExpressionÍlÍpLªIdentifierÍqÍ®gesturePatternÂÂ[¯ArrayExpressionÍ‚Í„S³ExpressionStatementÍÍ£X´AssignmentExpressionÍÍ¢¡=Y°MemberExpressionÍÍU®ThisExpressionÍÍ“LªIdentifierÍ”Í©resultMsgÂÂR§LiteralÍ Í¢ ¢''V«IfStatementÍ­ÍY°MemberExpressionÍ±Í¿U®ThisExpressionÍ±ÍµLªIdentifierÍ¶Í¿©codeReadyÂÂM®BlockStatementÍÁÍ’S³ExpressionStatementÍĞÍçX´AssignmentExpressionÍĞÍæ¡=Y°MemberExpressionÍĞÍŞU®ThisExpressionÍĞÍÔLªIdentifierÍÕÍŞ©codeReadyÂÂR§LiteralÍáÍæÂ¥falseS³ExpressionStatementÍõÍS¯ChainExpressionÍõÍ
+T®CallExpressionÍõÍ
+Y°MemberExpressionÍõÍU®ThisExpressionÍõÍùLªIdentifierÍúÍªonSignCodeÂÂ‘R§LiteralÍÍ	 ¢''ÃÀN°MethodDefinitionÍ#ÍÖÂÂLªIdentifierÍ)Í6­submitGesture¦methodO²FunctionExpressionÍ6ÍÖÀÂÂÃM®BlockStatementÍ9ÍÖ’V«IfStatementÍDÍÆW°BinaryExpressionÍHÍhY°MemberExpressionÍHÍbY°MemberExpressionÍHÍ[U®ThisExpressionÍHÍLLªIdentifierÍMÍ[®gesturePatternÂÂLªIdentifierÍ\Íb¦lengthÂÂ£===R§LiteralÍgÍh ¡0M®BlockStatementÍjÍÆ’S³ExpressionStatementÍyÍ¦T®CallExpressionÍyÍ¥Y°MemberExpressionÍyÍLªIdentifierÍyÍ…¬promptActionLªIdentifierÍ†Í©showToastÂÂ‘Ôrb”¤type¥start£endªproperties°ObjectExpressionÍÍ¤‘Ôrc™¤type¥start£end¦method©shorthand¨computed£key¥value¤kind¨PropertyÍ’Í¢ÂÂÂLªIdentifierÍ’Í™§messageR§LiteralÍ›Í¢¯è¯·ç»˜åˆ¶æ‰‹åŠ¿±'è¯·ç»˜åˆ¶æ‰‹åŠ¿'¤initÂ\¯ReturnStatementÍ´Í»ÀÀÔrd–¤type¥start£end¥block§handler©finalizer¬TryStatementÍĞÍÏM®BlockStatementÍÔÍã—S³ExpressionStatementÍãÍüX´AssignmentExpressionÍãÍû¡=Y°MemberExpressionÍãÍôU®ThisExpressionÍãÍçLªIdentifierÍèÍô¬isValidatingÂÂR§LiteralÍ÷ÍûÃ¤true]³VariableDeclarationÍ
+Í;‘^²VariableDeclaratorÍÍ:LªIdentifierÍÍ«gestureCodeT®CallExpressionÍÍ:Y°MemberExpressionÍÍ6Y°MemberExpressionÍÍ1U®ThisExpressionÍÍ"LªIdentifierÍ#Í1®gesturePatternÂÂLªIdentifierÍ2Í6¤joinÂÂ‘R§LiteralÍ7Í9 ¢''Â¥const]³VariableDeclarationÍIÍ¤‘^²VariableDeclaratorÍOÍ£LªIdentifierÍOÍX©isCorrect\¯AwaitExpressionÍ[Í£T®CallExpressionÍaÍ£Y°MemberExpressionÍaÍsLªIdentifierÍaÍe¤SignLªIdentifierÍfÍs­CheckSignCodeÂÂ“Y°MemberExpressionÍtÍ„U®ThisExpressionÍtÍxLªIdentifierÍyÍ„«hostCookiesÂÂY°MemberExpressionÍ†Í•U®ThisExpressionÍ†ÍŠLªIdentifierÍ‹Í•ªactivityIdÂÂLªIdentifierÍ—Í¢«gestureCodeÂ¥constV«IfStatementÍ²ÍUQ¯UnaryExpressionÍ¶ÍÀ¡!ÃLªIdentifierÍ·ÍÀ©isCorrectM®BlockStatementÍÂÍU“S³ExpressionStatementÍÕÍT®CallExpressionÍÕÍY°MemberExpressionÍÕÍëLªIdentifierÍÕÍá¬promptActionLªIdentifierÍâÍë©showToastÂÂ‘b°ObjectExpressionÍìÍ‘c¨PropertyÍîÍÂÂÂLªIdentifierÍîÍõ§messageR§LiteralÍ÷Í¾æ‰‹åŠ¿é”™è¯¯ï¼Œè¯·é‡æ–°ç»˜åˆ¶Ù 'æ‰‹åŠ¿é”™è¯¯ï¼Œè¯·é‡æ–°ç»˜åˆ¶'¤initÂS³ExpressionStatementÍÍ-T®CallExpressionÍÍ,Y°MemberExpressionÍÍ*U®ThisExpressionÍÍLªIdentifierÍÍ*¬resetGestureÂÂÂ\¯ReturnStatementÍ?ÍFÀÀS³ExpressionStatementÍcÍ‡X´AssignmentExpressionÍcÍ†¡=Y°MemberExpressionÍcÍqU®ThisExpressionÍcÍgLªIdentifierÍhÍq©resultMsgÂÂR§LiteralÍtÍ†Ù0æ‰‹åŠ¿æ ¡éªŒé€šè¿‡ï¼Œè¯·ç‚¹å‡»ä¸‹æ–¹æŒ‰é’®ç­¾åˆ°Ù2'æ‰‹åŠ¿æ ¡éªŒé€šè¿‡ï¼Œè¯·ç‚¹å‡»ä¸‹æ–¹æŒ‰é’®ç­¾åˆ°'S³ExpressionStatementÍ•Í«X´AssignmentExpressionÍ•Íª¡=Y°MemberExpressionÍ•Í£U®ThisExpressionÍ•Í™LªIdentifierÍšÍ£©codeReadyÂÂR§LiteralÍ¦ÍªÃ¤trueS³ExpressionStatementÍ¹ÍØS¯ChainExpressionÍ¹Í×T®CallExpressionÍ¹Í×Y°MemberExpressionÍ¹ÍÈU®ThisExpressionÍ¹Í½LªIdentifierÍ¾ÍÈªonSignCodeÂÂ‘LªIdentifierÍËÍÖ«gestureCodeÃÔre•¤type¥start£end¥param¤body«CatchClauseÍíÍ‰LªIdentifierÍôÍõ¡eM®BlockStatementÍ÷Í‰’S³ExpressionStatementÍÍHT®CallExpressionÍÍGY°MemberExpressionÍÍLªIdentifierÍÍ¥hilogLªIdentifierÍÍ¥errorÂÂ“LªIdentifierÍÍ¦DOMAINLªIdentifierÍÍ£TAG_¯TemplateLiteralÍÍF‘Y°MemberExpressionÍ;ÍDLªIdentifierÍ;Í<¡eLªIdentifierÍ=ÍD§messageÂÂ’`¯TemplateElementÍ Í9a¹Gesture validate failed: ¹Gesture validate failed: Â`¯TemplateElementÍEÍEa  ÃÂS³ExpressionStatementÍVÍ~X´AssignmentExpressionÍVÍ}¡=Y°MemberExpressionÍVÍdU®ThisExpressionÍVÍZLªIdentifierÍ[Íd©resultMsgÂÂ_¯TemplateLiteralÍgÍ}‘Y°MemberExpressionÍrÍ{LªIdentifierÍrÍs¡eLªIdentifierÍtÍ{§messageÂÂ’`¯TemplateElementÍhÍpa´æ‰‹åŠ¿æ ¡éªŒå¤±è´¥: ´æ‰‹åŠ¿æ ¡éªŒå¤±è´¥: Â`¯TemplateElementÍ|Í|a  ÃM®BlockStatementÍ›ÍÏ‘S³ExpressionStatementÍªÍÄX´AssignmentExpressionÍªÍÃ¡=Y°MemberExpressionÍªÍ»U®ThisExpressionÍªÍ®LªIdentifierÍ¯Í»¬isValidatingÂÂR§LiteralÍ¾ÍÃÂ¥falseN°MethodDefinitionÍÜÍDhÂÂLªIdentifierÍÜÍé­initialRender¦methodO²FunctionExpressionÍéÍDhÀÂÂÂM®BlockStatementÍìÍDhÜ S³ExpressionStatementÍ÷Í«T®CallExpressionÍ÷ÍªY°MemberExpressionÍ÷ÍU®ThisExpressionÍ÷ÍûLªIdentifierÍüÍ¹observeComponentCreation2ÂÂ’O·ArrowFunctionExpressionÍÍ¡ÀÂÂÂ’LªIdentifierÍÍ¦elmtIdLªIdentifierÍÍ.¯isInitialRenderM®BlockStatementÍ3Í¡“S³ExpressionStatementÍBÍRT®CallExpressionÍBÍQY°MemberExpressionÍBÍOLªIdentifierÍBÍH¦ColumnLªIdentifierÍIÍO¦createÂÂÂS³ExpressionStatementÍ`ÍuT®CallExpressionÍ`ÍtY°MemberExpressionÍ`ÍlLªIdentifierÍ`Íf¦ColumnLªIdentifierÍgÍl¥widthÂÂ‘R§LiteralÍmÍs¤100%¦'100%'ÂS³ExpressionStatementÍƒÍ–T®CallExpressionÍƒÍ•Y°MemberExpressionÍƒÍ‘LªIdentifierÍƒÍ‰¦ColumnLªIdentifierÍŠÍ‘§paddingÂÂ‘R§LiteralÍ’Í”¢20ÂLªIdentifierÍ£Í©¦ColumnÂS³ExpressionStatementÍµÍ!T®CallExpressionÍµÍ!Y°MemberExpressionÍµÍÓU®ThisExpressionÍµÍ¹LªIdentifierÍºÍÓ¹observeComponentCreation2ÂÂ’O·ArrowFunctionExpressionÍÔÍ!ÀÂÂÂ’LªIdentifierÍÕÍÛ¦elmtIdLªIdentifierÍİÍì¯isInitialRenderM®BlockStatementÍñÍ!”S³ExpressionStatementÍ  Í (T®CallExpressionÍ  Í 'Y°MemberExpressionÍ  Í LªIdentifierÍ  Í ¤TextLªIdentifierÍ Í ¦createÂÂ‘R§LiteralÍ Í &ÙHè¯·åœ¨åœ†ç‚¹ä¸Šæ»‘åŠ¨ç»˜åˆ¶æ‰‹åŠ¿å›¾æ¡ˆï¼ˆä¸ºæ‰€æœ‰å‹¾é€‰ç”¨æˆ·ä»£ç­¾ï¼‰ÙJ'è¯·åœ¨åœ†ç‚¹ä¸Šæ»‘åŠ¨ç»˜åˆ¶æ‰‹åŠ¿å›¾æ¡ˆï¼ˆä¸ºæ‰€æœ‰å‹¾é€‰ç”¨æˆ·ä»£ç­¾ï¼‰'ÂS³ExpressionStatementÍ 6Í HT®CallExpressionÍ 6Í GY°MemberExpressionÍ 6Í CLªIdentifierÍ 6Í :¤TextLªIdentifierÍ ;Í C¨fontSizeÂÂ‘R§LiteralÍ DÍ F¢14ÂS³ExpressionStatementÍ VÍ ×T®CallExpressionÍ VÍ ÖY°MemberExpressionÍ VÍ dLªIdentifierÍ VÍ Z¤TextLªIdentifierÍ [Í d©fontColorÂÂ‘b°ObjectExpressionÍ eÍ Õ•c¨PropertyÍ gÍ uÂÂÂR§LiteralÍ gÍ k¢id¤"id"R§LiteralÍ mÍ uÎ  &¨16777254¤initc¨PropertyÍ wÍ „ÂÂÂR§LiteralÍ wÍ }¤type¦"type"R§LiteralÍ Í „Í'¥10001¤initc¨PropertyÍ †Í ÂÂÂLªIdentifierÍ †Í Œ¦params[¯ArrayExpressionÍ Í ¤initc¨PropertyÍ ’Í ¼ÂÂÂR§LiteralÍ ’Í ªbundleName¬"bundleName"R§LiteralÍ  Í ¼ºcom.xhub.chaoxingsignfaker¼"com.xhub.chaoxingsignfaker"¤initc¨PropertyÍ ¾Í ÓÂÂÂR§LiteralÍ ¾Í ÊªmoduleName¬"moduleName"R§LiteralÍ ÌÍ Ó¥entry§"entry"¤initÂS³ExpressionStatementÍ åÍ!T®CallExpressionÍ åÍ! Y°MemberExpressionÍ åÍ ğLªIdentifierÍ åÍ é¤TextLªIdentifierÍ êÍ ğ¦marginÂÂ‘b°ObjectExpressionÍ ñÍ ÿ‘c¨PropertyÍ óÍ ıÂÂÂLªIdentifierÍ óÍ ù¦bottomR§LiteralÍ ûÍ ı¢24¤initÂLªIdentifierÍ!Í!¤TextÂS³ExpressionStatementÍ!Í!)T®CallExpressionÍ!Í!(Y°MemberExpressionÍ!Í!&LªIdentifierÍ!Í!"¤TextLªIdentifierÍ!#Í!&£popÂÂÂS³ExpressionStatementÍ!3Í#…T®CallExpressionÍ!3Í#„Y°MemberExpressionÍ!3Í!QU®ThisExpressionÍ!3Í!7LªIdentifierÍ!8Í!Q¹observeComponentCreation2ÂÂ’O·ArrowFunctionExpressionÍ!RÍ#|ÀÂÂÂ’LªIdentifierÍ!SÍ!Y¦elmtIdLªIdentifierÍ![Í!j¯isInitialRenderM®BlockStatementÍ!oÍ#|•S³ExpressionStatementÍ!·Í!ÆT®CallExpressionÍ!·Í!ÅY°MemberExpressionÍ!·Í!ÃLªIdentifierÍ!·Í!¼¥StackLªIdentifierÍ!½Í!Ã¦createÂÂÂS³ExpressionStatementÍ"Í",T®CallExpressionÍ"Í"+Y°MemberExpressionÍ"Í"LªIdentifierÍ"Í"¥StackLªIdentifierÍ"Í"¥widthÂÂ‘LªIdentifierÍ"Í"*±GESTURE_AREA_SIZEÂS³ExpressionStatementÍ"sÍ"“T®CallExpressionÍ"sÍ"’Y°MemberExpressionÍ"sÍ"LªIdentifierÍ"sÍ"x¥StackLªIdentifierÍ"yÍ"¦heightÂÂ‘LªIdentifierÍ"€Í"‘±GESTURE_AREA_SIZEÂS³ExpressionStatementÍ"ÚÍ#T®CallExpressionÍ"ÚÍ#Y°MemberExpressionÍ"ÚÍ"çLªIdentifierÍ"ÚÍ"ß¥StackLªIdentifierÍ"àÍ"ç§onTouchÂÂ‘O·ArrowFunctionExpressionÍ"èÍ#ÀÃÂÂ‘LªIdentifierÍ"éÍ"î¥eventT®CallExpressionÍ"óÍ#Y°MemberExpressionÍ"óÍ#U®ThisExpressionÍ"óÍ"÷LªIdentifierÍ"øÍ#¬onTouchPointÂÂ‘LªIdentifierÍ#Í#
+¥eventÂÂS³ExpressionStatementÍ#TÍ#qT®CallExpressionÍ#TÍ#pY°MemberExpressionÍ#TÍ#`LªIdentifierÍ#TÍ#Y¥StackLªIdentifierÍ#ZÍ#`¦marginÂÂ‘b°ObjectExpressionÍ#aÍ#o‘c¨PropertyÍ#cÍ#mÂÂÂLªIdentifierÍ#cÍ#i¦bottomR§LiteralÍ#kÍ#m¢24¤initÂLªIdentifierÍ#~Í#ƒ¥StackÂS³ExpressionStatementÍ#Í$öT®CallExpressionÍ#Í$õY°MemberExpressionÍ#Í#­U®ThisExpressionÍ#Í#“LªIdentifierÍ#”Í#­¹observeComponentCreation2ÂÂ’O·ArrowFunctionExpressionÍ#®Í$îÀÂÂÂ’LªIdentifierÍ#¯Í#µ¦elmtIdLªIdentifierÍ#·Í#Æ¯isInitialRenderM®BlockStatementÍ#ËÍ$î—S³ExpressionStatementÍ#ÚÍ#èT®CallExpressionÍ#ÚÍ#çY°MemberExpressionÍ#ÚÍ#åLªIdentifierÍ#ÚÍ#Ş¤GridLªIdentifierÍ#ßÍ#å¦createÂÂÂS³ExpressionStatementÍ#öÍ$T®CallExpressionÍ#öÍ$Y°MemberExpressionÍ#öÍ$
+LªIdentifierÍ#öÍ#ú¤GridLªIdentifierÍ#ûÍ$
+¯columnsTemplateÂÂ‘R§LiteralÍ$Í$«1fr 1fr 1fr­'1fr 1fr 1fr'ÂS³ExpressionStatementÍ$(Í$IT®CallExpressionÍ$(Í$HY°MemberExpressionÍ$(Í$9LªIdentifierÍ$(Í$,¤GridLªIdentifierÍ$-Í$9¬rowsTemplateÂÂ‘R§LiteralÍ$:Í$G«1fr 1fr 1fr­'1fr 1fr 1fr'ÂS³ExpressionStatementÍ$WÍ$uT®CallExpressionÍ$WÍ$tY°MemberExpressionÍ$WÍ$aLªIdentifierÍ$WÍ$[¤GridLªIdentifierÍ$\Í$a¥widthÂÂ‘LªIdentifierÍ$bÍ$s±GESTURE_AREA_SIZEÂS³ExpressionStatementÍ$ƒÍ$¢T®CallExpressionÍ$ƒÍ$¡Y°MemberExpressionÍ$ƒÍ$LªIdentifierÍ$ƒÍ$‡¤GridLªIdentifierÍ$ˆÍ$¦heightÂÂ‘LªIdentifierÍ$Í$ ±GESTURE_AREA_SIZEÂS³ExpressionStatementÍ$°Í$ÄT®CallExpressionÍ$°Í$ÃY°MemberExpressionÍ$°Í$¿LªIdentifierÍ$°Í$´¤GridLªIdentifierÍ$µÍ$¿ªcolumnsGapÂÂ‘R§LiteralÍ$ÀÍ$Â¢20ÂS³ExpressionStatementÍ$ÒÍ$ãT®CallExpressionÍ$ÒÍ$âY°MemberExpressionÍ$ÒÍ$ŞLªIdentifierÍ$ÒÍ$Ö¤GridLªIdentifierÍ$×Í$Ş§rowsGapÂÂ‘R§LiteralÍ$ßÍ$á¢20ÂLªIdentifierÍ$ğÍ$ô¤GridÂS³ExpressionStatementÍ% Í*\T®CallExpressionÍ% Í*[Y°MemberExpressionÍ% Í%U®ThisExpressionÍ% Í%LªIdentifierÍ%Í%¹observeComponentCreation2ÂÂ’O·ArrowFunctionExpressionÍ%Í*QÀÂÂÂ’LªIdentifierÍ% Í%&¦elmtIdLªIdentifierÍ%(Í%7¯isInitialRenderM®BlockStatementÍ%<Í*Q“S³ExpressionStatementÍ%KÍ%\T®CallExpressionÍ%KÍ%[Y°MemberExpressionÍ%KÍ%YLªIdentifierÍ%KÍ%R§ForEachLªIdentifierÍ%SÍ%Y¦createÂÂÂ]³VariableDeclarationÍ%jÍ)Å‘^²VariableDeclaratorÍ%pÍ)ÄLªIdentifierÍ%pÍ%†¶forEachItemGenFunctionO·ArrowFunctionExpressionÍ%‰Í)ÄÀÂÂÂ‘LªIdentifierÍ%‰Í%¥_itemM®BlockStatementÍ%’Í)Ä’]³VariableDeclarationÍ%¥Í%¹‘^²VariableDeclaratorÍ%«Í%¸LªIdentifierÍ%«Í%°¥indexLªIdentifierÍ%³Í%¸¥_item¥constM®BlockStatementÍ%ËÍ)µ“]³VariableDeclarationÍ%âÍ&j‘^²VariableDeclaratorÍ%èÍ&iLªIdentifierÍ%èÍ%õ­itemCreation2O·ArrowFunctionExpressionÍ%øÍ&iÀÂÂÂ’LªIdentifierÍ%ùÍ%ÿ¦elmtIdLªIdentifierÍ&Í&¯isInitialRenderM®BlockStatementÍ&Í&i‘S³ExpressionStatementÍ&0Í&RT®CallExpressionÍ&0Í&QY°MemberExpressionÍ&0Í&?LªIdentifierÍ&0Í&8¨GridItemLªIdentifierÍ&9Í&?¦createÂÂ’O·ArrowFunctionExpressionÍ&@Í&IÀÂÂÂM®BlockStatementÍ&FÍ&IR§LiteralÍ&KÍ&PÂ¥falseÂ¥const]³VariableDeclarationÍ&€Í)w‘^²VariableDeclaratorÍ&†Í)vLªIdentifierÍ&†Í&˜²observedDeepRenderO·ArrowFunctionExpressionÍ&›Í)vÀÂÂÂM®BlockStatementÍ&¡Í)v“S³ExpressionStatementÍ&¼Í&ôT®CallExpressionÍ&¼Í&óY°MemberExpressionÍ&¼Í&ÚU®ThisExpressionÍ&¼Í&ÀLªIdentifierÍ&ÁÍ&Ú¹observeComponentCreation2ÂÂ’LªIdentifierÍ&ÛÍ&è­itemCreation2LªIdentifierÍ&êÍ&ò¨GridItemÂS³ExpressionStatementÍ'Í)6T®CallExpressionÍ'Í)5Y°MemberExpressionÍ'Í',U®ThisExpressionÍ'Í'LªIdentifierÍ'Í',¹observeComponentCreation2ÂÂ’O·ArrowFunctionExpressionÍ'-Í),ÀÂÂÂ’LªIdentifierÍ'.Í'4¦elmtIdLªIdentifierÍ'6Í'E¯isInitialRenderM®BlockStatementÍ'JÍ),“S³ExpressionStatementÍ'iÍ'’T®CallExpressionÍ'iÍ'‘Y°MemberExpressionÍ'iÍ'vLªIdentifierÍ'iÍ'o¦CircleLªIdentifierÍ'pÍ'v¦createÂÂ‘b°ObjectExpressionÍ'wÍ'’c¨PropertyÍ'yÍ'‚ÂÂÂLªIdentifierÍ'yÍ'~¥widthR§LiteralÍ'€Í'‚<¢60¤initc¨PropertyÍ'„Í'ÂÂÂLªIdentifierÍ'„Í'Š¦heightR§LiteralÍ'ŒÍ'<¢60¤initÂS³ExpressionStatementÍ'°Í(½T®CallExpressionÍ'°Í(¼Y°MemberExpressionÍ'°Í'»LªIdentifierÍ'°Í'¶¦CircleLªIdentifierÍ'·Í'»¤fillÂÂ‘VµConditionalExpressionÍ'¼Í(»Y°MemberExpressionÍ'¼Í'ÕY°MemberExpressionÍ'¼Í'ÎU®ThisExpressionÍ'¼Í'ÀLªIdentifierÍ'ÁÍ'Î­gesturePointsÂÂLªIdentifierÍ'ÏÍ'Ô¥indexÃÂb°ObjectExpressionÍ'ØÍ(H•c¨PropertyÍ'ÚÍ'èÂÂÂR§LiteralÍ'ÚÍ'Ş¢id¤"id"R§LiteralÍ'àÍ'èÎ  '¨16777255¤initc¨PropertyÍ'êÍ'÷ÂÂÂR§LiteralÍ'êÍ'ğ¤type¦"type"R§LiteralÍ'òÍ'÷Í'¥10001¤initc¨PropertyÍ'ùÍ(ÂÂÂLªIdentifierÍ'ùÍ'ÿ¦params[¯ArrayExpressionÍ(Í(¤initc¨PropertyÍ(Í(/ÂÂÂR§LiteralÍ(Í(ªbundleName¬"bundleName"R§LiteralÍ(Í(/ºcom.xhub.chaoxingsignfaker¼"com.xhub.chaoxingsignfaker"¤initc¨PropertyÍ(1Í(FÂÂÂR§LiteralÍ(1Í(=ªmoduleName¬"moduleName"R§LiteralÍ(?Í(F¥entry§"entry"¤initb°ObjectExpressionÍ(KÍ(»•c¨PropertyÍ(MÍ([ÂÂÂR§LiteralÍ(MÍ(Q¢id¤"id"R§LiteralÍ(SÍ([Î  *¨16777258¤initc¨PropertyÍ(]Í(jÂÂÂR§LiteralÍ(]Í(c¤type¦"type"R§LiteralÍ(eÍ(jÍ'¥10001¤initc¨PropertyÍ(lÍ(vÂÂÂLªIdentifierÍ(lÍ(r¦params[¯ArrayExpressionÍ(tÍ(v¤initc¨PropertyÍ(xÍ(¢ÂÂÂR§LiteralÍ(xÍ(„ªbundleName¬"bundleName"R§LiteralÍ(†Í(¢ºcom.xhub.chaoxingsignfaker¼"com.xhub.chaoxingsignfaker"¤initc¨PropertyÍ(¤Í(¹ÂÂÂR§LiteralÍ(¤Í(°ªmoduleName¬"moduleName"R§LiteralÍ(²Í(¹¥entry§"entry"¤initÂS³ExpressionStatementÍ(ÛÍ)T®CallExpressionÍ(ÛÍ)Y°MemberExpressionÍ(ÛÍ(éLªIdentifierÍ(ÛÍ(á¦CircleLªIdentifierÍ(âÍ(é§onClickÂÂ‘O·ArrowFunctionExpressionÍ(êÍ)ÀÃÂÂT®CallExpressionÍ(ğÍ)Y°MemberExpressionÍ(ğÍ)U®ThisExpressionÍ(ğÍ(ôLªIdentifierÍ(õÍ)³onGesturePointClickÂÂ‘LªIdentifierÍ)	Í)¥indexÂÂLªIdentifierÍ).Í)4¦CircleÂS³ExpressionStatementÍ)PÍ)_T®CallExpressionÍ)PÍ)^Y°MemberExpressionÍ)PÍ)\LªIdentifierÍ)PÍ)X¨GridItemLªIdentifierÍ)YÍ)\£popÂÂÂ¥constS³ExpressionStatementÍ)Í)¢T®CallExpressionÍ)Í)¡LªIdentifierÍ)Í)Ÿ²observedDeepRenderÂ¥constS³ExpressionStatementÍ)ÓÍ*FT®CallExpressionÍ)ÓÍ*EY°MemberExpressionÍ)ÓÍ)íU®ThisExpressionÍ)ÓÍ)×LªIdentifierÍ)ØÍ)íµforEachUpdateFunctionÂÂ“LªIdentifierÍ)îÍ)ô¦elmtIdT®CallExpressionÍ)öÍ*,Y°MemberExpressionÍ)öÍ* LªIdentifierÍ)öÍ)û¥ArrayLªIdentifierÍ)üÍ* ¤fromÂÂ’b°ObjectExpressionÍ*Í*‘c¨PropertyÍ*Í*ÂÂÂLªIdentifierÍ*Í*	¦lengthLªIdentifierÍ*Í*±GESTURE_GRID_SIZE¤initO·ArrowFunctionExpressionÍ* Í*+ÀÃÂÂ’LªIdentifierÍ*!Í*"¡_LªIdentifierÍ*$Í*%¡iLªIdentifierÍ**Í*+¡iÂLªIdentifierÍ*.Í*D¶forEachItemGenFunctionÂLªIdentifierÍ*SÍ*Z§ForEachÂS³ExpressionStatementÍ*fÍ*tT®CallExpressionÍ*fÍ*sY°MemberExpressionÍ*fÍ*qLªIdentifierÍ*fÍ*m§ForEachLªIdentifierÍ*nÍ*q£popÂÂÂS³ExpressionStatementÍ*~Í*‰T®CallExpressionÍ*~Í*ˆY°MemberExpressionÍ*~Í*†LªIdentifierÍ*~Í*‚¤GridLªIdentifierÍ*ƒÍ*†£popÂÂÂS³ExpressionStatementÍ*“Í.xT®CallExpressionÍ*“Í.wY°MemberExpressionÍ*“Í*±U®ThisExpressionÍ*“Í*—LªIdentifierÍ*˜Í*±¹observeComponentCreation2ÂÂ’O·ArrowFunctionExpressionÍ*²Í.rÀÂÂÂ’LªIdentifierÍ*³Í*¹¦elmtIdLªIdentifierÍ*»Í*Ê¯isInitialRenderM®BlockStatementÍ*ÏÍ.r’S³ExpressionStatementÍ*ŞÍ*êT®CallExpressionÍ*ŞÍ*éY°MemberExpressionÍ*ŞÍ*çLªIdentifierÍ*ŞÍ*à¢IfLªIdentifierÍ*áÍ*ç¦createÂÂÂV«IfStatementÍ+Í.gW°BinaryExpressionÍ+Í+1Y°MemberExpressionÍ+Í+-Y°MemberExpressionÍ+Í+&U®ThisExpressionÍ+Í+LªIdentifierÍ+Í+&®gesturePatternÂÂLªIdentifierÍ+'Í+-¦lengthÂÂ¡>R§LiteralÍ+0Í+1¡1M®BlockStatementÍ+3Í-ó‘S³ExpressionStatementÍ+FÍ-äT®CallExpressionÍ+FÍ-ãY°MemberExpressionÍ+FÍ+eU®ThisExpressionÍ+FÍ+JLªIdentifierÍ+KÍ+eºifElseBranchUpdateFunctionÂÂ’R§LiteralÍ+fÍ+g ¡0O·ArrowFunctionExpressionÍ+iÍ-âÀÂÂÂM®BlockStatementÍ+oÍ-â‘S³ExpressionStatementÍ+†Í-ÏT®CallExpressionÍ+†Í-ÎY°MemberExpressionÍ+†Í+¤U®ThisExpressionÍ+†Í+ŠLªIdentifierÍ+‹Í+¤¹observeComponentCreation2ÂÂ’O·ArrowFunctionExpressionÍ+¥Í-ÃÀÂÂÂ’LªIdentifierÍ+¦Í+¬¦elmtIdLªIdentifierÍ+®Í+½¯isInitialRenderM®BlockStatementÍ+ÂÍ-Ã–S³ExpressionStatementÍ+İÍ,&T®CallExpressionÍ+İÍ,%Y°MemberExpressionÍ+İÍ+ìLªIdentifierÍ+İÍ+å¨PolylineLªIdentifierÍ+æÍ+ì¦createÂÂ‘b°ObjectExpressionÍ+íÍ,$’c¨PropertyÍ+ïÍ,ÂÂÂLªIdentifierÍ+ïÍ+ô¥widthLªIdentifierÍ+öÍ,±GESTURE_AREA_SIZE¤initc¨PropertyÍ,	Í,"ÂÂÂLªIdentifierÍ,	Í,¦heightLªIdentifierÍ,Í,"±GESTURE_AREA_SIZE¤initÂS³ExpressionStatementÍ,@Í,gT®CallExpressionÍ,@Í,fY°MemberExpressionÍ,@Í,OLªIdentifierÍ,@Í,H¨PolylineLªIdentifierÍ,IÍ,O¦pointsÂÂ‘T®CallExpressionÍ,PÍ,eY°MemberExpressionÍ,PÍ,cU®ThisExpressionÍ,PÍ,TLªIdentifierÍ,UÍ,c®polylinePointsÂÂÂÂS³ExpressionStatementÍ,Í-T®CallExpressionÍ,Í-Y°MemberExpressionÍ,Í,LªIdentifierÍ,Í,‰¨PolylineLªIdentifierÍ,ŠÍ,¦strokeÂÂ‘b°ObjectExpressionÍ,‘Í-•c¨PropertyÍ,“Í,¡ÂÂÂR§LiteralÍ,“Í,—¢id¤"id"R§LiteralÍ,™Í,¡Î  '¨16777255¤initc¨PropertyÍ,£Í,°ÂÂÂR§LiteralÍ,£Í,©¤type¦"type"R§LiteralÍ,«Í,°Í'¥10001¤initc¨PropertyÍ,²Í,¼ÂÂÂLªIdentifierÍ,²Í,¸¦params[¯ArrayExpressionÍ,ºÍ,¼¤initc¨PropertyÍ,¾Í,èÂÂÂR§LiteralÍ,¾Í,ÊªbundleName¬"bundleName"R§LiteralÍ,ÌÍ,èºcom.xhub.chaoxingsignfaker¼"com.xhub.chaoxingsignfaker"¤initc¨PropertyÍ,êÍ,ÿÂÂÂR§LiteralÍ,êÍ,öªmoduleName¬"moduleName"R§LiteralÍ,øÍ,ÿ¥entry§"entry"¤initÂS³ExpressionStatementÍ-Í-5T®CallExpressionÍ-Í-4Y°MemberExpressionÍ-Í-1LªIdentifierÍ-Í-%¨PolylineLªIdentifierÍ-&Í-1«strokeWidthÂÂ‘R§LiteralÍ-2Í-3¡4ÂS³ExpressionStatementÍ-OÍ-gT®CallExpressionÍ-OÍ-fY°MemberExpressionÍ-OÍ-cLªIdentifierÍ-OÍ-W¨PolylineLªIdentifierÍ-XÍ-c«fillOpacityÂÂ‘R§LiteralÍ-dÍ-e ¡0ÂS³ExpressionStatementÍ-Í-¬T®CallExpressionÍ-Í-«Y°MemberExpressionÍ-Í-™LªIdentifierÍ-Í-‰¨PolylineLªIdentifierÍ-ŠÍ-™¯hitTestBehaviorÂÂ‘Y°MemberExpressionÍ-šÍ-ªLªIdentifierÍ-šÍ-¥«HitTestModeLªIdentifierÍ-¦Í-ª¤NoneÂÂÂLªIdentifierÍ-ÅÍ-Í¨PolylineÂÂM®BlockStatementÍ.Í.g‘S³ExpressionStatementÍ.Í.XT®CallExpressionÍ.Í.WY°MemberExpressionÍ.Í.8U®ThisExpressionÍ.Í.LªIdentifierÍ.Í.8ºifElseBranchUpdateFunctionÂÂ’R§LiteralÍ.9Í.:¡1O·ArrowFunctionExpressionÍ.<Í.VÀÂÂÂM®BlockStatementÍ.BÍ.VÂLªIdentifierÍ.tÍ.v¢IfÂS³ExpressionStatementÍ.‚Í.‹T®CallExpressionÍ.‚Í.ŠY°MemberExpressionÍ.‚Í.ˆLªIdentifierÍ.‚Í.„¢IfLªIdentifierÍ.…Í.ˆ£popÂÂÂS³ExpressionStatementÍ.ÊÍ.ÖT®CallExpressionÍ.ÊÍ.ÕY°MemberExpressionÍ.ÊÍ.ÓLªIdentifierÍ.ÊÍ.Ï¥StackLªIdentifierÍ.ĞÍ.Ó£popÂÂÂS³ExpressionStatementÍ.àÍ2_T®CallExpressionÍ.àÍ2^Y°MemberExpressionÍ.àÍ.şU®ThisExpressionÍ.àÍ.äLªIdentifierÍ.åÍ.ş¹observeComponentCreation2ÂÂ’O·ArrowFunctionExpressionÍ.ÿÍ2YÀÂÂÂ’LªIdentifierÍ/ Í/¦elmtIdLªIdentifierÍ/Í/¯isInitialRenderM®BlockStatementÍ/Í2Y’S³ExpressionStatementÍ/+Í/7T®CallExpressionÍ/+Í/6Y°MemberExpressionÍ/+Í/4LªIdentifierÍ/+Í/-¢IfLªIdentifierÍ/.Í/4¦createÂÂÂV«IfStatementÍ/\Í2NW°BinaryExpressionÍ/`Í/~Y°MemberExpressionÍ/`Í/zY°MemberExpressionÍ/`Í/sU®ThisExpressionÍ/`Í/dLªIdentifierÍ/eÍ/s®gesturePatternÂÂLªIdentifierÍ/tÍ/z¦lengthÂÂ¡>R§LiteralÍ/}Í/~ ¡0M®BlockStatementÍ/€Í1Ã‘S³ExpressionStatementÍ/“Í1´T®CallExpressionÍ/“Í1³Y°MemberExpressionÍ/“Í/²U®ThisExpressionÍ/“Í/—LªIdentifierÍ/˜Í/²ºifElseBranchUpdateFunctionÂÂ’R§LiteralÍ/³Í/´ ¡0O·ArrowFunctionExpressionÍ/¶Í1²ÀÂÂÂM®BlockStatementÍ/¼Í1²’S³ExpressionStatementÍ/ÓÍ1~T®CallExpressionÍ/ÓÍ1}Y°MemberExpressionÍ/ÓÍ/ñU®ThisExpressionÍ/ÓÍ/×LªIdentifierÍ/ØÍ/ñ¹observeComponentCreation2ÂÂ’O·ArrowFunctionExpressionÍ/òÍ1vÀÂÂÂ’LªIdentifierÍ/óÍ/ù¦elmtIdLªIdentifierÍ/ûÍ0
+¯isInitialRenderM®BlockStatementÍ0Í1v”S³ExpressionStatementÍ0*Í0bT®CallExpressionÍ0*Í0aY°MemberExpressionÍ0*Í05LªIdentifierÍ0*Í0.¤TextLªIdentifierÍ0/Í05¦createÂÂ‘_¯TemplateLiteralÍ06Í0`‘T®CallExpressionÍ0?Í0^Y°MemberExpressionÍ0?Í0WY°MemberExpressionÍ0?Í0RU®ThisExpressionÍ0?Í0CLªIdentifierÍ0DÍ0R®gesturePatternÂÂLªIdentifierÍ0SÍ0W¤joinÂÂ‘R§LiteralÍ0XÍ0]¥ â†’ §' â†’ 'Â’`¯TemplateElementÍ07Í0=a®æ‰‹åŠ¿é¡ºåº: ®æ‰‹åŠ¿é¡ºåº: Â`¯TemplateElementÍ0_Í0_a  ÃÂS³ExpressionStatementÍ0|Í0T®CallExpressionÍ0|Í0Y°MemberExpressionÍ0|Í0‰LªIdentifierÍ0|Í0€¤TextLªIdentifierÍ0Í0‰¨fontSizeÂÂ‘R§LiteralÍ0ŠÍ0Œ¢14ÂS³ExpressionStatementÍ0¨Í1)T®CallExpressionÍ0¨Í1(Y°MemberExpressionÍ0¨Í0¶LªIdentifierÍ0¨Í0¬¤TextLªIdentifierÍ0­Í0¶©fontColorÂÂ‘b°ObjectExpressionÍ0·Í1'•c¨PropertyÍ0¹Í0ÇÂÂÂR§LiteralÍ0¹Í0½¢id¤"id"R§LiteralÍ0¿Í0ÇÎ  %¨16777253¤initc¨PropertyÍ0ÉÍ0ÖÂÂÂR§LiteralÍ0ÉÍ0Ï¤type¦"type"R§LiteralÍ0ÑÍ0ÖÍ'¥10001¤initc¨PropertyÍ0ØÍ0âÂÂÂLªIdentifierÍ0ØÍ0Ş¦params[¯ArrayExpressionÍ0àÍ0â¤initc¨PropertyÍ0äÍ1ÂÂÂR§LiteralÍ0äÍ0ğªbundleName¬"bundleName"R§LiteralÍ0òÍ1ºcom.xhub.chaoxingsignfaker¼"com.xhub.chaoxingsignfaker"¤initc¨PropertyÍ1Í1%ÂÂÂR§LiteralÍ1Í1ªmoduleName¬"moduleName"R§LiteralÍ1Í1%¥entry§"entry"¤initÂS³ExpressionStatementÍ1CÍ1_T®CallExpressionÍ1CÍ1^Y°MemberExpressionÍ1CÍ1NLªIdentifierÍ1CÍ1G¤TextLªIdentifierÍ1HÍ1N¦marginÂÂ‘b°ObjectExpressionÍ1OÍ1]‘c¨PropertyÍ1QÍ1[ÂÂÂLªIdentifierÍ1QÍ1W¦bottomR§LiteralÍ1YÍ1[¢16¤initÂLªIdentifierÍ1xÍ1|¤TextÂS³ExpressionStatementÍ1”Í1ŸT®CallExpressionÍ1”Í1Y°MemberExpressionÍ1”Í1œLªIdentifierÍ1”Í1˜¤TextLªIdentifierÍ1™Í1œ£popÂÂÂÂM®BlockStatementÍ1íÍ2N‘S³ExpressionStatementÍ2 Í2?T®CallExpressionÍ2 Í2>Y°MemberExpressionÍ2 Í2U®ThisExpressionÍ2 Í2LªIdentifierÍ2Í2ºifElseBranchUpdateFunctionÂÂ’R§LiteralÍ2 Í2!¡1O·ArrowFunctionExpressionÍ2#Í2=ÀÂÂÂM®BlockStatementÍ2)Í2=ÂLªIdentifierÍ2[Í2]¢IfÂS³ExpressionStatementÍ2iÍ2rT®CallExpressionÍ2iÍ2qY°MemberExpressionÍ2iÍ2oLªIdentifierÍ2iÍ2k¢IfLªIdentifierÍ2lÍ2o£popÂÂÂS³ExpressionStatementÍ2|Í6QT®CallExpressionÍ2|Í6PY°MemberExpressionÍ2|Í2šU®ThisExpressionÍ2|Í2€LªIdentifierÍ2Í2š¹observeComponentCreation2ÂÂ’O·ArrowFunctionExpressionÍ2›Í6KÀÂÂÂ’LªIdentifierÍ2œÍ2¢¦elmtIdLªIdentifierÍ2¤Í2³¯isInitialRenderM®BlockStatementÍ2¸Í6K’S³ExpressionStatementÍ2ÇÍ2ÓT®CallExpressionÍ2ÇÍ2ÒY°MemberExpressionÍ2ÇÍ2ĞLªIdentifierÍ2ÇÍ2É¢IfLªIdentifierÍ2ÊÍ2Ğ¦createÂÂÂV«IfStatementÍ2øÍ6@Y°MemberExpressionÍ2üÍ3
+U®ThisExpressionÍ2üÍ3 LªIdentifierÍ3Í3
+©resultMsgÂÂM®BlockStatementÍ3Í5·‘S³ExpressionStatementÍ3Í5¨T®CallExpressionÍ3Í5§Y°MemberExpressionÍ3Í3>U®ThisExpressionÍ3Í3#LªIdentifierÍ3$Í3>ºifElseBranchUpdateFunctionÂÂ’R§LiteralÍ3?Í3@ ¡0O·ArrowFunctionExpressionÍ3BÍ5¦ÀÂÂÂM®BlockStatementÍ3HÍ5¦’S³ExpressionStatementÍ3_Í5rT®CallExpressionÍ3_Í5qY°MemberExpressionÍ3_Í3}U®ThisExpressionÍ3_Í3cLªIdentifierÍ3dÍ3}¹observeComponentCreation2ÂÂ’O·ArrowFunctionExpressionÍ3~Í5jÀÂÂÂ’LªIdentifierÍ3Í3…¦elmtIdLªIdentifierÍ3‡Í3–¯isInitialRenderM®BlockStatementÍ3›Í5j”S³ExpressionStatementÍ3¶Í3ÒT®CallExpressionÍ3¶Í3ÑY°MemberExpressionÍ3¶Í3ÁLªIdentifierÍ3¶Í3º¤TextLªIdentifierÍ3»Í3Á¦createÂÂ‘Y°MemberExpressionÍ3ÂÍ3ĞU®ThisExpressionÍ3ÂÍ3ÆLªIdentifierÍ3ÇÍ3Ğ©resultMsgÂÂÂS³ExpressionStatementÍ3ìÍ3şT®CallExpressionÍ3ìÍ3ıY°MemberExpressionÍ3ìÍ3ùLªIdentifierÍ3ìÍ3ğ¤TextLªIdentifierÍ3ñÍ3ù¨fontSizeÂÂ‘R§LiteralÍ3úÍ3ü¢14ÂS³ExpressionStatementÍ4Í5T®CallExpressionÍ4Í5Y°MemberExpressionÍ4Í4&LªIdentifierÍ4Í4¤TextLªIdentifierÍ4Í4&©fontColorÂÂ‘VµConditionalExpressionÍ4'Í5Y°MemberExpressionÍ4'Í45U®ThisExpressionÍ4'Í4+LªIdentifierÍ4,Í45©codeReadyÂÂb°ObjectExpressionÍ48Í4¨•c¨PropertyÍ4:Í4HÂÂÂR§LiteralÍ4:Í4>¢id¤"id"R§LiteralÍ4@Í4HÎ  '¨16777255¤initc¨PropertyÍ4JÍ4WÂÂÂR§LiteralÍ4JÍ4P¤type¦"type"R§LiteralÍ4RÍ4WÍ'¥10001¤initc¨PropertyÍ4YÍ4cÂÂÂLªIdentifierÍ4YÍ4_¦params[¯ArrayExpressionÍ4aÍ4c¤initc¨PropertyÍ4eÍ4ÂÂÂR§LiteralÍ4eÍ4qªbundleName¬"bundleName"R§LiteralÍ4sÍ4ºcom.xhub.chaoxingsignfaker¼"com.xhub.chaoxingsignfaker"¤initc¨PropertyÍ4‘Í4¦ÂÂÂR§LiteralÍ4‘Í4ªmoduleName¬"moduleName"R§LiteralÍ4ŸÍ4¦¥entry§"entry"¤initb°ObjectExpressionÍ4«Í5•c¨PropertyÍ4­Í4»ÂÂÂR§LiteralÍ4­Í4±¢id¤"id"R§LiteralÍ4³Í4»Î  ¨16777232¤initc¨PropertyÍ4½Í4ÊÂÂÂR§LiteralÍ4½Í4Ã¤type¦"type"R§LiteralÍ4ÅÍ4ÊÍ'¥10001¤initc¨PropertyÍ4ÌÍ4ÖÂÂÂLªIdentifierÍ4ÌÍ4Ò¦params[¯ArrayExpressionÍ4ÔÍ4Ö¤initc¨PropertyÍ4ØÍ5ÂÂÂR§LiteralÍ4ØÍ4äªbundleName¬"bundleName"R§LiteralÍ4æÍ5ºcom.xhub.chaoxingsignfaker¼"com.xhub.chaoxingsignfaker"¤initc¨PropertyÍ5Í5ÂÂÂR§LiteralÍ5Í5ªmoduleName¬"moduleName"R§LiteralÍ5Í5¥entry§"entry"¤initÂS³ExpressionStatementÍ57Í5ST®CallExpressionÍ57Í5RY°MemberExpressionÍ57Í5BLªIdentifierÍ57Í5;¤TextLªIdentifierÍ5<Í5B¦marginÂÂ‘b°ObjectExpressionÍ5CÍ5Q‘c¨PropertyÍ5EÍ5OÂÂÂLªIdentifierÍ5EÍ5K¦bottomR§LiteralÍ5MÍ5O¢16¤initÂLªIdentifierÍ5lÍ5p¤TextÂS³ExpressionStatementÍ5ˆÍ5“T®CallExpressionÍ5ˆÍ5’Y°MemberExpressionÍ5ˆÍ5LªIdentifierÍ5ˆÍ5Œ¤TextLªIdentifierÍ5Í5£popÂÂÂÂM®BlockStatementÍ5ßÍ6@‘S³ExpressionStatementÍ5òÍ61T®CallExpressionÍ5òÍ60Y°MemberExpressionÍ5òÍ6U®ThisExpressionÍ5òÍ5öLªIdentifierÍ5÷Í6ºifElseBranchUpdateFunctionÂÂ’R§LiteralÍ6Í6¡1O·ArrowFunctionExpressionÍ6Í6/ÀÂÂÂM®BlockStatementÍ6Í6/ÂLªIdentifierÍ6MÍ6O¢IfÂS³ExpressionStatementÍ6[Í6dT®CallExpressionÍ6[Í6cY°MemberExpressionÍ6[Í6aLªIdentifierÍ6[Í6]¢IfLªIdentifierÍ6^Í6a£popÂÂÂS³ExpressionStatementÍ6nÍ7*T®CallExpressionÍ6nÍ7)Y°MemberExpressionÍ6nÍ6ŒU®ThisExpressionÍ6nÍ6rLªIdentifierÍ6sÍ6Œ¹observeComponentCreation2ÂÂ’O·ArrowFunctionExpressionÍ6Í7#ÀÂÂÂ’LªIdentifierÍ6Í6”¦elmtIdLªIdentifierÍ6–Í6¥¯isInitialRenderM®BlockStatementÍ6ªÍ7#’S³ExpressionStatementÍ6ÎÍ6ÛT®CallExpressionÍ6ÎÍ6ÚY°MemberExpressionÍ6ÎÍ6ØLªIdentifierÍ6ÎÍ6Ñ£RowLªIdentifierÍ6ÒÍ6Ø¦createÂÂÂS³ExpressionStatementÍ6şÍ7T®CallExpressionÍ6şÍ7Y°MemberExpressionÍ6şÍ7LªIdentifierÍ6şÍ7£RowLªIdentifierÍ7Í7¦marginÂÂ‘b°ObjectExpressionÍ7	Í7‘c¨PropertyÍ7Í7ÂÂÂLªIdentifierÍ7Í7¦bottomR§LiteralÍ7Í7¡8¤initÂLªIdentifierÍ7%Í7(£RowÂS³ExpressionStatementÍ74Í7ÿT®CallExpressionÍ74Í7şY°MemberExpressionÍ74Í7RU®ThisExpressionÍ74Í78LªIdentifierÍ79Í7R¹observeComponentCreation2ÂÂ’O·ArrowFunctionExpressionÍ7SÍ7ñÀÂÂÂ’LªIdentifierÍ7TÍ7Z¦elmtIdLªIdentifierÍ7\Í7k¯isInitialRenderM®BlockStatementÍ7pÍ7ñ“S³ExpressionStatementÍ7Í7“T®CallExpressionÍ7Í7’Y°MemberExpressionÍ7Í7LªIdentifierÍ7Í7‰ª__Common__LªIdentifierÍ7ŠÍ7¦createÂÂÂS³ExpressionStatementÍ7¡Í7·T®CallExpressionÍ7¡Í7¶Y°MemberExpressionÍ7¡Í7±LªIdentifierÍ7¡Í7«ª__Common__LªIdentifierÍ7¬Í7±¥widthÂÂ‘R§LiteralÍ7²Í7µÌd£100ÂS³ExpressionStatementÍ7ÅÍ7æT®CallExpressionÍ7ÅÍ7åY°MemberExpressionÍ7ÅÍ7ÖLªIdentifierÍ7ÅÍ7Ïª__Common__LªIdentifierÍ7ĞÍ7Ö¦marginÂÂ‘b°ObjectExpressionÍ7×Í7ä‘c¨PropertyÍ7ÙÍ7âÂÂÂLªIdentifierÍ7ÙÍ7Ş¥rightR§LiteralÍ7àÍ7â
+¢10¤initÂLªIdentifierÍ7óÍ7ıª__Common__ÂM®BlockStatementÍ8	Í=‘S³ExpressionStatementÍ8Í=T®CallExpressionÍ8Í=Y°MemberExpressionÍ8Í86U®ThisExpressionÍ8Í8LªIdentifierÍ8Í86¹observeComponentCreation2ÂÂ’O·ArrowFunctionExpressionÍ87Í<çÀÂÂÂ’LªIdentifierÍ88Í8>¦elmtIdLªIdentifierÍ8@Í8O¯isInitialRenderM®BlockStatementÍ8TÍ<ç‘V«IfStatementÍ8gÍ<ØLªIdentifierÍ8kÍ8z¯isInitialRenderM®BlockStatementÍ8|Í<”]³VariableDeclarationÍ8“Í:‘^²VariableDeclaratorÍ8—Í:LªIdentifierÍ8—Í8¤­componentCallZ­NewExpressionÍ8§Í:LªIdentifierÍ8«Í8¶«LightButton–U®ThisExpressionÍ8·Í8»b°ObjectExpressionÍ8½Í9“c¨PropertyÍ8ØÍ8ãÂÂÂLªIdentifierÍ8ØÍ8İ¥labelR§LiteralÍ8ßÍ8ã¦é‡ç½®¨'é‡ç½®'¤initc¨PropertyÍ8şÍ9ÂÂÂLªIdentifierÍ8şÍ9ªbtnEnabledR§LiteralÍ9
+Í9Ã¤true¤initc¨PropertyÍ9)Í9‡ÂÂÂLªIdentifierÍ9)Í91¨onButtonO·ArrowFunctionExpressionÍ93Í9‡ÀÂÂÂM®BlockStatementÍ99Í9‡‘S³ExpressionStatementÍ9XÍ9lT®CallExpressionÍ9XÍ9kY°MemberExpressionÍ9XÍ9iU®ThisExpressionÍ9XÍ9\LªIdentifierÍ9]Í9i¬resetGestureÂÂÂ¤initLªIdentifierÍ9 Í9©©undefinedLªIdentifierÍ9«Í9±¦elmtIdO·ArrowFunctionExpressionÍ9³Í9¼ÀÂÂÂM®BlockStatementÍ9¹Í9¼b°ObjectExpressionÍ9¾Í:“c¨PropertyÍ9ÀÍ9ıÂÂÂLªIdentifierÍ9ÀÍ9Ä¤pageR§LiteralÍ9ÆÍ9ıÙ5entry/src/main/ets/Component/GestureSignComponent.etsÙ7"entry/src/main/ets/Component/GestureSignComponent.ets"¤initc¨PropertyÍ9ÿÍ:ÂÂÂLªIdentifierÍ9ÿÍ:¤lineR§LiteralÍ:Í:ÌÁ£193¤initc¨PropertyÍ:
+Í:ÂÂÂLªIdentifierÍ:
+Í:£colR§LiteralÍ:Í:	¡9¤init£letS³ExpressionStatementÍ:*Í:GT®CallExpressionÍ:*Í:FY°MemberExpressionÍ:*Í:7LªIdentifierÍ:*Í:0¦ViewPULªIdentifierÍ:1Í:7¦createÂÂ‘LªIdentifierÍ:8Í:E­componentCallÂ]³VariableDeclarationÍ:]Í;ª‘^²VariableDeclaratorÍ:aÍ;©LªIdentifierÍ:aÍ:m¬paramsLambdaO·ArrowFunctionExpressionÍ:pÍ;©ÀÂÂÂM®BlockStatementÍ:vÍ;©‘\¯ReturnStatementÍ:‘Í;’b°ObjectExpressionÍ:˜Í;‘“c¨PropertyÍ:·Í:ÂÂÂÂLªIdentifierÍ:·Í:¼¥labelR§LiteralÍ:¾Í:Â¦é‡ç½®¨'é‡ç½®'¤initc¨PropertyÍ:áÍ:ñÂÂÂLªIdentifierÍ:áÍ:ëªbtnEnabledR§LiteralÍ:íÍ:ñÃ¤true¤initc¨PropertyÍ;Í;vÂÂÂLªIdentifierÍ;Í;¨onButtonO·ArrowFunctionExpressionÍ;Í;vÀÂÂÂM®BlockStatementÍ; Í;v‘S³ExpressionStatementÍ;CÍ;WT®CallExpressionÍ;CÍ;VY°MemberExpressionÍ;CÍ;TU®ThisExpressionÍ;CÍ;GLªIdentifierÍ;HÍ;T¬resetGestureÂÂÂ¤init£letS³ExpressionStatementÍ;ÀÍ;îX´AssignmentExpressionÍ;ÀÍ;í¡=Y°MemberExpressionÍ;ÀÍ;ŞLªIdentifierÍ;ÀÍ;Í­componentCallLªIdentifierÍ;ÎÍ;Ş°paramsGenerator_ÂÂLªIdentifierÍ;áÍ;í¬paramsLambdaM®BlockStatementÍ<Í<Ø‘S³ExpressionStatementÍ</Í<ÅT®CallExpressionÍ</Í<ÄY°MemberExpressionÍ</Í<RU®ThisExpressionÍ</Í<3LªIdentifierÍ<4Í<R¾updateStateVarsOfChildByElmtIdÂÂ’LªIdentifierÍ<SÍ<Y¦elmtIdb°ObjectExpressionÍ<[Í<Ã’c¨PropertyÍ<vÍ<ÂÂÂLªIdentifierÍ<vÍ<{¥labelR§LiteralÍ<}Í<¦é‡ç½®¨'é‡ç½®'¤initc¨PropertyÍ<œÍ<¬ÂÂÂLªIdentifierÍ<œÍ<¦ªbtnEnabledR§LiteralÍ<¨Í<¬Ã¤true¤initÂb°ObjectExpressionÍ<éÍ= ‘c¨PropertyÍ<ëÍ<şÂÂÂLªIdentifierÍ<ëÍ<ï¤nameR§LiteralÍ<ñÍ<ş«LightButton­"LightButton"¤initÂS³ExpressionStatementÍ=Í=(T®CallExpressionÍ=Í='Y°MemberExpressionÍ=Í=%LªIdentifierÍ=Í=!ª__Common__LªIdentifierÍ="Í=%£popÂÂÂS³ExpressionStatementÍ=2Í=ÎT®CallExpressionÍ=2Í=ÍY°MemberExpressionÍ=2Í=PU®ThisExpressionÍ=2Í=6LªIdentifierÍ=7Í=P¹observeComponentCreation2ÂÂ’O·ArrowFunctionExpressionÍ=QÍ=ÀÀÂÂÂ’LªIdentifierÍ=RÍ=X¦elmtIdLªIdentifierÍ=ZÍ=i¯isInitialRenderM®BlockStatementÍ=nÍ=À’S³ExpressionStatementÍ=}Í=‘T®CallExpressionÍ=}Í=Y°MemberExpressionÍ=}Í=LªIdentifierÍ=}Í=‡ª__Common__LªIdentifierÍ=ˆÍ=¦createÂÂÂS³ExpressionStatementÍ=ŸÍ=µT®CallExpressionÍ=ŸÍ=´Y°MemberExpressionÍ=ŸÍ=¯LªIdentifierÍ=ŸÍ=©ª__Common__LªIdentifierÍ=ªÍ=¯¥widthÂÂ‘R§LiteralÍ=°Í=³Ìx£120ÂLªIdentifierÍ=ÂÍ=Ìª__Common__ÂM®BlockStatementÍ=ØÍD
+‘S³ExpressionStatementÍ=çÍCÿT®CallExpressionÍ=çÍCşY°MemberExpressionÍ=çÍ>U®ThisExpressionÍ=çÍ=ëLªIdentifierÍ=ìÍ>¹observeComponentCreation2ÂÂ’O·ArrowFunctionExpressionÍ>ÍCäÀÂÂÂ’LªIdentifierÍ>Í>¦elmtIdLªIdentifierÍ>Í>¯isInitialRenderM®BlockStatementÍ>#ÍCä‘V«IfStatementÍ>6ÍCÕLªIdentifierÍ>:Í>I¯isInitialRenderM®BlockStatementÍ>KÍBš”]³VariableDeclarationÍ>bÍ@H‘^²VariableDeclaratorÍ>fÍ@GLªIdentifierÍ>fÍ>s­componentCallZ­NewExpressionÍ>vÍ@GLªIdentifierÍ>zÍ>…«LightButton–U®ThisExpressionÍ>†Í>Šb°ObjectExpressionÍ>ŒÍ?Ò“c¨PropertyÍ>§Í>ÓÂÂÂLªIdentifierÍ>§Í>¬¥labelVµConditionalExpressionÍ>®Í>ÓY°MemberExpressionÍ>®Í>¿U®ThisExpressionÍ>®Í>²LªIdentifierÍ>³Í>¿¬isValidatingÂÂR§LiteralÍ>ÂÍ>Ê¬æ ¡éªŒä¸­...®'æ ¡éªŒä¸­...'R§LiteralÍ>ÍÍ>Ó¬æ ¡éªŒæ‰‹åŠ¿®'æ ¡éªŒæ‰‹åŠ¿'¤initc¨PropertyÍ>îÍ?AÂÂÂLªIdentifierÍ>îÍ>øªbtnEnabledW±LogicalExpressionÍ>úÍ?AW±LogicalExpressionÍ>úÍ?+Q¯UnaryExpressionÍ>úÍ?	¡!ÃY°MemberExpressionÍ>ûÍ?	U®ThisExpressionÍ>ûÍ>ÿLªIdentifierÍ? Í?	©codeReadyÂÂ¢&&W°BinaryExpressionÍ?Í?+Y°MemberExpressionÍ?Í?'Y°MemberExpressionÍ?Í? U®ThisExpressionÍ?Í?LªIdentifierÍ?Í? ®gesturePatternÂÂLªIdentifierÍ?!Í?'¦lengthÂÂ¡>R§LiteralÍ?*Í?+ ¡0¢&&Q¯UnaryExpressionÍ?/Í?A¡!ÃY°MemberExpressionÍ?0Í?AU®ThisExpressionÍ?0Í?4LªIdentifierÍ?5Í?A¬isValidatingÂÂ¤initc¨PropertyÍ?\Í?»ÂÂÂLªIdentifierÍ?\Í?d¨onButtonO·ArrowFunctionExpressionÍ?fÍ?»ÀÂÂÂM®BlockStatementÍ?lÍ?»‘S³ExpressionStatementÍ?‹Í? T®CallExpressionÍ?‹Í?ŸY°MemberExpressionÍ?‹Í?U®ThisExpressionÍ?‹Í?LªIdentifierÍ?Í?­submitGestureÂÂÂ¤initLªIdentifierÍ?ÔÍ?İ©undefinedLªIdentifierÍ?ßÍ?å¦elmtIdO·ArrowFunctionExpressionÍ?çÍ?ğÀÂÂÂM®BlockStatementÍ?íÍ?ğb°ObjectExpressionÍ?òÍ@F“c¨PropertyÍ?ôÍ@1ÂÂÂLªIdentifierÍ?ôÍ?ø¤pageR§LiteralÍ?úÍ@1Ù5entry/src/main/ets/Component/GestureSignComponent.etsÙ7"entry/src/main/ets/Component/GestureSignComponent.ets"¤initc¨PropertyÍ@3Í@<ÂÂÂLªIdentifierÍ@3Í@7¤lineR§LiteralÍ@9Í@<ÌË£203¤initc¨PropertyÍ@>Í@DÂÂÂLªIdentifierÍ@>Í@A£colR§LiteralÍ@CÍ@D	¡9¤init£letS³ExpressionStatementÍ@^Í@{T®CallExpressionÍ@^Í@zY°MemberExpressionÍ@^Í@kLªIdentifierÍ@^Í@d¦ViewPULªIdentifierÍ@eÍ@k¦createÂÂ‘LªIdentifierÍ@lÍ@y­componentCallÂ]³VariableDeclarationÍ@‘ÍBC‘^²VariableDeclaratorÍ@•ÍBBLªIdentifierÍ@•Í@¡¬paramsLambdaO·ArrowFunctionExpressionÍ@¤ÍBBÀÂÂÂM®BlockStatementÍ@ªÍBB‘\¯ReturnStatementÍ@ÅÍB+b°ObjectExpressionÍ@ÌÍB*“c¨PropertyÍ@ëÍAÂÂÂLªIdentifierÍ@ëÍ@ğ¥labelVµConditionalExpressionÍ@òÍAY°MemberExpressionÍ@òÍAU®ThisExpressionÍ@òÍ@öLªIdentifierÍ@÷ÍA¬isValidatingÂÂR§LiteralÍAÍA¬æ ¡éªŒä¸­...®'æ ¡éªŒä¸­...'R§LiteralÍAÍA¬æ ¡éªŒæ‰‹åŠ¿®'æ ¡éªŒæ‰‹åŠ¿'¤initc¨PropertyÍA6ÍA‰ÂÂÂLªIdentifierÍA6ÍA@ªbtnEnabledW±LogicalExpressionÍABÍA‰W±LogicalExpressionÍABÍAsQ¯UnaryExpressionÍABÍAQ¡!ÃY°MemberExpressionÍACÍAQU®ThisExpressionÍACÍAGLªIdentifierÍAHÍAQ©codeReadyÂÂ¢&&W°BinaryExpressionÍAUÍAsY°MemberExpressionÍAUÍAoY°MemberExpressionÍAUÍAhU®ThisExpressionÍAUÍAYLªIdentifierÍAZÍAh®gesturePatternÂÂLªIdentifierÍAiÍAo¦lengthÂÂ¡>R§LiteralÍArÍAs ¡0¢&&Q¯UnaryExpressionÍAwÍA‰¡!ÃY°MemberExpressionÍAxÍA‰U®ThisExpressionÍAxÍA|LªIdentifierÍA}ÍA‰¬isValidatingÂÂ¤initc¨PropertyÍA¨ÍBÂÂÂLªIdentifierÍA¨ÍA°¨onButtonO·ArrowFunctionExpressionÍA²ÍBÀÂÂÂM®BlockStatementÍA¸ÍB‘S³ExpressionStatementÍAÛÍAğT®CallExpressionÍAÛÍAïY°MemberExpressionÍAÛÍAíU®ThisExpressionÍAÛÍAßLªIdentifierÍAàÍAí­submitGestureÂÂÂ¤init£letS³ExpressionStatementÍBYÍB‡X´AssignmentExpressionÍBYÍB†¡=Y°MemberExpressionÍBYÍBwLªIdentifierÍBYÍBf­componentCallLªIdentifierÍBgÍBw°paramsGenerator_ÂÂLªIdentifierÍBzÍB†¬paramsLambdaM®BlockStatementÍB±ÍCÕ‘S³ExpressionStatementÍBÈÍCÂT®CallExpressionÍBÈÍCÁY°MemberExpressionÍBÈÍBëU®ThisExpressionÍBÈÍBÌLªIdentifierÍBÍÍBë¾updateStateVarsOfChildByElmtIdÂÂ’LªIdentifierÍBìÍBò¦elmtIdb°ObjectExpressionÍBôÍCÀ’c¨PropertyÍCÍC;ÂÂÂLªIdentifierÍCÍC¥labelVµConditionalExpressionÍCÍC;Y°MemberExpressionÍCÍC'U®ThisExpressionÍCÍCLªIdentifierÍCÍC'¬isValidatingÂÂR§LiteralÍC*ÍC2¬æ ¡éªŒä¸­...®'æ ¡éªŒä¸­...'R§LiteralÍC5ÍC;¬æ ¡éªŒæ‰‹åŠ¿®'æ ¡éªŒæ‰‹åŠ¿'¤initc¨PropertyÍCVÍC©ÂÂÂLªIdentifierÍCVÍC`ªbtnEnabledW±LogicalExpressionÍCbÍC©W±LogicalExpressionÍCbÍC“Q¯UnaryExpressionÍCbÍCq¡!ÃY°MemberExpressionÍCcÍCqU®ThisExpressionÍCcÍCgLªIdentifierÍChÍCq©codeReadyÂÂ¢&&W°BinaryExpressionÍCuÍC“Y°MemberExpressionÍCuÍCY°MemberExpressionÍCuÍCˆU®ThisExpressionÍCuÍCyLªIdentifierÍCzÍCˆ®gesturePatternÂÂLªIdentifierÍC‰ÍC¦lengthÂÂ¡>R§LiteralÍC’ÍC“ ¡0¢&&Q¯UnaryExpressionÍC—ÍC©¡!ÃY°MemberExpressionÍC˜ÍC©U®ThisExpressionÍC˜ÍCœLªIdentifierÍCÍC©¬isValidatingÂÂ¤initÂb°ObjectExpressionÍCæÍCı‘c¨PropertyÍCèÍCûÂÂÂLªIdentifierÍCèÍCì¤nameR§LiteralÍCîÍCû«LightButton­"LightButton"¤initÂS³ExpressionStatementÍDÍD%T®CallExpressionÍDÍD$Y°MemberExpressionÍDÍD"LªIdentifierÍDÍDª__Common__LªIdentifierÍDÍD"£popÂÂÂS³ExpressionStatementÍD@ÍDJT®CallExpressionÍD@ÍDIY°MemberExpressionÍD@ÍDGLªIdentifierÍD@ÍDC£RowLªIdentifierÍDDÍDG£popÂÂÂS³ExpressionStatementÍDTÍDaT®CallExpressionÍDTÍD`Y°MemberExpressionÍDTÍD^LªIdentifierÍDTÍDZ¦ColumnLªIdentifierÍD[ÍD^£popÂÂÂN°MethodDefinitionÍDnÍD¦ÂÂLªIdentifierÍDnÍDv¨rerender¦methodO²FunctionExpressionÍDvÍD¦ÀÂÂÂM®BlockStatementÍDyÍD¦‘S³ExpressionStatementÍD„ÍDŸT®CallExpressionÍD„ÍDY°MemberExpressionÍD„ÍDœU®ThisExpressionÍD„ÍDˆLªIdentifierÍD‰ÍDœ³updateDirtyElementsÂÂÂÀ”Ôrf•¤type¥start£endªspecifiers¦source±ImportDeclarationÌ€Ì¥‘Ôrg•¤type¥start£end¨imported¥local¯ImportSpecifierÌ‰ÌLªIdentifierÌ‰Ì¤SignLªIdentifierÌ‰Ì¤SignR§LiteralÌ•Ì¤­../utils/sign¯'../utils/sign'f±ImportDeclarationÌ§ÌÇ‘Ôrh”¤type¥start£end¥local¶ImportDefaultSpecifierÌ®Ì³LªIdentifierÌ®Ì³¥hilogR§LiteralÌ¹ÌÆ«@ohos.hilog­"@ohos.hilog"f±ImportDeclarationÌÉÌ÷‘h¶ImportDefaultSpecifierÌĞÌÜLªIdentifierÌĞÌÜ¬promptActionR§LiteralÌâÌö²@ohos.promptAction´"@ohos.promptAction"f±ImportDeclarationÌùÍ%‘g¯ImportSpecifierÍÍLªIdentifierÍÍ«LightButtonLªIdentifierÍÍ«LightButtonR§LiteralÍÍ$­./LightButton¯'./LightButton'

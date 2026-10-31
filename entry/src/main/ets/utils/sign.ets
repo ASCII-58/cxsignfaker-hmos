@@ -112,8 +112,27 @@ export function parseSignResult(raw: string): SignOutcome {
 export class Sign {
   static readonly NEXT_SIGN_INTERVAL_MS = NEXT_SIGN_INTERVAL_MS;
 
-  /** LCR007 排查：最近一次 preSign 页面里提取到的 enc */
-  static lastPreSignEnc: string = '';
+  /**
+   * preSign 响应里提取到的 enc 缓存
+   * key = 活动 ID + 会话 Cookie：按「活动 + 登录会话」双维度隔离，
+   * 杜绝多用户并行预签到互相覆盖、以及跨活动沿用过期 enc（原先 lastPreSignEnc 单值缓存的缺陷）
+   */
+  private static readonly preSignEncCache: Map<string, string> = new Map();
+  /** 缓存条目上限，超出后整体清空（可用条目本就极少，无需 LRU） */
+  private static readonly ENC_CACHE_MAX_SIZE = 64;
+
+  /** 构造 enc 缓存键：活动与会话同时参与，任一不同都视为不同的签到上下文 */
+  private static buildEncCacheKey(activityId: string, cookies: string): string {
+    return `${activityId}|${cookies}`;
+  }
+
+  /** 写入 enc 缓存，超出容量上限时整体清空 */
+  private static cacheEnc(key: string, enc: string): void {
+    if (Sign.preSignEncCache.size >= Sign.ENC_CACHE_MAX_SIZE) {
+      Sign.preSignEncCache.clear();
+    }
+    Sign.preSignEncCache.set(key, enc);
+  }
 
   /**
    * 预签到（对齐上游：POST ext 表单 + 分析回传）
@@ -154,11 +173,13 @@ export class Sign {
       /enc\s*=\s*['"]([A-Za-z0-9+/=_-]{10,})['"]/,
       /"enc"\s*:\s*"([^"]{8,})"/
     ];
-    Sign.lastPreSignEnc = '';
+    // 先失效本会话本活动的旧值：本次 preSign 未返回 enc 时，不应沿用上一次的残留
+    const encCacheKey = Sign.buildEncCacheKey(activePrimaryId, cookies);
+    Sign.preSignEncCache.delete(encCacheKey);
     for (const p of encPatterns) {
       const m = p.exec(response.body);
       if (m && m[1]) {
-        Sign.lastPreSignEnc = m[1];
+        Sign.cacheEnc(encCacheKey, m[1]);
         hilog.info(DOMAIN, TAG, `PreSign enc found: ${m[1]}`);
         break;
       }
@@ -295,9 +316,11 @@ export class Sign {
    */
   static async GetSignEnc(cookies: string, activityId: string): Promise<string> {
     try {
-      if (Sign.lastPreSignEnc) {
-        hilog.info(DOMAIN, TAG, `SignEnc from preSign: ${Sign.lastPreSignEnc}`);
-        return Sign.lastPreSignEnc;
+      const cacheKey = Sign.buildEncCacheKey(activityId, cookies);
+      const cachedEnc = Sign.preSignEncCache.get(cacheKey);
+      if (cachedEnc) {
+        hilog.info(DOMAIN, TAG, `SignEnc from preSign: ${cachedEnc}`);
+        return cachedEnc;
       }
       const url = ChaoXingApi.URL_SIGN_PAGE.buildUrl({ 'activeId': activityId }).toString();
       const response = await Http.get(url, cookies);
@@ -311,6 +334,7 @@ export class Sign {
         const m = p.exec(response.body);
         if (m && m[1]) {
           hilog.info(DOMAIN, TAG, `SignEnc found: ${m[1]}`);
+          Sign.cacheEnc(cacheKey, m[1]);
           return m[1];
         }
       }

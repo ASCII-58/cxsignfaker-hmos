@@ -1,0 +1,790 @@
+Ôr@Ÿªassertions¤code´customTransformCache¬dependencies¢id¤meta±moduleSideEffects¬originalCode±originalSourcemap«resolvedIds®sourcemapChainµsyntheticNamedExportsµtransformDependencies®transformFiles¨cacheAstÔrAÚ7ì/**
+ * è¶…æ˜Ÿå¹³å°åŠ è§£å¯†å·¥å…·
+ * åŸºäºè¶…æ˜Ÿç™»å½•ç³»ç»Ÿçš„åŠ å¯†æ–¹å¼å®ç°
+ */
+// ä½¿ç”¨ import è¯­æ³•å¼•å…¥ CryptoJS
+import CryptoJS from '@ohos/crypto-js';
+import pasteboard from "@ohos.pasteboard";
+import promptAction from "@ohos.promptAction";
+/**
+ * æ‹¼æ¥ URL å‚æ•°
+ * @param {string} url - åŸºç¡€ URL
+ * @param {Object} params - è¦æ‹¼æ¥çš„å‚æ•°å¯¹è±¡
+ * @returns {string} æ‹¼æ¥åçš„ URL
+ */
+export class ChaoxingUtils {
+    static buildUrl(url, params) {
+        if (params === undefined) {
+            return url;
+        }
+        const parts = Object.entries(params).map(([key, value]) => {
+            return `${encodeURIComponent(key)}=${encodeURIComponent(value)}`;
+        });
+        const queryString = parts.join('&');
+        // åˆ¤æ–­æ˜¯å¦å·²æœ‰å‚æ•°
+        const separator = url.includes('?') ? '&' : '?';
+        return `${url}${separator}${queryString}`;
+    }
+    /**
+     * ç”ŸæˆUUIDv4
+     * æŒ‰ç…§ RFC 4122 è§„èŒƒç”Ÿæˆç‰ˆæœ¬4çš„UUID
+     * @returns {string} UUIDå­—ç¬¦ä¸²ï¼Œæ ¼å¼ä¸º xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
+     * @example
+     * const uuid = ChaoxingUtils.generateUUIDv4();
+     * // è¿”å›ç±»ä¼¼: "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"
+     */
+    static generateUUIDv4() {
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+            const r = Math.random() * 16 | 0;
+            const v = c === 'x' ? r : (r & 0x3 | 0x8);
+            return v.toString(16);
+        });
+    }
+    /**
+     * ç”Ÿæˆå›¾ç‰‡åï¼Œé•¿åº¦ä¸º12ï¼Œæ— åç¼€
+     * ç”¨äºç”Ÿæˆéšæœºçš„æ–‡ä»¶åæ ‡è¯†
+     * @returns {string} 12ä½åå…­è¿›åˆ¶å­—ç¬¦ä¸²
+     * @example
+     * const photoName = ChaoxingUtils.generatePhotoName();
+     * // è¿”å›ç±»ä¼¼: "a1b2c3d4e5f6"
+     */
+    static generatePhotoName() {
+        return 'xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+            const r = Math.random() * 16 | 0;
+            const v = c === 'x' ? r : (r & 0x3 | 0x8);
+            return v.toString(16);
+        });
+    }
+    /**
+     * å°†GCJ-02åæ ‡ç³»ï¼ˆç«æ˜Ÿåæ ‡ç³»ï¼‰è½¬æ¢ä¸ºBD-09åæ ‡ç³»ï¼ˆç™¾åº¦åæ ‡ç³»ï¼‰
+     *
+     * ç®—æ³•åŸç†ï¼š
+     * è¯¥ç®—æ³•é€šè¿‡æåæ ‡å˜æ¢çš„æ–¹å¼ï¼Œåœ¨GCJ-02åæ ‡çš„åŸºç¡€ä¸Šæ·»åŠ ç‰¹å®šçš„åç§»é‡ï¼Œ
+     * å°†åæ ‡è½¬æ¢ä¸ºç™¾åº¦åœ°å›¾ä½¿ç”¨çš„BD-09åæ ‡ç³»ã€‚
+     *
+     * @param gg_lat GCJ-02åæ ‡ç³»çš„çº¬åº¦å€¼ï¼Œå•ä½ä¸ºåº¦
+     * @param gg_lon GCJ-02åæ ‡ç³»çš„ç»åº¦å€¼ï¼Œå•ä½ä¸ºåº¦
+     * @returns è½¬æ¢åçš„BD-09åæ ‡ç³»åæ ‡ï¼ŒåŒ…å«çº¬åº¦(lat)å’Œç»åº¦(lon)çš„å¯¹è±¡
+     *
+     * @example
+    * // è½¬æ¢åŒ—äº¬å¤©å®‰é—¨é™„è¿‘çš„åæ ‡ç¤ºä¾‹
+     * const result = gcj02_to_bd09(39.9042, 116.4074);
+     * console.log(result); // è¾“å‡ºç±»ä¼¼: { lat: 39.9107, lon: 116.4155 }
+     */
+    static gcj02_to_bd09(gg_lat, gg_lon) {
+        // å°†ç»åº¦å’Œçº¬åº¦åˆ†åˆ«èµ‹å€¼ç»™ä¸´æ—¶å˜é‡xå’Œy
+        // æ³¨æ„è¿™é‡Œä½¿ç”¨çš„æ˜¯ä¼ ç»Ÿçš„æ•°å­¦åæ ‡è¡¨ç¤ºæ³•ï¼Œxè¡¨ç¤ºç»åº¦ï¼Œyè¡¨ç¤ºçº¬åº¦
+        const x = gg_lon;
+        const y = gg_lat;
+        // è®¡ç®—zå€¼ï¼šåœ¨åŸæœ‰è·ç¦»åŸºç¡€ä¸ŠåŠ ä¸Šä¸€ä¸ªå¾®å°çš„ä¿®æ­£é‡
+        // è¿™ä¸ªä¿®æ­£å¼ä½¿ç”¨æ­£å¼¦å‡½æ•°ï¼Œæ ¹æ®çº¬åº¦äº§ç”Ÿä¸åŒçš„åç§»é‡
+        const z = Math.sqrt(x * x + y * y) + 0.00002 * Math.sin(y * ChaoxingUtils.x_pi);
+        // è®¡ç®—thetaå€¼ï¼šåœ¨åŸæœ‰è§’åº¦åŸºç¡€ä¸ŠåŠ ä¸Šä¸€ä¸ªå¾®å°çš„ä¿®æ­£é‡
+        // è¿™ä¸ªä¿®æ­£å¼ä½¿ç”¨ä½™å¼¦å‡½æ•°ï¼Œæ ¹æ®ç»åº¦äº§ç”Ÿä¸åŒçš„åç§»é‡
+        // atan2(y, x)è®¡ç®—çš„æ˜¯ç‚¹(x,y)ä¸åŸç‚¹è¿çº¿ä¸xè½´æ­£æ–¹å‘çš„å¤¹è§’
+        const theta = Math.atan2(y, x) + 0.000003 * Math.cos(x * ChaoxingUtils.x_pi);
+        // è®¡ç®—è½¬æ¢åçš„BD-09åæ ‡ç³»ç»åº¦
+        // ä½¿ç”¨æåæ ‡è½¬ç›´è§’åæ ‡çš„å…¬å¼ï¼Œæœ€ååŠ ä¸Šå›ºå®šåç§»é‡0.0065
+        const bd_lon = z * Math.cos(theta) + 0.0065;
+        // è®¡ç®—è½¬æ¢åçš„BD-09åæ ‡ç³»çº¬åº¦
+        // ä½¿ç”¨æåæ ‡è½¬ç›´è§’åæ ‡çš„å…¬å¼ï¼Œæœ€ååŠ ä¸Šå›ºå®šåç§»é‡0.006
+        const bd_lat = z * Math.sin(theta) + 0.006;
+        // è¿”å›åŒ…å«è½¬æ¢åç»çº¬åº¦çš„å¯¹è±¡
+        // æŒ‰ç…§åœ°å›¾åæ ‡çš„ä¹ æƒ¯ï¼Œå…ˆè¿”å›çº¬åº¦ï¼Œå†è¿”å›ç»åº¦
+        return { lat: bd_lat, lon: bd_lon };
+    }
+    static toLocationInt(latOrLon) {
+        return Math.round(latOrLon * ChaoxingUtils.LOCATION_INT_SCALE);
+    }
+    static parseStoredCoord(value) {
+        return value.includes('.') ? Number(value) : Number(value) / ChaoxingUtils.LOCATION_INT_SCALE;
+    }
+    /**
+     * å°†BD-09åæ ‡ç³»ï¼ˆç™¾åº¦åæ ‡ç³»ï¼‰è½¬æ¢ä¸ºGCJ-02åæ ‡ç³»ï¼ˆç«æ˜Ÿåæ ‡ç³»ï¼‰
+     *
+     * æ”¶è—ä½ç½®åœ¨æ•°æ®åº“ä¸­å­˜çš„æ˜¯ç­¾åˆ°ç”¨çš„ BD-09 åæ ‡ï¼Œ
+     * è€Œå†…ç½®åœ°å›¾ï¼ˆé«˜å¾·ç“¦ç‰‡ï¼‰æŒ‰ GCJ-02 å®šä½ï¼Œå±•ç¤ºå‰éœ€è½¬å› GCJ-02
+     *
+     * @param bd_lat BD-09åæ ‡ç³»çš„çº¬åº¦å€¼ï¼Œå•ä½ä¸ºåº¦
+     * @param bd_lon BD-09åæ ‡ç³»çš„ç»åº¦å€¼ï¼Œå•ä½ä¸ºåº¦
+     * @returns è½¬æ¢åçš„GCJ-02åæ ‡ { lat, lon }
+     */
+    static bd09_to_gcj02(bd_lat, bd_lon) {
+        const x = bd_lon - 0.0065;
+        const y = bd_lat - 0.006;
+        const z = Math.sqrt(x * x + y * y) - 0.00002 * Math.sin(y * ChaoxingUtils.x_pi);
+        const theta = Math.atan2(y, x) - 0.000003 * Math.cos(x * ChaoxingUtils.x_pi);
+        return { lat: z * Math.sin(theta), lon: z * Math.cos(theta) };
+    }
+    /**
+     * å°†WGS-84åæ ‡ç³»ï¼ˆGPSè®¾å¤‡åŸå§‹åæ ‡ï¼‰è½¬æ¢ä¸ºGCJ-02åæ ‡ç³»ï¼ˆç«æ˜Ÿåæ ‡ï¼‰
+     *
+     * geoLocationManager å®šä½è¿”å› WGS-84ï¼Œè€Œåœ°å›¾é€‰ç‚¹è¿”å› GCJ-02ï¼›
+     * æäº¤ç­¾åˆ°å‰ç»Ÿä¸€èµ° WGS-84 â†’ GCJ-02 â†’ BD-09 çš„é“¾è·¯
+     *
+     * @param wg_lat WGS-84çº¬åº¦å€¼ï¼Œå•ä½ä¸ºåº¦
+     * @param wg_lon WGS-84ç»åº¦å€¼ï¼Œå•ä½ä¸ºåº¦
+     * @returns è½¬æ¢åçš„GCJ-02åæ ‡ { lat, lon }ï¼ˆå¢ƒå¤–åæ ‡ä¸åšåç§»ï¼ŒåŸæ ·è¿”å›ï¼‰
+     */
+    static wgs84_to_gcj02(wg_lat, wg_lon) {
+        // ç²—ç•¥åˆ¤æ–­æ˜¯å¦åœ¨ä¸­å›½åæ ‡èŒƒå›´å¤–ï¼Œå¢ƒå¤–æ— åç§»å‚æ•°ï¼Œç›´æ¥è¿”å›
+        if (wg_lon < 72.004 || wg_lon > 137.8347 || wg_lat < 0.8293 || wg_lat > 55.8271) {
+            return { lat: wg_lat, lon: wg_lon };
+        }
+        let dLat = ChaoxingUtils.transformLat(wg_lon - 105.0, wg_lat - 35.0);
+        let dLon = ChaoxingUtils.transformLon(wg_lon - 105.0, wg_lat - 35.0);
+        const radLat = wg_lat / 180.0 * Math.PI;
+        let magic = Math.sin(radLat);
+        magic = 1 - 0.00669342162296594323 * magic * magic;
+        const sqrtMagic = Math.sqrt(magic);
+        dLat = (dLat * 180.0) / ((6378245.0 * (1 - 0.00669342162296594323)) / (magic * sqrtMagic) * Math.PI);
+        dLon = (dLon * 180.0) / (6378245.0 / sqrtMagic * Math.cos(radLat) * Math.PI);
+        return { lat: wg_lat + dLat, lon: wg_lon + dLon };
+    }
+    // çº¬åº¦åç§»é‡çš„å¤šé¡¹å¼æ‹Ÿåˆï¼ˆæ ‡å‡† WGS-84 â†’ GCJ-02 ç®—æ³•ï¼‰
+    static transformLat(x, y) {
+        let ret = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * Math.sqrt(Math.abs(x));
+        ret += (20.0 * Math.sin(6.0 * x * Math.PI) + 20.0 * Math.sin(2.0 * x * Math.PI)) * 2.0 / 3.0;
+        ret += (20.0 * Math.sin(y * Math.PI) + 40.0 * Math.sin(y / 3.0 * Math.PI)) * 2.0 / 3.0;
+        ret += (160.0 * Math.sin(y / 12.0 * Math.PI) + 320 * Math.sin(y * Math.PI / 30.0)) * 2.0 / 3.0;
+        return ret;
+    }
+    // ç»åº¦åç§»é‡çš„å¤šé¡¹å¼æ‹Ÿåˆï¼ˆæ ‡å‡† WGS-84 â†’ GCJ-02 ç®—æ³•ï¼‰
+    static transformLon(x, y) {
+        let ret = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * Math.sqrt(Math.abs(x));
+        ret += (20.0 * Math.sin(6.0 * x * Math.PI) + 20.0 * Math.sin(2.0 * x * Math.PI)) * 2.0 / 3.0;
+        ret += (20.0 * Math.sin(x * Math.PI) + 40.0 * Math.sin(x / 3.0 * Math.PI)) * 2.0 / 3.0;
+        ret += (150.0 * Math.sin(x / 12.0 * Math.PI) + 300.0 * Math.sin(x / 30.0 * Math.PI)) * 2.0 / 3.0;
+        return ret;
+    }
+    static hasHole(arr) {
+        for (let i = 0; i < arr.length; i++) {
+            if (!(i in arr)) {
+                return true; // å­˜åœ¨ç©ºæ§½
+            }
+        }
+        return false;
+    }
+    /**
+     * AES-CBCæ¨¡å¼åŠ å¯† - ä¸è¶…æ˜Ÿç³»ç»Ÿä¿æŒä¸€è‡´çš„åŠ å¯†æ–¹å¼
+     *
+     * ä½¿ç”¨è¶…æ˜Ÿé»˜è®¤å¯†é’¥ 'u2oh6Vu^HWe4_AES' è¿›è¡ŒåŠ å¯†
+     * åŠ å¯†æ¨¡å¼ï¼šAES-CBC
+     * å¡«å……æ–¹å¼ï¼šPKCS7
+     *
+     * @param {string} message éœ€è¦åŠ å¯†çš„æ˜æ–‡æ¶ˆæ¯
+     * @returns {string} Base64ç¼–ç çš„å¯†æ–‡å­—ç¬¦ä¸²
+     * @example
+     * const encrypted = ChaoxingUtils.encryptByAES("mypassword");
+     * // è¿”å›ç±»ä¼¼: "U2FsdGVkX1+..."
+     */
+    static encryptByAES(message) {
+        // è¶…æ˜Ÿçš„å…·ä½“å®ç°æ–¹å¼ - ä»login.jså’Œutil.jsä¸­æå–
+        const key = ChaoxingUtils.DEFAULT_KEY;
+        const CBCOptions = {
+            iv: CryptoJS.enc.Utf8.parse(key),
+            mode: CryptoJS.mode.CBC,
+            padding: CryptoJS.pad.Pkcs7,
+        };
+        const aeskey = CryptoJS.enc.Utf8.parse(key);
+        // è¶…æ˜Ÿå®ç°ä¸­å­—ç¬¦ä¸²ç›´æ¥ä½¿ç”¨UTF8ç¼–ç ï¼Œæ— éœ€ç‰¹åˆ«å¤„ç†
+        const secretData = CryptoJS.enc.Utf8.parse(message);
+        const encrypted = CryptoJS.AES.encrypt(secretData, aeskey, CBCOptions);
+        return CryptoJS.enc.Base64.stringify(encrypted.ciphertext);
+    }
+    /**
+     * ç”Ÿæˆè¶…æ˜Ÿç™»å½•è¯·æ±‚ä½“
+     *
+     * å°†åŠ å¯†åçš„ç”¨æˆ·åå’Œå¯†ç æ ¼å¼åŒ–ä¸ºè¶…æ˜Ÿç™»å½•APIæ‰€éœ€çš„è¡¨å•æ ¼å¼
+     *
+     * @param {string} username AESåŠ å¯†å¹¶Base64ç¼–ç åçš„ç”¨æˆ·å
+     * @param {string} password AESåŠ å¯†å¹¶Base64ç¼–ç åçš„å¯†ç 
+     * @returns {string} URLç¼–ç çš„ç™»å½•è¡¨å•å­—ç¬¦ä¸²
+     * @example
+     * const encrypted = ChaoxingUtils.encryptByAES("username");
+     * const pwd = ChaoxingUtils.encryptByAES("password");
+     * const body = ChaoxingUtils.getLoginBody(encrypted, pwd);
+     * // è¿”å›: "fid=-1&uname=...&password=...&refer=..."
+     */
+    static getLoginBody(username, password) {
+        // URLç¼–ç åŠ å¯†åçš„ç”¨æˆ·åå’Œå¯†ç 
+        const encodedUsername = encodeURIComponent(username);
+        const encodedPassword = encodeURIComponent(password);
+        // æ„é€ å®Œæ•´çš„ç™»å½•å­—ç¬¦ä¸²
+        return `fid=-1&uname=${encodedUsername}&password=${encodedPassword}&refer=https%253A%252F%252Fmooc2-ans.chaoxing.com%252Fmooc2-ans%252Fvisit%252Finteraction&t=true&forbidotherlogin=0&validate=&doubleFactorLogin=0&independentId=0&independentNameId=0`;
+    }
+    /**
+     * å°† Set-Cookie å“åº”å¤´åˆ—è¡¨å¤„ç†æˆå¯ç”¨äºè¯·æ±‚çš„ Cookie å­—ç¬¦ä¸²
+     *
+     * ä»æœåŠ¡å™¨è¿”å›çš„ Set-Cookie å¤´éƒ¨æå– name=value å¯¹ï¼Œ
+     * å¹¶æ ¼å¼åŒ–ä¸ºæ ‡å‡†çš„ Cookie è¯·æ±‚å¤´æ ¼å¼
+     *
+     * @param {string[]} setCookieHeaders æœåŠ¡å™¨è¿”å›çš„ Set-Cookie å¤´éƒ¨å­—ç¬¦ä¸²æ•°ç»„
+     * @returns {string} å¤„ç†åçš„ Cookie å­—ç¬¦ä¸²ï¼Œæ ¼å¼ä¸º "name1=value1; name2=value2"
+     * @example
+     * const setCookies = ["session=abc123; Path=/", "token=xyz789; HttpOnly"];
+     * const cookie = ChaoxingUtils.processSetCookieHeaders(setCookies);
+     * // è¿”å›: "session=abc123; token=xyz789"
+     */
+    static processSetCookieHeaders(setCookieHeaders) {
+        if (!Array.isArray(setCookieHeaders) || setCookieHeaders.length === 0) {
+            return '';
+        }
+        return setCookieHeaders
+            .map(cookie => cookie.split(';')[0].trim()) // æå–æ¯ä¸ª Set-Cookie çš„ name=value
+            .join('; ');
+    }
+    /**
+     * è·å–ç­¾åˆ°æ´»åŠ¨å‰©ä½™æ—¶é—´ï¼ˆæ¯«ç§’ï¼‰
+     *
+     * @param {number} endTime æ´»åŠ¨ç»“æŸæ—¶é—´æˆ³ï¼ˆæ¯«ç§’ï¼‰
+     * @returns {number} å‰©ä½™æ—¶é—´ï¼ˆæ¯«ç§’ï¼‰ï¼Œæœ€å°ä¸º0
+     * @example
+     * const remaining = ChaoxingUtils.getRemainingTime(Date.now() + 3600000);
+     * // è¿”å›: 3600000 (1å°æ—¶)
+     */
+    static getRemainingTime(endTime) {
+        const currentTime = Date.now();
+        return Math.max(0, endTime - currentTime);
+    }
+    /**
+     * æ£€æŸ¥ç­¾åˆ°æ´»åŠ¨æ˜¯å¦æ­£åœ¨è¿›è¡Œä¸­
+     *
+     * @param {number} startTime æ´»åŠ¨å¼€å§‹æ—¶é—´æˆ³ï¼ˆæ¯«ç§’ï¼‰
+     * @param {number} endTime æ´»åŠ¨ç»“æŸæ—¶é—´æˆ³ï¼ˆæ¯«ç§’ï¼‰
+     * @returns {boolean} æ´»åŠ¨æ˜¯å¦åœ¨è¿›è¡Œä¸­
+     */
+    static isSignActivityActive(startTime, endTime) {
+        const currentTime = Date.now();
+        return currentTime >= startTime && currentTime <= endTime;
+    }
+    /**
+     * æ£€æŸ¥ç­¾åˆ°æ´»åŠ¨æ˜¯å¦å·²å¼€å§‹
+     *
+     * @param {number} startTime æ´»åŠ¨å¼€å§‹æ—¶é—´æˆ³ï¼ˆæ¯«ç§’ï¼‰
+     * @returns {boolean} æ´»åŠ¨æ˜¯å¦å·²å¼€å§‹
+     */
+    static isSignActivityStarted(startTime) {
+        const currentTime = Date.now();
+        return currentTime >= startTime;
+    }
+    /**
+     * æ£€æŸ¥ç­¾åˆ°æ´»åŠ¨æ˜¯å¦å·²ç»“æŸ
+     *
+     * @param {number} endTime æ´»åŠ¨ç»“æŸæ—¶é—´æˆ³ï¼ˆæ¯«ç§’ï¼‰
+     * @returns {boolean} æ´»åŠ¨æ˜¯å¦å·²ç»“æŸ
+     */
+    static isSignActivityEnded(endTime) {
+        const currentTime = Date.now();
+        return currentTime > endTime;
+    }
+    static copyText(text) {
+        const pasteboardData = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text);
+        const systemPasteboard = pasteboard.getSystemPasteboard();
+        systemPasteboard.setData(pasteboardData);
+        promptAction.showToast({ message: 'å·²å¤åˆ¶åˆ°å‰ªè´´æ¿', duration: 1500 });
+    }
+}
+/**
+ * åæ ‡è½¬æ¢å·¥å…·æ¨¡å—
+ * æä¾›GCJ-02ï¼ˆå›½æµ‹å±€åæ ‡ç³»ï¼‰åˆ°BD-09ï¼ˆç™¾åº¦åæ ‡ç³»ï¼‰çš„è½¬æ¢åŠŸèƒ½
+ *
+ * èƒŒæ™¯è¯´æ˜ï¼š
+ * - GCJ-02åæ ‡ç³»æ˜¯ç”±ä¸­å›½å›½å®¶æµ‹ç»˜å±€åˆ¶å®šçš„åæ ‡ç³»ç»Ÿï¼Œæ‰€æœ‰åœ¨ä¸­å›½ä½¿ç”¨çš„åœ°å›¾äº§å“éƒ½å¿…é¡»ä½¿ç”¨è¿™ä¸ªåæ ‡ç³»
+ * - BD-09åæ ‡ç³»æ˜¯ç™¾åº¦åœ°å›¾ä½¿ç”¨çš„åæ ‡ç³»ï¼Œåœ¨GCJ-02çš„åŸºç¡€ä¸Šè¿›è¡Œäº†è¿›ä¸€æ­¥çš„åç§»
+ * - è¿™äº›åæ ‡ç³»çš„åç§»æ˜¯ä¸ºäº†è§£å†³åœ°å›¾æ•°æ®çš„ç²¾åº¦æ§åˆ¶é—®é¢˜ï¼Œå±äºä¸­å›½ç‰¹è‰²çš„åœ°ç†ä¿¡æ¯å¤„ç†æŠ€æœ¯
+ */
+// å®šä¹‰åæ ‡è½¬æ¢ä¸­ä½¿ç”¨çš„å¸¸é‡
+// è¿™ä¸ªå¸¸é‡æ˜¯Ï€(3.14159265358979324)ä¹˜ä»¥3000/180ï¼Œç”¨äºç»çº¬åº¦çš„å¼§åº¦è½¬æ¢
+ChaoxingUtils.x_pi = 3.14159265358979324 * 3000.0 / 180.0;
+/**
+ * æ”¶è—ä½ç½®åæ ‡å…¥åº“è¾…åŠ©
+ * åº“ä¸­åæ ‡æŒ‰ Ã—1e6 å­˜æ•´æ•°ï¼ˆé¿å…æµ®ç‚¹å­—ç¬¦ä¸²ç²¾åº¦é—®é¢˜ï¼‰ï¼›
+ * è¯»å–æ—¶å…¼å®¹æ—§ç‰ˆå°æ•°æ ¼å¼ï¼ˆå«å°æ•°ç‚¹æŒ‰æ—§æ ¼å¼è§£æï¼‰
+ */
+ChaoxingUtils.LOCATION_INT_SCALE = 1000000;
+/**
+ * è¶…æ˜Ÿé»˜è®¤ä½¿ç”¨çš„AESå¯†é’¥
+ */
+ChaoxingUtils.DEFAULT_KEY = 'u2oh6Vu^HWe4_AES';
+//# sourceMappingURL=utils.js.mapÂ“ÙzE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\oh_modules\.ohpm\@ohos+crypto-js@2.0.5\oh_modules\@ohos\crypto-js\index.tsÙ^ hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.pasteboard.d.tsÙ` hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.promptAction.d.tsÙQE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\utils.tsÔrB›ªmoduleName±isLocalDependency¯isNodeEntryFile§pkgPath±belongProjectPath§pkgNameªpkgVersion±dependencyPkgInfo¯hostModulesInfo°belongModulePath¬shouldEmitJs¥entryÃÂÙ5E:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entryÙ/E:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT¥entry¥1.0.0Ô  •ÔrC’²hostDependencyName®hostModuleName®../utils/utils¥entryC§./utils¥entryC§./utils¥entryC§./utils¥entryC§./utils¥entryÙ5E:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entryÃÃÚ6ï/**
+ * è¶…æ˜Ÿå¹³å°åŠ è§£å¯†å·¥å…·
+ * åŸºäºè¶…æ˜Ÿç™»å½•ç³»ç»Ÿçš„åŠ å¯†æ–¹å¼å®ç°
+ */
+
+// ä½¿ç”¨ import è¯­æ³•å¼•å…¥ CryptoJS
+import CryptoJS from '@ohos/crypto-js'
+import { pasteboard } from '@kit.BasicServicesKit';
+import { promptAction } from '@kit.ArkUI';
+/**
+ * æ‹¼æ¥ URL å‚æ•°
+ * @param {string} url - åŸºç¡€ URL
+ * @param {Object} params - è¦æ‹¼æ¥çš„å‚æ•°å¯¹è±¡
+ * @returns {string} æ‹¼æ¥åçš„ URL
+ */
+
+export class ChaoxingUtils {
+  static buildUrl(url: string, params?: object): string {
+    if (params === undefined) {
+      return url
+    }
+    const parts = Object.entries(params).map(([key, value]) => {
+      return `${encodeURIComponent(key)}=${encodeURIComponent(value)}`;
+    });
+
+    const queryString = parts.join('&');
+
+    // åˆ¤æ–­æ˜¯å¦å·²æœ‰å‚æ•°
+    const separator = url.includes('?') ? '&' : '?';
+    return `${url}${separator}${queryString}`;
+  }
+
+  /**
+   * ç”ŸæˆUUIDv4
+   * æŒ‰ç…§ RFC 4122 è§„èŒƒç”Ÿæˆç‰ˆæœ¬4çš„UUID
+   * @returns {string} UUIDå­—ç¬¦ä¸²ï¼Œæ ¼å¼ä¸º xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
+   * @example
+   * const uuid = ChaoxingUtils.generateUUIDv4();
+   * // è¿”å›ç±»ä¼¼: "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"
+   */
+  static generateUUIDv4(): string {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+      const r = Math.random() * 16 | 0;
+      const v = c === 'x' ? r : (r & 0x3 | 0x8);
+      return v.toString(16);
+    });
+  }
+
+  /**
+   * ç”Ÿæˆå›¾ç‰‡åï¼Œé•¿åº¦ä¸º12ï¼Œæ— åç¼€
+   * ç”¨äºç”Ÿæˆéšæœºçš„æ–‡ä»¶åæ ‡è¯†
+   * @returns {string} 12ä½åå…­è¿›åˆ¶å­—ç¬¦ä¸²
+   * @example
+   * const photoName = ChaoxingUtils.generatePhotoName();
+   * // è¿”å›ç±»ä¼¼: "a1b2c3d4e5f6"
+   */
+  static generatePhotoName(): string {
+    return 'xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+      const r = Math.random() * 16 | 0;
+      const v = c === 'x' ? r : (r & 0x3 | 0x8);
+      return v.toString(16);
+    });
+  }
+
+  /**
+   * åæ ‡è½¬æ¢å·¥å…·æ¨¡å—
+   * æä¾›GCJ-02ï¼ˆå›½æµ‹å±€åæ ‡ç³»ï¼‰åˆ°BD-09ï¼ˆç™¾åº¦åæ ‡ç³»ï¼‰çš„è½¬æ¢åŠŸèƒ½
+   *
+   * èƒŒæ™¯è¯´æ˜ï¼š
+   * - GCJ-02åæ ‡ç³»æ˜¯ç”±ä¸­å›½å›½å®¶æµ‹ç»˜å±€åˆ¶å®šçš„åæ ‡ç³»ç»Ÿï¼Œæ‰€æœ‰åœ¨ä¸­å›½ä½¿ç”¨çš„åœ°å›¾äº§å“éƒ½å¿…é¡»ä½¿ç”¨è¿™ä¸ªåæ ‡ç³»
+   * - BD-09åæ ‡ç³»æ˜¯ç™¾åº¦åœ°å›¾ä½¿ç”¨çš„åæ ‡ç³»ï¼Œåœ¨GCJ-02çš„åŸºç¡€ä¸Šè¿›è¡Œäº†è¿›ä¸€æ­¥çš„åç§»
+   * - è¿™äº›åæ ‡ç³»çš„åç§»æ˜¯ä¸ºäº†è§£å†³åœ°å›¾æ•°æ®çš„ç²¾åº¦æ§åˆ¶é—®é¢˜ï¼Œå±äºä¸­å›½ç‰¹è‰²çš„åœ°ç†ä¿¡æ¯å¤„ç†æŠ€æœ¯
+   */
+
+  // å®šä¹‰åæ ‡è½¬æ¢ä¸­ä½¿ç”¨çš„å¸¸é‡
+  // è¿™ä¸ªå¸¸é‡æ˜¯Ï€(3.14159265358979324)ä¹˜ä»¥3000/180ï¼Œç”¨äºç»çº¬åº¦çš„å¼§åº¦è½¬æ¢
+  static readonly x_pi: number = 3.14159265358979324 * 3000.0 / 180.0;
+
+  /**
+   * å°†GCJ-02åæ ‡ç³»ï¼ˆç«æ˜Ÿåæ ‡ç³»ï¼‰è½¬æ¢ä¸ºBD-09åæ ‡ç³»ï¼ˆç™¾åº¦åæ ‡ç³»ï¼‰
+   *
+   * ç®—æ³•åŸç†ï¼š
+   * è¯¥ç®—æ³•é€šè¿‡æåæ ‡å˜æ¢çš„æ–¹å¼ï¼Œåœ¨GCJ-02åæ ‡çš„åŸºç¡€ä¸Šæ·»åŠ ç‰¹å®šçš„åç§»é‡ï¼Œ
+   * å°†åæ ‡è½¬æ¢ä¸ºç™¾åº¦åœ°å›¾ä½¿ç”¨çš„BD-09åæ ‡ç³»ã€‚
+   *
+   * @param gg_lat GCJ-02åæ ‡ç³»çš„çº¬åº¦å€¼ï¼Œå•ä½ä¸ºåº¦
+   * @param gg_lon GCJ-02åæ ‡ç³»çš„ç»åº¦å€¼ï¼Œå•ä½ä¸ºåº¦
+   * @returns è½¬æ¢åçš„BD-09åæ ‡ç³»åæ ‡ï¼ŒåŒ…å«çº¬åº¦(lat)å’Œç»åº¦(lon)çš„å¯¹è±¡
+   *
+   * @example
+  * // è½¬æ¢åŒ—äº¬å¤©å®‰é—¨é™„è¿‘çš„åæ ‡ç¤ºä¾‹
+   * const result = gcj02_to_bd09(39.9042, 116.4074);
+   * console.log(result); // è¾“å‡ºç±»ä¼¼: { lat: 39.9107, lon: 116.4155 }
+   */
+  static gcj02_to_bd09(gg_lat: number, gg_lon: number): { lat: number, lon: number } {
+    // å°†ç»åº¦å’Œçº¬åº¦åˆ†åˆ«èµ‹å€¼ç»™ä¸´æ—¶å˜é‡xå’Œy
+    // æ³¨æ„è¿™é‡Œä½¿ç”¨çš„æ˜¯ä¼ ç»Ÿçš„æ•°å­¦åæ ‡è¡¨ç¤ºæ³•ï¼Œxè¡¨ç¤ºç»åº¦ï¼Œyè¡¨ç¤ºçº¬åº¦
+    const x = gg_lon;
+    const y = gg_lat;
+
+    // è®¡ç®—zå€¼ï¼šåœ¨åŸæœ‰è·ç¦»åŸºç¡€ä¸ŠåŠ ä¸Šä¸€ä¸ªå¾®å°çš„ä¿®æ­£é‡
+    // è¿™ä¸ªä¿®æ­£å¼ä½¿ç”¨æ­£å¼¦å‡½æ•°ï¼Œæ ¹æ®çº¬åº¦äº§ç”Ÿä¸åŒçš„åç§»é‡
+    const z = Math.sqrt(x * x + y * y) + 0.00002 * Math.sin(y * ChaoxingUtils.x_pi);
+
+    // è®¡ç®—thetaå€¼ï¼šåœ¨åŸæœ‰è§’åº¦åŸºç¡€ä¸ŠåŠ ä¸Šä¸€ä¸ªå¾®å°çš„ä¿®æ­£é‡
+    // è¿™ä¸ªä¿®æ­£å¼ä½¿ç”¨ä½™å¼¦å‡½æ•°ï¼Œæ ¹æ®ç»åº¦äº§ç”Ÿä¸åŒçš„åç§»é‡
+    // atan2(y, x)è®¡ç®—çš„æ˜¯ç‚¹(x,y)ä¸åŸç‚¹è¿çº¿ä¸xè½´æ­£æ–¹å‘çš„å¤¹è§’
+    const theta = Math.atan2(y, x) + 0.000003 * Math.cos(x * ChaoxingUtils.x_pi);
+
+    // è®¡ç®—è½¬æ¢åçš„BD-09åæ ‡ç³»ç»åº¦
+    // ä½¿ç”¨æåæ ‡è½¬ç›´è§’åæ ‡çš„å…¬å¼ï¼Œæœ€ååŠ ä¸Šå›ºå®šåç§»é‡0.0065
+    const bd_lon = z * Math.cos(theta) + 0.0065;
+
+    // è®¡ç®—è½¬æ¢åçš„BD-09åæ ‡ç³»çº¬åº¦
+    // ä½¿ç”¨æåæ ‡è½¬ç›´è§’åæ ‡çš„å…¬å¼ï¼Œæœ€ååŠ ä¸Šå›ºå®šåç§»é‡0.006
+    const bd_lat = z * Math.sin(theta) + 0.006;
+
+    // è¿”å›åŒ…å«è½¬æ¢åç»çº¬åº¦çš„å¯¹è±¡
+    // æŒ‰ç…§åœ°å›¾åæ ‡çš„ä¹ æƒ¯ï¼Œå…ˆè¿”å›çº¬åº¦ï¼Œå†è¿”å›ç»åº¦
+    return { lat: bd_lat, lon: bd_lon };
+  }
+
+  /**
+   * æ”¶è—ä½ç½®åæ ‡å…¥åº“è¾…åŠ©
+   * åº“ä¸­åæ ‡æŒ‰ Ã—1e6 å­˜æ•´æ•°ï¼ˆé¿å…æµ®ç‚¹å­—ç¬¦ä¸²ç²¾åº¦é—®é¢˜ï¼‰ï¼›
+   * è¯»å–æ—¶å…¼å®¹æ—§ç‰ˆå°æ•°æ ¼å¼ï¼ˆå«å°æ•°ç‚¹æŒ‰æ—§æ ¼å¼è§£æï¼‰
+   */
+  static readonly LOCATION_INT_SCALE: number = 1000000;
+
+  static toLocationInt(latOrLon: number): number {
+    return Math.round(latOrLon * ChaoxingUtils.LOCATION_INT_SCALE);
+  }
+
+  static parseStoredCoord(value: string): number {
+    return value.includes('.') ? Number(value) : Number(value) / ChaoxingUtils.LOCATION_INT_SCALE;
+  }
+
+  /**
+   * å°†BD-09åæ ‡ç³»ï¼ˆç™¾åº¦åæ ‡ç³»ï¼‰è½¬æ¢ä¸ºGCJ-02åæ ‡ç³»ï¼ˆç«æ˜Ÿåæ ‡ç³»ï¼‰
+   *
+   * æ”¶è—ä½ç½®åœ¨æ•°æ®åº“ä¸­å­˜çš„æ˜¯ç­¾åˆ°ç”¨çš„ BD-09 åæ ‡ï¼Œ
+   * è€Œå†…ç½®åœ°å›¾ï¼ˆé«˜å¾·ç“¦ç‰‡ï¼‰æŒ‰ GCJ-02 å®šä½ï¼Œå±•ç¤ºå‰éœ€è½¬å› GCJ-02
+   *
+   * @param bd_lat BD-09åæ ‡ç³»çš„çº¬åº¦å€¼ï¼Œå•ä½ä¸ºåº¦
+   * @param bd_lon BD-09åæ ‡ç³»çš„ç»åº¦å€¼ï¼Œå•ä½ä¸ºåº¦
+   * @returns è½¬æ¢åçš„GCJ-02åæ ‡ { lat, lon }
+   */
+  static bd09_to_gcj02(bd_lat: number, bd_lon: number): { lat: number, lon: number } {
+    const x = bd_lon - 0.0065;
+    const y = bd_lat - 0.006;
+    const z = Math.sqrt(x * x + y * y) - 0.00002 * Math.sin(y * ChaoxingUtils.x_pi);
+    const theta = Math.atan2(y, x) - 0.000003 * Math.cos(x * ChaoxingUtils.x_pi);
+    return { lat: z * Math.sin(theta), lon: z * Math.cos(theta) };
+  }
+
+  /**
+   * å°†WGS-84åæ ‡ç³»ï¼ˆGPSè®¾å¤‡åŸå§‹åæ ‡ï¼‰è½¬æ¢ä¸ºGCJ-02åæ ‡ç³»ï¼ˆç«æ˜Ÿåæ ‡ï¼‰
+   *
+   * geoLocationManager å®šä½è¿”å› WGS-84ï¼Œè€Œåœ°å›¾é€‰ç‚¹è¿”å› GCJ-02ï¼›
+   * æäº¤ç­¾åˆ°å‰ç»Ÿä¸€èµ° WGS-84 â†’ GCJ-02 â†’ BD-09 çš„é“¾è·¯
+   *
+   * @param wg_lat WGS-84çº¬åº¦å€¼ï¼Œå•ä½ä¸ºåº¦
+   * @param wg_lon WGS-84ç»åº¦å€¼ï¼Œå•ä½ä¸ºåº¦
+   * @returns è½¬æ¢åçš„GCJ-02åæ ‡ { lat, lon }ï¼ˆå¢ƒå¤–åæ ‡ä¸åšåç§»ï¼ŒåŸæ ·è¿”å›ï¼‰
+   */
+  static wgs84_to_gcj02(wg_lat: number, wg_lon: number): { lat: number, lon: number } {
+    // ç²—ç•¥åˆ¤æ–­æ˜¯å¦åœ¨ä¸­å›½åæ ‡èŒƒå›´å¤–ï¼Œå¢ƒå¤–æ— åç§»å‚æ•°ï¼Œç›´æ¥è¿”å›
+    if (wg_lon < 72.004 || wg_lon > 137.8347 || wg_lat < 0.8293 || wg_lat > 55.8271) {
+      return { lat: wg_lat, lon: wg_lon };
+    }
+
+    let dLat = ChaoxingUtils.transformLat(wg_lon - 105.0, wg_lat - 35.0);
+    let dLon = ChaoxingUtils.transformLon(wg_lon - 105.0, wg_lat - 35.0);
+    const radLat = wg_lat / 180.0 * Math.PI;
+    let magic = Math.sin(radLat);
+    magic = 1 - 0.00669342162296594323 * magic * magic;
+    const sqrtMagic = Math.sqrt(magic);
+    dLat = (dLat * 180.0) / ((6378245.0 * (1 - 0.00669342162296594323)) / (magic * sqrtMagic) * Math.PI);
+    dLon = (dLon * 180.0) / (6378245.0 / sqrtMagic * Math.cos(radLat) * Math.PI);
+
+    return { lat: wg_lat + dLat, lon: wg_lon + dLon };
+  }
+
+  // çº¬åº¦åç§»é‡çš„å¤šé¡¹å¼æ‹Ÿåˆï¼ˆæ ‡å‡† WGS-84 â†’ GCJ-02 ç®—æ³•ï¼‰
+  private static transformLat(x: number, y: number): number {
+    let ret = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * Math.sqrt(Math.abs(x));
+    ret += (20.0 * Math.sin(6.0 * x * Math.PI) + 20.0 * Math.sin(2.0 * x * Math.PI)) * 2.0 / 3.0;
+    ret += (20.0 * Math.sin(y * Math.PI) + 40.0 * Math.sin(y / 3.0 * Math.PI)) * 2.0 / 3.0;
+    ret += (160.0 * Math.sin(y / 12.0 * Math.PI) + 320 * Math.sin(y * Math.PI / 30.0)) * 2.0 / 3.0;
+    return ret;
+  }
+
+  // ç»åº¦åç§»é‡çš„å¤šé¡¹å¼æ‹Ÿåˆï¼ˆæ ‡å‡† WGS-84 â†’ GCJ-02 ç®—æ³•ï¼‰
+  private static transformLon(x: number, y: number): number {
+    let ret = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * Math.sqrt(Math.abs(x));
+    ret += (20.0 * Math.sin(6.0 * x * Math.PI) + 20.0 * Math.sin(2.0 * x * Math.PI)) * 2.0 / 3.0;
+    ret += (20.0 * Math.sin(x * Math.PI) + 40.0 * Math.sin(x / 3.0 * Math.PI)) * 2.0 / 3.0;
+    ret += (150.0 * Math.sin(x / 12.0 * Math.PI) + 300.0 * Math.sin(x / 30.0 * Math.PI)) * 2.0 / 3.0;
+    return ret;
+  }
+
+  static hasHole(arr: any[]): boolean {
+    for (let i = 0; i < arr.length; i++) {
+      if (!(i in arr)) {
+        return true; // å­˜åœ¨ç©ºæ§½
+      }
+    }
+    return false;
+  }
+  /**
+   * è¶…æ˜Ÿé»˜è®¤ä½¿ç”¨çš„AESå¯†é’¥
+   */
+  static readonly DEFAULT_KEY = 'u2oh6Vu^HWe4_AES';
+
+  /**
+   * AES-CBCæ¨¡å¼åŠ å¯† - ä¸è¶…æ˜Ÿç³»ç»Ÿä¿æŒä¸€è‡´çš„åŠ å¯†æ–¹å¼
+   * 
+   * ä½¿ç”¨è¶…æ˜Ÿé»˜è®¤å¯†é’¥ 'u2oh6Vu^HWe4_AES' è¿›è¡ŒåŠ å¯†
+   * åŠ å¯†æ¨¡å¼ï¼šAES-CBC
+   * å¡«å……æ–¹å¼ï¼šPKCS7
+   * 
+   * @param {string} message éœ€è¦åŠ å¯†çš„æ˜æ–‡æ¶ˆæ¯
+   * @returns {string} Base64ç¼–ç çš„å¯†æ–‡å­—ç¬¦ä¸²
+   * @example
+   * const encrypted = ChaoxingUtils.encryptByAES("mypassword");
+   * // è¿”å›ç±»ä¼¼: "U2FsdGVkX1+..."
+   */
+  static encryptByAES(message: string): string {
+    // è¶…æ˜Ÿçš„å…·ä½“å®ç°æ–¹å¼ - ä»login.jså’Œutil.jsä¸­æå–
+    const key: string = ChaoxingUtils.DEFAULT_KEY
+    const CBCOptions = {
+      iv: CryptoJS.enc.Utf8.parse(key),
+      mode: CryptoJS.mode.CBC,
+      padding: CryptoJS.pad.Pkcs7,
+    };
+    const aeskey = CryptoJS.enc.Utf8.parse(key);
+    // è¶…æ˜Ÿå®ç°ä¸­å­—ç¬¦ä¸²ç›´æ¥ä½¿ç”¨UTF8ç¼–ç ï¼Œæ— éœ€ç‰¹åˆ«å¤„ç†
+    const secretData = CryptoJS.enc.Utf8.parse(message);
+    const encrypted = CryptoJS.AES.encrypt(secretData, aeskey, CBCOptions);
+    return CryptoJS.enc.Base64.stringify(encrypted.ciphertext);
+  }
+
+  /**
+   * ç”Ÿæˆè¶…æ˜Ÿç™»å½•è¯·æ±‚ä½“
+   * 
+   * å°†åŠ å¯†åçš„ç”¨æˆ·åå’Œå¯†ç æ ¼å¼åŒ–ä¸ºè¶…æ˜Ÿç™»å½•APIæ‰€éœ€çš„è¡¨å•æ ¼å¼
+   * 
+   * @param {string} username AESåŠ å¯†å¹¶Base64ç¼–ç åçš„ç”¨æˆ·å
+   * @param {string} password AESåŠ å¯†å¹¶Base64ç¼–ç åçš„å¯†ç 
+   * @returns {string} URLç¼–ç çš„ç™»å½•è¡¨å•å­—ç¬¦ä¸²
+   * @example
+   * const encrypted = ChaoxingUtils.encryptByAES("username");
+   * const pwd = ChaoxingUtils.encryptByAES("password");
+   * const body = ChaoxingUtils.getLoginBody(encrypted, pwd);
+   * // è¿”å›: "fid=-1&uname=...&password=...&refer=..."
+   */
+  static getLoginBody(username: string, password: string): string {
+
+    // URLç¼–ç åŠ å¯†åçš„ç”¨æˆ·åå’Œå¯†ç 
+    const encodedUsername = encodeURIComponent(username);
+    const encodedPassword = encodeURIComponent(password);
+
+    // æ„é€ å®Œæ•´çš„ç™»å½•å­—ç¬¦ä¸²
+    return `fid=-1&uname=${encodedUsername}&password=${encodedPassword}&refer=https%253A%252F%252Fmooc2-ans.chaoxing.com%252Fmooc2-ans%252Fvisit%252Finteraction&t=true&forbidotherlogin=0&validate=&doubleFactorLogin=0&independentId=0&independentNameId=0`;
+  }
+
+  /**
+   * å°† Set-Cookie å“åº”å¤´åˆ—è¡¨å¤„ç†æˆå¯ç”¨äºè¯·æ±‚çš„ Cookie å­—ç¬¦ä¸²
+   * 
+   * ä»æœåŠ¡å™¨è¿”å›çš„ Set-Cookie å¤´éƒ¨æå– name=value å¯¹ï¼Œ
+   * å¹¶æ ¼å¼åŒ–ä¸ºæ ‡å‡†çš„ Cookie è¯·æ±‚å¤´æ ¼å¼
+   * 
+   * @param {string[]} setCookieHeaders æœåŠ¡å™¨è¿”å›çš„ Set-Cookie å¤´éƒ¨å­—ç¬¦ä¸²æ•°ç»„
+   * @returns {string} å¤„ç†åçš„ Cookie å­—ç¬¦ä¸²ï¼Œæ ¼å¼ä¸º "name1=value1; name2=value2"
+   * @example
+   * const setCookies = ["session=abc123; Path=/", "token=xyz789; HttpOnly"];
+   * const cookie = ChaoxingUtils.processSetCookieHeaders(setCookies);
+   * // è¿”å›: "session=abc123; token=xyz789"
+   */
+  static processSetCookieHeaders(setCookieHeaders: string[]): string {
+    if (!Array.isArray(setCookieHeaders) || setCookieHeaders.length === 0) {
+      return '';
+    }
+
+    return setCookieHeaders
+      .map(cookie => cookie.split(';')[0].trim()) // æå–æ¯ä¸ª Set-Cookie çš„ name=value
+      .join('; ');
+  }
+  /**
+   * è·å–ç­¾åˆ°æ´»åŠ¨å‰©ä½™æ—¶é—´ï¼ˆæ¯«ç§’ï¼‰
+   * 
+   * @param {number} endTime æ´»åŠ¨ç»“æŸæ—¶é—´æˆ³ï¼ˆæ¯«ç§’ï¼‰
+   * @returns {number} å‰©ä½™æ—¶é—´ï¼ˆæ¯«ç§’ï¼‰ï¼Œæœ€å°ä¸º0
+   * @example
+   * const remaining = ChaoxingUtils.getRemainingTime(Date.now() + 3600000);
+   * // è¿”å›: 3600000 (1å°æ—¶)
+   */
+  static getRemainingTime(endTime: number): number {
+    const currentTime = Date.now();
+    return Math.max(0, endTime - currentTime);
+  }
+
+  /**
+   * æ£€æŸ¥ç­¾åˆ°æ´»åŠ¨æ˜¯å¦æ­£åœ¨è¿›è¡Œä¸­
+   * 
+   * @param {number} startTime æ´»åŠ¨å¼€å§‹æ—¶é—´æˆ³ï¼ˆæ¯«ç§’ï¼‰
+   * @param {number} endTime æ´»åŠ¨ç»“æŸæ—¶é—´æˆ³ï¼ˆæ¯«ç§’ï¼‰
+   * @returns {boolean} æ´»åŠ¨æ˜¯å¦åœ¨è¿›è¡Œä¸­
+   */
+  static isSignActivityActive(startTime: number, endTime: number): boolean {
+    const currentTime = Date.now();
+    return currentTime >= startTime && currentTime <= endTime;
+  }
+
+  /**
+   * æ£€æŸ¥ç­¾åˆ°æ´»åŠ¨æ˜¯å¦å·²å¼€å§‹
+   * 
+   * @param {number} startTime æ´»åŠ¨å¼€å§‹æ—¶é—´æˆ³ï¼ˆæ¯«ç§’ï¼‰
+   * @returns {boolean} æ´»åŠ¨æ˜¯å¦å·²å¼€å§‹
+   */
+  static isSignActivityStarted(startTime: number): boolean {
+    const currentTime = Date.now();
+    return currentTime >= startTime;
+  }
+
+  /**
+   * æ£€æŸ¥ç­¾åˆ°æ´»åŠ¨æ˜¯å¦å·²ç»“æŸ
+   * 
+   * @param {number} endTime æ´»åŠ¨ç»“æŸæ—¶é—´æˆ³ï¼ˆæ¯«ç§’ï¼‰
+   * @returns {boolean} æ´»åŠ¨æ˜¯å¦å·²ç»“æŸ
+   */
+  static isSignActivityEnded(endTime: number): boolean {
+    const currentTime = Date.now();
+    return currentTime > endTime;
+  }
+
+  static copyText(text: string) {
+    const pasteboardData = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text)
+    const systemPasteboard = pasteboard.getSystemPasteboard()
+    systemPasteboard.setData(pasteboardData)
+    promptAction.showToast({ message: 'å·²å¤åˆ¶åˆ°å‰ªè´´æ¿', duration: 1500 })
+  }
+}
+ÀÔrD“°@ohos.pasteboard²@ohos.promptAction¯@ohos/crypto-jsÔrE—ªassertions¨external¢id¤meta±moduleSideEffectsªresolvedByµsyntheticNamedExportsAÃÙ^ hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.pasteboard.d.tsÔrF‘¯hostModulesInfo‘C°@ohos.pasteboard¥entryÃªoh-resolveÂEAÃÙ` hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.promptAction.d.tsAÃªoh-resolveÂEAÂÙzE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\oh_modules\.ohpm\@ohos+crypto-js@2.0.5\oh_modules\@ohos\crypto-js\index.tsAÃªoh-resolveÂ“ÔrG–§version¤fileªsourceRoot§sources¥names¨mappings¨utils.js ‘¨utils.tsÜ5‘”    ‘” ’”   ” –”   ” ” ” ”& &”' &–”   ” 	” ” ”) 2”* 3–”   ” 	” ” ”- )”. *‘”  	 ‘” ””   ” ” ” ˜” ”
+ ” 	” ” ” ” ” .–” ” ” ” ”  ”" ”” ” ” ” ‘”	 Ü ” ” 
+” ” ” ” ”$  ”% !”+ '”, (”- )”0 ,”1 -”2 .”3 /”6 2”8 4”= 9”> :”Ì@ <”ÌB >” ” ” ”( "”) #”, &”- '”1 +”ÌC =”ÌD >”ÌI ÌC”ÌJ ÌD”ÌL ÌF”ÌM ÌG”” ”	 ”
+ ” ›” ” 
+” ” ”! ”" ”& "”' #”* &”+ '”, (’” ” Ü ” ” 
+” ” ” ” ”& "”' #”* &”+ '”, (”- )”. *”1 -”2 .”3 /”4 0”7 3”8 4š” ” ” ” ” ”! ”$  ”/ +”1 -”2 .’” ” ‘”  ‘” '”” (”
+ (” (	” (œ” )” )”5 )1”6 )2”= )9”> ):”ÌE )ÌA”ÌG )ÌC”ÌH )ÌD”ÌI )ÌE”ÌK )ÌG”ÌM )ÌI” *” *” *” *” *” *”! *”# *”& * ”( *"”+ *%”, *&”- *'Ü ” +” +” +” +” +” +” +”  +”! +”" +”# +”$ +”% +”& + ”' +!”( +"”+ +%”. +(”1 ++”4 +.”5 +/”6 +0™” ,” ,” ,” ,” ,” ,”  ,”! ,”" ,”” -”	 -”
+ -” -’” .” .‘” 0‘” 7”” 8”
+ 8” 8	” 8œ” 9” 9” 9” 9”% 9!”& 9"”- 9)”/ 9+”0 9,”1 9-”3 9/”5 91” :” :” :” :” :” :”! :”# :”& : ”( :"”+ :%”, :&”- :'Ü ” ;” ;” ;” ;” ;” ;” ;”  ;”! ;”" ;”# ;”$ ;”% ;”& ; ”' ;!”( ;"”+ ;%”. ;(”1 ;+”4 ;.”5 ;/”6 ;0™” <” <” <” <” <” <”  <”! <”" <”” =”	 =”
+ =” =’” >” >‘” ÌN‘” Ì]˜” Ì^”
+ Ì^” Ì^	” Ì^” Ì^” Ì^%”! Ì^'”' Ì^5’” Ì_” Ì_’” Ì`”) Ì`%–” Ìa” Ìa
+” Ìa” Ìa” Ìa” Ìa–” Ìb” Ìb
+” Ìb” Ìb” Ìb” Ìb’” Ìd”" Ìd’” Ìe”# ÌeÜ ” Ìf” Ìf
+” Ìf” Ìf” Ìf” Ìf” Ìf” Ìf” Ìf”  Ìf”! Ìf”$ Ìf ”% Ìf!”( Ìf$”) Ìf%”* Ìf&”- Ìf)”4 Ìf0”7 Ìf3”; Ìf7”< Ìf8”? Ìf;”Ì@ Ìf<”ÌA Ìf=”ÌD ÌfÌ@”ÌQ ÌfÌM”ÌR ÌfÌN”ÌV ÌfÌR”ÌW ÌfÌS”ÌX ÌfÌT’” Ìh”& Ìh"’” Ìi”# Ìi’” Ìj”. Ìj*Ü ” Ìk” Ìk
+” Ìk” Ìk” Ìk” Ìk”  Ìk”! Ìk”" Ìk”$ Ìk ”% Ìk!”& Ìk"”) Ìk%”1 Ìk-”4 Ìk0”8 Ìk4”9 Ìk5”< Ìk8”= Ìk9”> Ìk:”ÌA Ìk=”ÌN ÌkÌJ”ÌO ÌkÌK”ÌS ÌkÌO”ÌT ÌkÌP”ÌU ÌkÌQ’” Ìm” Ìm’” Ìn”( Ìn$Ÿ” Ìo” Ìo
+” Ìo” Ìo” Ìo” Ìo” Ìo”  Ìo”# Ìo”$ Ìo ”) Ìo%”* Ìo&”- Ìo)”3 Ìo/”4 Ìo0’” Ìq” Ìq’” Ìr”' Ìr#Ÿ” Ìs” Ìs
+” Ìs” Ìs” Ìs” Ìs” Ìs”  Ìs”# Ìs”$ Ìs ”) Ìs%”* Ìs&”- Ìs)”2 Ìs.”3 Ìs/’” Ìu” Ìu’” Ìv”  Ìvœ” Ìw” Ìw” Ìw” Ìw” Ìw” Ìw” Ìw”! Ìw”# Ìw”) Ìw%”+ Ìw'”, Ìw(’” Ìx” Ìx–” Ì”
+ Ì” Ì	” Ì” Ì”! Ì'” Ì‚” Ì‚” Ì‚” Ì‚” Ì‚” Ì‚”" Ì‚”% Ì‚!”2 Ì‚.”3 Ì‚/”ÌE Ì‚ÌA”ÌF Ì‚ÌB”ÌG Ì‚ÌC’” Ìƒ” Ìƒ–” Ì…”
+ Ì…” Ì…	” Ì…” Ì…”! Ì…'Ü ” Ì†” Ì†” Ì†” Ì†” Ì†” Ì†”! Ì†”" Ì†”# Ì†”$ Ì† ”% Ì†!”+ Ì†'”, Ì†(”1 Ì†-”2 Ì†.”3 Ì†/”4 Ì†0”5 Ì†1”; Ì†7”< Ì†8”ÌA Ì†=”ÌB Ì†>”ÌE Ì†ÌA”ÌR Ì†ÌN”ÌS Ì†ÌO”Ìe Ì†Ìa”Ìf Ì†Ìb’” Ì‡” Ì‡‘” Ì‰‘” Ì’˜” Ì“”
+ Ì“” Ì“	” Ì“” Ì“” Ì“%”! Ì“'”' Ì“5˜” Ì”” Ì”
+” Ì”” Ì”” Ì”” Ì””! Ì””" Ì”˜” Ì•” Ì•
+” Ì•” Ì•” Ì•” Ì•”  Ì•”! Ì•Ü ” Ì–” Ì–
+” Ì–” Ì–” Ì–” Ì–” Ì–” Ì–” Ì–”  Ì–”! Ì–”$ Ì– ”% Ì–!”( Ì–$”) Ì–%”* Ì–&”- Ì–)”4 Ì–0”7 Ì–3”; Ì–7”< Ì–8”? Ì–;”Ì@ Ì–<”ÌA Ì–=”ÌD Ì–Ì@”ÌQ Ì–ÌM”ÌR Ì–ÌN”ÌV Ì–ÌR”ÌW Ì–ÌS”ÌX Ì–ÌTÜ ” Ì—” Ì—
+” Ì—” Ì—” Ì—” Ì—”  Ì—”! Ì—”" Ì—”$ Ì— ”% Ì—!”& Ì—"”) Ì—%”1 Ì—-”4 Ì—0”8 Ì—4”9 Ì—5”< Ì—8”= Ì—9”> Ì—:”ÌA Ì—=”ÌN Ì—ÌJ”ÌO Ì—ÌK”ÌS Ì—ÌO”ÌT Ì—ÌP”ÌU Ì—ÌQÜ ” Ì˜” Ì˜” Ì˜” Ì˜” Ì˜” Ì˜” Ì˜” Ì˜” Ì˜”" Ì˜”# Ì˜”( Ì˜$”) Ì˜%”+ Ì˜'”. Ì˜*”0 Ì˜,”1 Ì˜-”4 Ì˜0”8 Ì˜4”9 Ì˜5”< Ì˜8”= Ì˜9”ÌB Ì˜>”ÌC Ì˜?”ÌE Ì˜ÌA”ÌF Ì˜ÌB’” Ì™” Ì™‘” Ì›‘” Ì¤˜” Ì¥”
+ Ì¥” Ì¥	” Ì¥” Ì¥”  Ì¥&”" Ì¥(”( Ì¥6’” Ì¦”& Ì¦"Ü ” Ì§” Ì§” Ì§” Ì§” Ì§” Ì§”% Ì§!”( Ì§$”0 Ì§,”4 Ì§0”: Ì§6”= Ì§9”ÌC Ì§?”ÌG Ì§ÌC”ÌM Ì§ÌI”ÌP Ì§ÌL”ÌW Ì§ÌS”ÌY Ì§ÌUœ” Ì¨” Ì¨” Ì¨” Ì¨” Ì¨”  Ì¨”" Ì¨”% Ì¨”' Ì¨!”- Ì¨'”/ Ì¨)”0 Ì¨*‘”	 Ì©Ü ” Ì«” Ì«” Ì«” Ì«”  Ì«”! Ì«”- Ì«)”. Ì«*”4 Ì«0”7 Ì«3”< Ì«8”> Ì«:”ÌD Ì«Ì@”ÌG Ì«ÌC”ÌK Ì«ÌG”ÌL Ì«ÌH”ÌM Ì«ÌIÜ ” Ì¬” Ì¬” Ì¬” Ì¬”  Ì¬”! Ì¬”- Ì¬)”. Ì¬*”4 Ì¬0”7 Ì¬3”< Ì¬8”> Ì¬:”ÌD Ì¬Ì@”ÌG Ì¬ÌC”ÌK Ì¬ÌG”ÌL Ì¬ÌH”ÌM Ì¬ÌIœ” Ì­” Ì­
+” Ì­” Ì­” Ì­”  Ì­”% Ì­!”( Ì­$”, Ì­(”- Ì­)”/ Ì­+”0 Ì­,›” Ì®” Ì®” Ì®” Ì®” Ì®” Ì®” Ì®” Ì®”# Ì®”$ Ì® ”% Ì®!›” Ì¯” Ì¯	” Ì¯” Ì¯” Ì¯”* Ì¯&”- Ì¯)”2 Ì¯.”5 Ì¯1”: Ì¯6”; Ì¯7›” Ì°” Ì°
+” Ì°” Ì°” Ì°” Ì°”# Ì°”$ Ì° ”) Ì°%”* Ì°&”+ Ì°'Ü ” Ì±” Ì±” Ì±” Ì±” Ì±” Ì±” Ì±” Ì±”  Ì±”! Ì±”" Ì±”+ Ì±'”. Ì±*”/ Ì±+”0 Ì±,”3 Ì±/”ÌI Ì±ÌE”ÌJ Ì±ÌF”ÌK Ì±ÌG”ÌN Ì±ÌJ”ÌO Ì±ÌK”ÌT Ì±ÌP”ÌW Ì±ÌS”Ì` Ì±Ì\”Ìa Ì±Ì]”Ìd Ì±Ì`”Ìh Ì±Ìd”Ìi Ì±Ìe”Ìk Ì±Ìg”Ìl Ì±Ìh”Ìm Ì±ÌiÜ ” Ì²” Ì²” Ì²” Ì²” Ì²” Ì²” Ì²” Ì²”  Ì²”! Ì²”* Ì²&”- Ì²)”6 Ì²2”9 Ì²5”= Ì²9”> Ì²:”ÌA Ì²=”ÌB Ì²>”ÌH Ì²ÌD”ÌI Ì²ÌE”ÌL Ì²ÌH”ÌP Ì²ÌL”ÌQ Ì²ÌM”ÌS Ì²ÌO”ÌT Ì²ÌP”ÌU Ì²ÌQÜ ” Ì´” Ì´” Ì´” Ì´” Ì´” Ì´” Ì´”# Ì´”% Ì´!”( Ì´$”* Ì´&”0 Ì´,”3 Ì´/”7 Ì´3”9 Ì´5”: Ì´6’” Ìµ” Ìµ’” Ì·”) Ì·'˜” Ì¸
+”
+ Ì¸” Ì¸” Ì¸” Ì¸” Ì¸'” Ì¸)” Ì¸2Ü )” Ì¹” Ì¹” Ì¹” Ì¹” Ì¹” Ì¹” Ì¹” Ì¹”! Ì¹”" Ì¹”% Ì¹!”( Ì¹$”+ Ì¹'”, Ì¹(”/ Ì¹+”2 Ì¹.”5 Ì¹1”6 Ì¹2”9 Ì¹5”: Ì¹6”= Ì¹9”Ì@ Ì¹<”ÌC Ì¹?”ÌD Ì¹Ì@”ÌG Ì¹ÌC”ÌH Ì¹ÌD”ÌK Ì¹ÌG”ÌN Ì¹ÌJ”ÌQ Ì¹ÌM”ÌU Ì¹ÌQ”ÌV Ì¹ÌR”ÌZ Ì¹ÌV”Ì[ Ì¹ÌW”Ì_ Ì¹Ì[”Ì` Ì¹Ì\”Ìc Ì¹Ì_”Ìd Ì¹Ì`”Ìe Ì¹Ìa”Ìf Ì¹Ìb”Ìg Ì¹Ìc”Ìh Ì¹ÌdÜ '” Ìº” Ìº” Ìº” Ìº” Ìº” Ìº” Ìº” Ìº” Ìº”  Ìº”# Ìº”& Ìº"”' Ìº#”* Ìº&”. Ìº*”/ Ìº+”1 Ìº-”2 Ìº.”5 Ìº1”9 Ìº5”< Ìº8”Ì@ Ìº<”ÌA Ìº=”ÌD ÌºÌ@”ÌE ÌºÌA”ÌH ÌºÌD”ÌK ÌºÌG”ÌL ÌºÌH”ÌO ÌºÌK”ÌS ÌºÌO”ÌT ÌºÌP”ÌV ÌºÌR”ÌW ÌºÌS”ÌX ÌºÌT”Ì[ ÌºÌW”Ì^ ÌºÌZ”Ìa ÌºÌ]”Ìd ÌºÌ`”Ìe ÌºÌaÜ %” Ì»” Ì»” Ì»” Ì»” Ì»” Ì»” Ì»” Ì»” Ì»”  Ì»”! Ì»”$ Ì» ”( Ì»$”) Ì»%”+ Ì»'”, Ì»(”/ Ì»+”3 Ì»/”6 Ì»2”: Ì»6”; Ì»7”> Ì»:”? Ì»;”Ì@ Ì»<”ÌC Ì»?”ÌF Ì»ÌB”ÌI Ì»ÌE”ÌM Ì»ÌI”ÌN Ì»ÌJ”ÌP Ì»ÌL”ÌQ Ì»ÌM”ÌR Ì»ÌN”ÌU Ì»ÌQ”ÌX Ì»ÌT”Ì[ Ì»ÌW”Ì^ Ì»ÌZ”Ì_ Ì»Ì[Ü '” Ì¼” Ì¼” Ì¼” Ì¼” Ì¼” Ì¼” Ì¼” Ì¼”  Ì¼”! Ì¼”" Ì¼”% Ì¼!”) Ì¼%”, Ì¼(”0 Ì¼,”1 Ì¼-”3 Ì¼/”4 Ì¼0”7 Ì¼3”: Ì¼6”= Ì¼9”ÌA Ì¼=”ÌB Ì¼>”ÌE Ì¼ÌA”ÌF Ì¼ÌB”ÌG Ì¼ÌC”ÌJ Ì¼ÌF”ÌN Ì¼ÌJ”ÌO Ì¼ÌK”ÌQ Ì¼ÌM”ÌT Ì¼ÌP”ÌX Ì¼ÌT”ÌY Ì¼ÌU”ÌZ Ì¼ÌV”Ì] Ì¼ÌY”Ì` Ì¼Ì\”Ìc Ì¼Ì_”Ìf Ì¼Ìb”Ìg Ì¼Ìc”” Ì½” Ì½” Ì½” Ì½’” Ì¾” Ì¾’” ÌÀ”) ÌÀ'˜” ÌÁ
+”
+ ÌÁ” ÌÁ” ÌÁ” ÌÁ” ÌÁ'” ÌÁ)” ÌÁ2Ü &” ÌÂ” ÌÂ” ÌÂ” ÌÂ” ÌÂ” ÌÂ” ÌÂ” ÌÂ”! ÌÂ”$ ÌÂ ”% ÌÂ!”( ÌÂ$”+ ÌÂ'”. ÌÂ*”/ ÌÂ+”2 ÌÂ.”3 ÌÂ/”6 ÌÂ2”9 ÌÂ5”< ÌÂ8”= ÌÂ9”Ì@ ÌÂ<”ÌA ÌÂ=”ÌD ÌÂÌ@”ÌG ÌÂÌC”ÌJ ÌÂÌF”ÌN ÌÂÌJ”ÌO ÌÂÌK”ÌS ÌÂÌO”ÌT ÌÂÌP”ÌX ÌÂÌT”ÌY ÌÂÌU”Ì\ ÌÂÌX”Ì] ÌÂÌY”Ì^ ÌÂÌZ”Ì_ ÌÂÌ[”Ì` ÌÂÌ\”Ìa ÌÂÌ]Ü '” ÌÃ” ÌÃ” ÌÃ” ÌÃ” ÌÃ” ÌÃ” ÌÃ” ÌÃ” ÌÃ”  ÌÃ”# ÌÃ”& ÌÃ"”' ÌÃ#”* ÌÃ&”. ÌÃ*”/ ÌÃ+”1 ÌÃ-”2 ÌÃ.”5 ÌÃ1”9 ÌÃ5”< ÌÃ8”Ì@ ÌÃ<”ÌA ÌÃ=”ÌD ÌÃÌ@”ÌE ÌÃÌA”ÌH ÌÃÌD”ÌK ÌÃÌG”ÌL ÌÃÌH”ÌO ÌÃÌK”ÌS ÌÃÌO”ÌT ÌÃÌP”ÌV ÌÃÌR”ÌW ÌÃÌS”ÌX ÌÃÌT”Ì[ ÌÃÌW”Ì^ ÌÃÌZ”Ìa ÌÃÌ]”Ìd ÌÃÌ`”Ìe ÌÃÌaÜ %” ÌÄ” ÌÄ” ÌÄ” ÌÄ” ÌÄ” ÌÄ” ÌÄ” ÌÄ” ÌÄ”  ÌÄ”! ÌÄ”$ ÌÄ ”( ÌÄ$”) ÌÄ%”+ ÌÄ'”, ÌÄ(”/ ÌÄ+”3 ÌÄ/”6 ÌÄ2”: ÌÄ6”; ÌÄ7”> ÌÄ:”? ÌÄ;”Ì@ ÌÄ<”ÌC ÌÄ?”ÌF ÌÄÌB”ÌI ÌÄÌE”ÌM ÌÄÌI”ÌN ÌÄÌJ”ÌP ÌÄÌL”ÌQ ÌÄÌM”ÌR ÌÄÌN”ÌU ÌÄÌQ”ÌX ÌÄÌT”Ì[ ÌÄÌW”Ì^ ÌÄÌZ”Ì_ ÌÄÌ[Ü '” ÌÅ” ÌÅ” ÌÅ” ÌÅ” ÌÅ” ÌÅ” ÌÅ” ÌÅ”  ÌÅ”! ÌÅ”" ÌÅ”% ÌÅ!”) ÌÅ%”, ÌÅ(”0 ÌÅ,”1 ÌÅ-”3 ÌÅ/”4 ÌÅ0”7 ÌÅ3”< ÌÅ8”? ÌÅ;”ÌC ÌÅ?”ÌD ÌÅÌ@”ÌG ÌÅÌC”ÌH ÌÅÌD”ÌI ÌÅÌE”ÌL ÌÅÌH”ÌP ÌÅÌL”ÌS ÌÅÌO”ÌW ÌÅÌS”ÌX ÌÅÌT”ÌZ ÌÅÌV”Ì[ ÌÅÌW”Ì\ ÌÅÌX”Ì_ ÌÅÌ[”Ìb ÌÅÌ^”Ìe ÌÅÌa”Ìh ÌÅÌd”Ìi ÌÅÌe”” ÌÆ” ÌÆ” ÌÆ” ÌÆ’” ÌÇ” ÌÇ–” ÌÉ”
+ ÌÉ” ÌÉ	” ÌÉ” ÌÉ” ÌÉÜ ” ÌÊ” ÌÊ	” ÌÊ” ÌÊ” ÌÊ” ÌÊ” ÌÊ” ÌÊ” ÌÊ” ÌÊ”  ÌÊ”& ÌÊ"”( ÌÊ$”) ÌÊ%”+ ÌÊ'”- ÌÊ)™” ÌË” ÌË
+” ÌË” ÌË” ÌË” ÌË” ÌË” ÌË” ÌË–” ÌÌ” ÌÌ” ÌÌ” ÌÌ” ÌÌ”$ ÌÌ‘” ÌÍ‘”	 ÌÎ”” ÌÏ” ÌÏ” ÌÏ” ÌÏ’” ÌĞ” ÌĞ‘” ÌÖ‘” Ìâ–” Ìã”
+ Ìã” Ìã	” Ìã” Ìã” Ìã%’” Ìä”+ Ìä'˜” Ìå” Ìå
+” Ìå” Ìå”! Ìå%”" Ìå&”- Ìå1”. Ìå1”” Ìæ” Ìæ
+” Ìæ” Ìæ” Ìç” Ìç” Ìç
+” Ìç” Ìç” Ìç” Ìç”! Ìç”" Ìç”' Ìç!”( Ìç"”+ Ìç%”, Ìç&˜” Ìè” Ìè
+” Ìè” Ìè” Ìè” Ìè”  Ìè”# Ìè˜” Ìé” Ìé” Ìé” Ìé” Ìé”! Ìé”" Ìé”' Ìé!’”	 Ìê”
+ ÌêŸ” Ìë” Ìë
+” Ìë” Ìë” Ìë”  Ìë”# Ìë”$ Ìë ”( Ìë$”) Ìë%”. Ìë*”/ Ìë+”2 Ìë.”3 Ìë/”4 Ìë0’” Ìì”$ Ìì Ÿ” Ìí” Ìí
+” Ìí” Ìí”# Ìí”$ Ìí ”' Ìí#”( Ìí$”, Ìí(”- Ìí)”2 Ìí.”3 Ìí/”: Ìí6”; Ìí7”< Ìí8Ü ” Ìî” Ìî
+” Ìî” Ìî”" Ìî”# Ìî”& Ìî"”' Ìî#”. Ìî*”/ Ìî+”9 Ìî5”; Ìî7”ÌA Ìî=”ÌC Ìî?”ÌM ÌîÌI”ÌN ÌîÌJ”ÌO ÌîÌKŸ” Ìï” Ìï” Ìï” Ìï” Ìï” Ìï”" Ìï”# Ìï”, Ìï(”- Ìï)”6 Ìï2”7 Ìï3”ÌA Ìï=”ÌB Ìï>”ÌC Ìï?’” Ìğ” Ìğ‘” Ìò‘” Ìÿ˜” Í ”
+ Í ” Í 	” Í ” Í ”  Í &”" Í (”* Í 8’” Í” Í™” Í” Í
+” Í”  Í”2 Í.”3 Í/”; Í7”< Í8”= Í9™” Í” Í
+” Í”  Í”2 Í.”3 Í/”; Í7”< Í8”= Í9’” Í” Í˜” Í” Í” Í”. Í*”; Í7”ÌJ ÍÌF”Í ÍÌı”Í ÍÌş’” Í” Í‘” Í
+‘” Í–” Í”
+ Í” Í	”" Í ”# Í!”3 Í;Ü ” Í” Í” Í	” Í” Í” Í” Í”+ Í'”, Í(”0 Í,”Ì@ Í<”ÌA Í=”ÌG ÍÌC”ÌL ÍÌH”ÌM ÍÌI”ÌO ÍÌK”” Í” Í” Í” Í‘”	 Í“” Í” Í” ÍÜ ” Í” Í
+” Í” Í” Í” Í” Í”! Í”" Í”' Í!”( Í"”+ Í%”, Í&”- Í'”. Í(”/ Í)”0 Í*”4 Í.”6 Í0”7 Í1”8 Í2”ÌW ÍÌQ–” Í” Í” Í” Í” Í” Í’” Í” Í‘” Í ‘” Í(–” Í)”
+ Í)” Í)	” Í)” Í)”# Í))™” Í*” Í*
+” Í*” Í*”  Í*”! Í*”$ Í* ”& Í*"”' Í*#” Í+” Í+” Í+” Í+” Í+” Í+” Í+” Í+”" Í+”% Í+!”0 Í+,”1 Í+-”2 Í+.’” Í,” Í,‘” Í.‘” Í4˜” Í5”
+ Í5” Í5	” Í5”  Í5”) Í5/”+ Í51”2 Í5Ì@™” Í6” Í6
+” Í6” Í6”  Í6”! Í6”$ Í6 ”& Í6"”' Í6#š” Í7” Í7” Í7” Í7”' Í7#”+ Í7'”6 Í72”: Í76”ÌA Í7=”ÌB Í7>’” Í8” Í8‘” Í:‘” Í?–” Í@”
+ Í@” Í@	”  Í@”! Í@”* Í@0™” ÍA” ÍA
+” ÍA” ÍA”  ÍA”! ÍA”$ ÍA ”& ÍA"”' ÍA#–” ÍB” ÍB” ÍB” ÍB”' ÍB#”( ÍB$’” ÍC” ÍC‘” ÍE‘” ÍJ–” ÍK”
+ ÍK” ÍK	” ÍK” ÍK”& ÍK,™” ÍL” ÍL
+” ÍL” ÍL”  ÍL”! ÍL”$ ÍL ”& ÍL"”' ÍL#–” ÍM” ÍM” ÍM” ÍM”$ ÍM ”% ÍM!’” ÍN” ÍN–” ÍP”
+ ÍP” ÍP	” ÍP” ÍP” ÍPŸ” ÍQ” ÍQ
+” ÍQ” ÍQ”) ÍQ%”* ÍQ&”4 ÍQ0”5 ÍQ1”? ÍQ;”Ì@ ÍQ<”ÌS ÍQÌO”ÌU ÍQÌQ”ÌY ÍQÌU”ÌZ ÍQÌV”Ì[ ÍQÌV™” ÍR” ÍR
+” ÍR”! ÍR”+ ÍR'”, ÍR(”? ÍR;”ÌA ÍR=”ÌB ÍR=˜” ÍS” ÍS” ÍS”  ÍS”! ÍS”/ ÍS+”0 ÍS,”1 ÍS,Ü ” ÍT” ÍT” ÍT” ÍT” ÍT”! ÍT”( ÍT$”* ÍT&”3 ÍT/”5 ÍT1”= ÍT9”? ÍT;”ÌC ÍT?”ÌE ÍTÌA”ÌF ÍTÌB”ÌG ÍTÌB’” ÍU” ÍU‘”  Ì@‘” ÌH’”  ÌJ” ÌJ’”  ÌK”3 ÌK5™”  ÌL” ÌL” ÌL!”( ÌL4”+ ÌL7”1 ÌL=”4 ÌLÌ@”9 ÌLÌE”: ÌLÌF‘”  Ìz‘” Ì~•”  Ì”  Ì$”# Ì/”* Ì6”+ Ì7‘”  ÌÑ‘” ÌÓ•”  ÌÔ” ÌÔ” ÌÔ ”. ÌÔ2”/ ÌÔ3ÔrH–§version¤file§sources®sourcesContent¥names¨mappingsÀ‘À‘ÀÜ6‘”    ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”  	 ‘”  
+ ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”    ‘”  ! ‘”  " ‘”  # ‘”  $ ‘”  % ‘”  & ‘”  ' ‘”  ( ‘”  ) ‘”  * ‘”  + ‘”  , ‘”  - ‘”  . ‘”  / ‘”  0 ‘”  1 ‘”  2 ‘”  3 ‘”  4 ‘”  5 ‘”  6 ‘”  7 ‘”  8 ‘”  9 ‘”  : ‘”  ; ‘”  < ‘”  = ‘”  > ‘”  ? ‘”  Ì@ ‘”  ÌA ‘”  ÌB ‘”  ÌC ‘”  ÌD ‘”  ÌE ‘”  ÌF ‘”  ÌG ‘”  ÌH ‘”  ÌI ‘”  ÌJ ‘”  ÌK ‘”  ÌL ‘”  ÌM ‘”  ÌN ‘”  ÌO ‘”  ÌP ‘”  ÌQ ‘”  ÌR ‘”  ÌS ‘”  ÌT ‘”  ÌU ‘”  ÌV ‘”  ÌW ‘”  ÌX ‘”  ÌY ‘”  ÌZ ‘”  Ì[ ‘”  Ì\ ‘”  Ì] ‘”  Ì^ ‘”  Ì_ ‘”  Ì` ‘”  Ìa ‘”  Ìb ‘”  Ìc ‘”  Ìd ‘”  Ìe ‘”  Ìf ‘”  Ìg ‘”  Ìh ‘”  Ìi ‘”  Ìj ‘”  Ìk ‘”  Ìl ‘”  Ìm ‘”  Ìn ‘”  Ìo ‘”  Ìp ‘”  Ìq ‘”  Ìr ‘”  Ìs ‘”  Ìt ‘”  Ìu ‘”  Ìv ‘”  Ìw ‘”  Ìx ‘”  Ìy ‘”  Ìz ‘”  Ì{ ‘”  Ì| ‘”  Ì} ‘”  Ì~ ‘”  Ì ‘”  Ì€ ‘”  Ì ‘”  Ì‚ ‘”  Ìƒ ‘”  Ì„ ‘”  Ì… ‘”  Ì† ‘”  Ì‡ ‘”  Ìˆ ‘”  Ì‰ ‘”  ÌŠ ‘”  Ì‹ ‘”  ÌŒ ‘”  Ì ‘”  Ì ‘”  Ì ‘”  Ì ‘”  Ì‘ ‘”  Ì’ ‘”  Ì“ ‘”  Ì” ‘”  Ì• ‘”  Ì– ‘”  Ì— ‘”  Ì˜ ‘”  Ì™ ‘”  Ìš ‘”  Ì› ‘”  Ìœ ‘”  Ì ‘”  Ì ‘”  ÌŸ ‘”  Ì  ‘”  Ì¡ ‘”  Ì¢ ‘”  Ì£ ‘”  Ì¤ ‘”  Ì¥ ‘”  Ì¦ ‘”  Ì§ ‘”  Ì¨ ‘”  Ì© ‘”  Ìª ‘”  Ì« ‘”  Ì¬ ‘”  Ì­ ‘”  Ì® ‘”  Ì¯ ‘”  Ì° ‘”  Ì± ‘”  Ì² ‘”  Ì³ ‘”  Ì´ ‘”  Ìµ ‘”  Ì¶ ‘”  Ì· ‘”  Ì¸ ‘”  Ì¹ ‘”  Ìº ‘”  Ì» ‘”  Ì¼ ‘”  Ì½ ‘”  Ì¾ ‘”  Ì¿ ‘”  ÌÀ ‘”  ÌÁ ‘”  ÌÂ ‘”  ÌÃ ‘”  ÌÄ ‘”  ÌÅ ‘”  ÌÆ ‘”  ÌÇ ‘”  ÌÈ ‘”  ÌÉ ‘”  ÌÊ ‘”  ÌË ‘”  ÌÌ ‘”  ÌÍ ‘”  ÌÎ ‘”  ÌÏ ‘”  ÌĞ ‘”  ÌÑ ‘”  ÌÒ ‘”  ÌÓ ‘”  ÌÔ ‘”  ÌÕ ‘”  ÌÖ ‘”  Ì× ‘”  ÌØ ‘”  ÌÙ ‘”  ÌÚ ‘”  ÌÛ ‘”  ÌÜ ‘”  Ìİ ‘”  ÌŞ ‘”  Ìß ‘”  Ìà ‘”  Ìá ‘”  Ìâ ‘”  Ìã ‘”  Ìä ‘”  Ìå ‘”  Ìæ ‘”  Ìç ‘”  Ìè ‘”  Ìé ‘”  Ìê ‘”  Ìë ‘”  Ìì ‘”  Ìí ‘”  Ìî ‘”  Ìï ‘”  Ìğ ‘”  Ìñ ‘”  Ìò ‘”  Ìó ‘”  Ìô ‘”  Ìõ ‘”  Ìö ‘”  Ì÷ ‘”  Ìø ‘”  Ìù ‘”  Ìú ‘”  Ìû ‘”  Ìü ‘”  Ìı ‘”  Ìş ‘”  Ìÿ ‘”  Í  ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í	 ‘”  Í
+ ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í  ‘”  Í! ‘”  Í" ‘”  Í# ‘”  Í$ ‘”  Í% ‘”  Í& ‘”  Í' ‘”  Í( ‘”  Í) ‘”  Í* ‘”  Í+ ‘”  Í, ‘”  Í- ‘”  Í. ‘”  Í/ ‘”  Í0 ‘”  Í1 ‘”  Í2 ‘”  Í3 ‘”  Í4 ‘”  Í5 ÔrI’§missing¦pluginÃ¦genAbcÂÔ  ÔrJ”²dynamicImportCache¹exportAllDeclarationCache»exportNamedDeclarationCache«importCache‘ÔrK–¤type¥start£end«declarationªspecifiers¦source¶ExportNamedDeclarationÍKÍ*™ÔrL–¤type¥start£end¢idªsuperClass¤body°ClassDeclarationÍRÍ*™ÔrM”¤type¥start£end¤nameªIdentifierÍXÍe­ChaoxingUtilsÀÔrN”¤type¥start£end¤body©ClassBodyÍfÍ*™Ü ÔrO˜¤type¥start£end¦static¨computed£key¤kind¥value°MethodDefinitionÍmÍ.ÃÂMªIdentifierÍtÍ|¨buildUrl¦methodÔrP™¤type¥start£end¢idªexpression©generator¥async¦params¤body²FunctionExpressionÍ|Í.ÀÂÂÂ’MªIdentifierÍ}Í€£urlMªIdentifierÍ‚Íˆ¦paramsN®BlockStatementÍŠÍ.•ÔrQ–¤type¥start£end¤testªconsequent©alternate«IfStatementÍ•ÍÔÔrR–¤type¥start£end¤left¨operator¥right°BinaryExpressionÍ™Í­MªIdentifierÍ™ÍŸ¦params£===MªIdentifierÍ¤Í­©undefinedN®BlockStatementÍ¯ÍÔ‘ÔrS”¤type¥start£end¨argument¯ReturnStatementÍ¾ÍÉMªIdentifierÍÅÍÈ£urlÀÔrT•¤type¥start£end¬declarations¤kind³VariableDeclarationÍŞÍv‘ÔrU•¤type¥start£end¢id¤init²VariableDeclaratorÍäÍuMªIdentifierÍäÍé¥partsÔrV–¤type¥start£end¦callee©arguments¨optional®CallExpressionÍìÍuÔrW—¤type¥start£end¦object¨property¨computed¨optional°MemberExpressionÍìÍV®CallExpressionÍìÍW°MemberExpressionÍìÍúMªIdentifierÍìÍò¦ObjectMªIdentifierÍóÍú§entriesÂÂ‘MªIdentifierÍûÍ¦paramsÂMªIdentifierÍÍ£mapÂÂ‘P·ArrowFunctionExpressionÍÍtÀÂÂÂ‘ÔrX”¤type¥start£end¨elements¬ArrayPatternÍÍ’MªIdentifierÍ	Í£keyMªIdentifierÍÍ¥valueN®BlockStatementÍÍt‘S¯ReturnStatementÍ(ÍiÔrY•¤type¥start£end«expressions¦quasis¯TemplateLiteralÍ/Íh’V®CallExpressionÍ2ÍIMªIdentifierÍ2ÍD²encodeURIComponent‘MªIdentifierÍEÍH£keyÂV®CallExpressionÍMÍfMªIdentifierÍMÍ_²encodeURIComponent‘MªIdentifierÍ`Íe¥valueÂ“ÔrZ•¤type¥start£end¥value¤tail¯TemplateElementÍ0Í0Ôr[’£raw¦cooked  ÂZ¯TemplateElementÍJÍK[¡=¡=ÂZ¯TemplateElementÍgÍg[  ÃÂ¥constT³VariableDeclarationÍ€Í¤‘U²VariableDeclaratorÍ†Í£MªIdentifierÍ†Í‘«queryStringV®CallExpressionÍ”Í£W°MemberExpressionÍ”ÍMªIdentifierÍ”Í™¥partsMªIdentifierÍšÍ¤joinÂÂ‘Ôr\•¤type¥start£end¥value£raw§LiteralÍŸÍ¢¡&£'&'Â¥constT³VariableDeclarationÍÃÍó‘U²VariableDeclaratorÍÉÍòMªIdentifierÍÉÍÒ©separatorQµConditionalExpressionÍÕÍòV®CallExpressionÍÕÍæW°MemberExpressionÍÕÍáMªIdentifierÍÕÍØ£urlMªIdentifierÍÙÍá¨includesÂÂ‘\§LiteralÍâÍå¡?£'?'Â\§LiteralÍéÍì¡&£'&'\§LiteralÍïÍò¡?£'?'¥constS¯ReturnStatementÍıÍ'Y¯TemplateLiteralÍÍ&“MªIdentifierÍÍ
+£urlMªIdentifierÍÍ©separatorMªIdentifierÍÍ$«queryString”Z¯TemplateElementÍÍ[  ÂZ¯TemplateElementÍÍ[  ÂZ¯TemplateElementÍÍ[  ÂZ¯TemplateElementÍ%Í%[  ÃO°MethodDefinitionÍAÍJÃÂMªIdentifierÍHÍV®generateUUIDv4¦methodP²FunctionExpressionÍVÍJÀÂÂÂN®BlockStatementÍYÍJ‘S¯ReturnStatementÍdÍCV®CallExpressionÍkÍBW°MemberExpressionÍkÍ™\§LiteralÍkÍ‘Ù$xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxxÙ&'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'MªIdentifierÍ’Í™§replaceÂÂ’Ôr]–¤type¥start£end¥value£raw¥regex§LiteralÍšÍ¡’¤[xy]¡g§/[xy]/gÔr^’§pattern¥flags¤[xy]¡gP·ArrowFunctionExpressionÍ£ÍAÀÂÂÂ‘MªIdentifierÍ¤Í¥¡cN®BlockStatementÍªÍA“T³VariableDeclarationÍ¹ÍÚ‘U²VariableDeclaratorÍ¿ÍÙMªIdentifierÍ¿ÍÀ¡rR°BinaryExpressionÍÃÍÙR°BinaryExpressionÍÃÍÕV®CallExpressionÍÃÍĞW°MemberExpressionÍÃÍÎMªIdentifierÍÃÍÇ¤MathMªIdentifierÍÈÍÎ¦randomÂÂÂ¡*\§LiteralÍÓÍÕ¢16¡|\§LiteralÍØÍÙ ¡0¥constT³VariableDeclarationÍèÍ‘U²VariableDeclaratorÍîÍMªIdentifierÍîÍï¡vQµConditionalExpressionÍòÍR°BinaryExpressionÍòÍûMªIdentifierÍòÍó¡c£===\§LiteralÍøÍû¡x£'x'MªIdentifierÍşÍÿ¡rR°BinaryExpressionÍÍR°BinaryExpressionÍÍ
+MªIdentifierÍÍ¡r¡&\§LiteralÍÍ
+£0x3¡|\§LiteralÍÍ£0x8¥constS¯ReturnStatementÍ Í6V®CallExpressionÍ'Í5W°MemberExpressionÍ'Í1MªIdentifierÍ'Í(¡vMªIdentifierÍ)Í1¨toStringÂÂ‘\§LiteralÍ2Í4¢16ÂÂO°MethodDefinitionÍ"ÍÃÂMªIdentifierÍ)Í:±generatePhotoName¦methodP²FunctionExpressionÍ:ÍÀÂÂÂN®BlockStatementÍ=Í‘S¯ReturnStatementÍHÍV®CallExpressionÍOÍW°MemberExpressionÍOÍe\§LiteralÍOÍ]¬xxxxxxxxxxxx®'xxxxxxxxxxxx'MªIdentifierÍ^Íe§replaceÂÂ’]§LiteralÍfÍm’¤[xy]¡g§/[xy]/g^¤[xy]¡gP·ArrowFunctionExpressionÍoÍÀÂÂÂ‘MªIdentifierÍpÍq¡cN®BlockStatementÍvÍ“T³VariableDeclarationÍ…Í¦‘U²VariableDeclaratorÍ‹Í¥MªIdentifierÍ‹ÍŒ¡rR°BinaryExpressionÍÍ¥R°BinaryExpressionÍÍ¡V®CallExpressionÍÍœW°MemberExpressionÍÍšMªIdentifierÍÍ“¤MathMªIdentifierÍ”Íš¦randomÂÂÂ¡*\§LiteralÍŸÍ¡¢16¡|\§LiteralÍ¤Í¥ ¡0¥constT³VariableDeclarationÍ´ÍŞ‘U²VariableDeclaratorÍºÍİMªIdentifierÍºÍ»¡vQµConditionalExpressionÍ¾ÍİR°BinaryExpressionÍ¾ÍÇMªIdentifierÍ¾Í¿¡c£===\§LiteralÍÄÍÇ¡x£'x'MªIdentifierÍÊÍË¡rR°BinaryExpressionÍÏÍÜR°BinaryExpressionÍÏÍÖMªIdentifierÍÏÍĞ¡r¡&\§LiteralÍÓÍÖ£0x3¡|\§LiteralÍÙÍÜ£0x8¥constS¯ReturnStatementÍìÍV®CallExpressionÍóÍW°MemberExpressionÍóÍıMªIdentifierÍóÍô¡vMªIdentifierÍõÍı¨toStringÂÂ‘\§LiteralÍşÍ ¢16ÂÂO°MethodDefinitionÍüÍ‚ÃÂMªIdentifierÍ	Í	­gcj02_to_bd09¦methodP²FunctionExpressionÍ	Í‚ÀÂÂÂ’MªIdentifierÍ	Í	¦gg_latMªIdentifierÍ	Í	¦gg_lonN®BlockStatementÍ	!Í‚—T³VariableDeclarationÍ	vÍ	‡‘U²VariableDeclaratorÍ	|Í	†MªIdentifierÍ	|Í	}¡xMªIdentifierÍ	€Í	†¦gg_lon¥constT³VariableDeclarationÍ	‘Í	¢‘U²VariableDeclaratorÍ	—Í	¡MªIdentifierÍ	—Í	˜¡yMªIdentifierÍ	›Í	¡¦gg_lat¥constT³VariableDeclarationÍ	õÍ
+E‘U²VariableDeclaratorÍ	ûÍ
+DMªIdentifierÍ	ûÍ	ü¡zR°BinaryExpressionÍ	ÿÍ
+DV®CallExpressionÍ	ÿÍ
+W°MemberExpressionÍ	ÿÍ
+MªIdentifierÍ	ÿÍ
+¤MathMªIdentifierÍ
+Í
+¤sqrtÂÂ‘R°BinaryExpressionÍ
+	Í
+R°BinaryExpressionÍ
+	Í
+MªIdentifierÍ
+	Í
+
+¡x¡*MªIdentifierÍ
+Í
+¡x¡+R°BinaryExpressionÍ
+Í
+MªIdentifierÍ
+Í
+¡y¡*MªIdentifierÍ
+Í
+¡yÂ¡+R°BinaryExpressionÍ
+Í
+D\§LiteralÍ
+Í
+!Ë>ôøµˆãhñ§0.00002¡*V®CallExpressionÍ
+$Í
+DW°MemberExpressionÍ
+$Í
+,MªIdentifierÍ
+$Í
+(¤MathMªIdentifierÍ
+)Í
+,£sinÂÂ‘R°BinaryExpressionÍ
+-Í
+CMªIdentifierÍ
+-Í
+.¡y¡*W°MemberExpressionÍ
+1Í
+CMªIdentifierÍ
+1Í
+>­ChaoxingUtilsMªIdentifierÍ
+?Í
+C¤x_piÂÂÂ¥constT³VariableDeclarationÍ
+ÌÍ‘U²VariableDeclaratorÍ
+ÒÍMªIdentifierÍ
+ÒÍ
+×¥thetaR°BinaryExpressionÍ
+ÚÍV®CallExpressionÍ
+ÚÍ
+êW°MemberExpressionÍ
+ÚÍ
+äMªIdentifierÍ
+ÚÍ
+Ş¤MathMªIdentifierÍ
+ßÍ
+ä¥atan2ÂÂ’MªIdentifierÍ
+åÍ
+æ¡yMªIdentifierÍ
+èÍ
+é¡xÂ¡+R°BinaryExpressionÍ
+íÍ\§LiteralÍ
+íÍ
+õË>É*sqäT¨0.000003¡*V®CallExpressionÍ
+øÍW°MemberExpressionÍ
+øÍ MªIdentifierÍ
+øÍ
+ü¤MathMªIdentifierÍ
+ıÍ £cosÂÂ‘R°BinaryExpressionÍÍMªIdentifierÍÍ¡x¡*W°MemberExpressionÍÍMªIdentifierÍÍ­ChaoxingUtilsMªIdentifierÍÍ¤x_piÂÂÂ¥constT³VariableDeclarationÍjÍ–‘U²VariableDeclaratorÍpÍ•MªIdentifierÍpÍv¦bd_lonR°BinaryExpressionÍyÍ•R°BinaryExpressionÍyÍŒMªIdentifierÍyÍz¡z¡*V®CallExpressionÍ}ÍŒW°MemberExpressionÍ}Í…MªIdentifierÍ}Í¤MathMªIdentifierÍ‚Í…£cosÂÂ‘MªIdentifierÍ†Í‹¥thetaÂ¡+\§LiteralÍÍ•Ë?zŸ¾vÈ´9¦0.0065¥constT³VariableDeclarationÍæÍ‘U²VariableDeclaratorÍìÍMªIdentifierÍìÍò¦bd_latR°BinaryExpressionÍõÍR°BinaryExpressionÍõÍMªIdentifierÍõÍö¡z¡*V®CallExpressionÍùÍW°MemberExpressionÍùÍMªIdentifierÍùÍı¤MathMªIdentifierÍşÍ£sinÂÂ‘MªIdentifierÍÍ¥thetaÂ¡+\§LiteralÍÍË?x“t¼j~ú¥0.006¥constS¯ReturnStatementÍWÍ{Ôr_”¤type¥start£endªproperties°ObjectExpressionÍ^Íz’Ôr`™¤type¥start£end¦method©shorthand¨computed£key¥value¤kind¨PropertyÍ`ÍkÂÂÂMªIdentifierÍ`Íc£latMªIdentifierÍeÍk¦bd_lat¤init`¨PropertyÍmÍxÂÂÂMªIdentifierÍmÍp£lonMªIdentifierÍrÍx¦bd_lon¤initO°MethodDefinitionÍˆÍøÃÂMªIdentifierÍÍœ­toLocationInt¦methodP²FunctionExpressionÍœÍøÀÂÂÂ‘MªIdentifierÍÍ¥¨latOrLonN®BlockStatementÍ§Íø‘S¯ReturnStatementÍ²ÍñV®CallExpressionÍ¹ÍğW°MemberExpressionÍ¹ÍÃMªIdentifierÍ¹Í½¤MathMªIdentifierÍ¾ÍÃ¥roundÂÂ‘R°BinaryExpressionÍÄÍïMªIdentifierÍÄÍÌ¨latOrLon¡*W°MemberExpressionÍÏÍïMªIdentifierÍÏÍÜ­ChaoxingUtilsMªIdentifierÍİÍï²LOCATION_INT_SCALEÂÂÂO°MethodDefinitionÍşÍÃÂMªIdentifierÍÍ°parseStoredCoord¦methodP²FunctionExpressionÍÍÀÂÂÂ‘MªIdentifierÍÍ¥valueN®BlockStatementÍÍ‘S¯ReturnStatementÍ(Í†QµConditionalExpressionÍ/Í…V®CallExpressionÍ/ÍBW°MemberExpressionÍ/Í=MªIdentifierÍ/Í4¥valueMªIdentifierÍ5Í=¨includesÂÂ‘\§LiteralÍ>ÍA¡.£'.'ÂV®CallExpressionÍEÍRMªIdentifierÍEÍK¦Number‘MªIdentifierÍLÍQ¥valueÂR°BinaryExpressionÍUÍ…V®CallExpressionÍUÍbMªIdentifierÍUÍ[¦Number‘MªIdentifierÍ\Ía¥valueÂ¡/W°MemberExpressionÍeÍ…MªIdentifierÍeÍr­ChaoxingUtilsMªIdentifierÍsÍ…²LOCATION_INT_SCALEÂÂO°MethodDefinitionÍ¬ÍÃÂMªIdentifierÍ³ÍÀ­bd09_to_gcj02¦methodP²FunctionExpressionÍÀÍÀÂÂÂ’MªIdentifierÍÁÍÇ¦bd_latMªIdentifierÍÉÍÏ¦bd_lonN®BlockStatementÍÑÍ•T³VariableDeclarationÍÜÍö‘U²VariableDeclaratorÍâÍõMªIdentifierÍâÍã¡xR°BinaryExpressionÍæÍõMªIdentifierÍæÍì¦bd_lon¡-\§LiteralÍïÍõË?zŸ¾vÈ´9¦0.0065¥constT³VariableDeclarationÍ Í‘U²VariableDeclaratorÍÍMªIdentifierÍÍ¡yR°BinaryExpressionÍ
+ÍMªIdentifierÍ
+Í¦bd_lat¡-\§LiteralÍÍË?x“t¼j~ú¥0.006¥constT³VariableDeclarationÍ#Ís‘U²VariableDeclaratorÍ)ÍrMªIdentifierÍ)Í*¡zR°BinaryExpressionÍ-ÍrV®CallExpressionÍ-ÍEW°MemberExpressionÍ-Í6MªIdentifierÍ-Í1¤MathMªIdentifierÍ2Í6¤sqrtÂÂ‘R°BinaryExpressionÍ7ÍDR°BinaryExpressionÍ7Í<MªIdentifierÍ7Í8¡x¡*MªIdentifierÍ;Í<¡x¡+R°BinaryExpressionÍ?ÍDMªIdentifierÍ?Í@¡y¡*MªIdentifierÍCÍD¡yÂ¡-R°BinaryExpressionÍHÍr\§LiteralÍHÍOË>ôøµˆãhñ§0.00002¡*V®CallExpressionÍRÍrW°MemberExpressionÍRÍZMªIdentifierÍRÍV¤MathMªIdentifierÍWÍZ£sinÂÂ‘R°BinaryExpressionÍ[ÍqMªIdentifierÍ[Í\¡y¡*W°MemberExpressionÍ_ÍqMªIdentifierÍ_Íl­ChaoxingUtilsMªIdentifierÍmÍq¤x_piÂÂÂ¥constT³VariableDeclarationÍ}ÍÊ‘U²VariableDeclaratorÍƒÍÉMªIdentifierÍƒÍˆ¥thetaR°BinaryExpressionÍ‹ÍÉV®CallExpressionÍ‹Í›W°MemberExpressionÍ‹Í•MªIdentifierÍ‹Í¤MathMªIdentifierÍÍ•¥atan2ÂÂ’MªIdentifierÍ–Í—¡yMªIdentifierÍ™Íš¡xÂ¡-R°BinaryExpressionÍÍÉ\§LiteralÍÍ¦Ë>É*sqäT¨0.000003¡*V®CallExpressionÍ©ÍÉW°MemberExpressionÍ©Í±MªIdentifierÍ©Í­¤MathMªIdentifierÍ®Í±£cosÂÂ‘R°BinaryExpressionÍ²ÍÈMªIdentifierÍ²Í³¡x¡*W°MemberExpressionÍ¶ÍÈMªIdentifierÍ¶ÍÃ­ChaoxingUtilsMªIdentifierÍÄÍÈ¤x_piÂÂÂ¥constS¯ReturnStatementÍÔÍ_°ObjectExpressionÍÛÍ’`¨PropertyÍİÍõÂÂÂMªIdentifierÍİÍà£latR°BinaryExpressionÍâÍõMªIdentifierÍâÍã¡z¡*V®CallExpressionÍæÍõW°MemberExpressionÍæÍîMªIdentifierÍæÍê¤MathMªIdentifierÍëÍî£sinÂÂ‘MªIdentifierÍïÍô¥thetaÂ¤init`¨PropertyÍ÷ÍÂÂÂMªIdentifierÍ÷Íú£lonR°BinaryExpressionÍüÍMªIdentifierÍüÍı¡z¡*V®CallExpressionÍ ÍW°MemberExpressionÍ ÍMªIdentifierÍ Í¤MathMªIdentifierÍÍ£cosÂÂ‘MªIdentifierÍ	Í¥thetaÂ¤initO°MethodDefinitionÍYÍ«ÃÂMªIdentifierÍ`Ín®wgs84_to_gcj02¦methodP²FunctionExpressionÍnÍ«ÀÂÂÂ’MªIdentifierÍoÍu¦wg_latMªIdentifierÍwÍ}¦wg_lonN®BlockStatementÍÍ«šQ«IfStatementÍ²ÍAR±LogicalExpressionÍ¶ÍR±LogicalExpressionÍ¶ÍíR±LogicalExpressionÍ¶ÍÚR°BinaryExpressionÍ¶ÍÅMªIdentifierÍ¶Í¼¦wg_lon¡<\§LiteralÍ¿ÍÅË@R A‰7KÇ¦72.004¢||R°BinaryExpressionÍÉÍÚMªIdentifierÍÉÍÏ¦wg_lon¡>\§LiteralÍÒÍÚË@a:µÜÆ?¨137.8347¢||R°BinaryExpressionÍŞÍíMªIdentifierÍŞÍä¦wg_lat¡<\§LiteralÍçÍíË?ê‰ 'RTa¦0.8293¢||R°BinaryExpressionÍñÍMªIdentifierÍñÍ÷¦wg_lat¡>\§LiteralÍúÍË@KéŞi­BÄ§55.8271N®BlockStatementÍÍA‘S¯ReturnStatementÍÍ6_°ObjectExpressionÍÍ5’`¨PropertyÍÍ&ÂÂÂMªIdentifierÍÍ£latMªIdentifierÍ Í&¦wg_lat¤init`¨PropertyÍ(Í3ÂÂÂMªIdentifierÍ(Í+£lonMªIdentifierÍ-Í3¦wg_lon¤initÀT³VariableDeclarationÍKÍ‘U²VariableDeclaratorÍOÍMªIdentifierÍOÍS¤dLatV®CallExpressionÍVÍW°MemberExpressionÍVÍpMªIdentifierÍVÍc­ChaoxingUtilsMªIdentifierÍdÍp¬transformLatÂÂ’R°BinaryExpressionÍqÍMªIdentifierÍqÍw¦wg_lon¡-\§LiteralÍzÍÌi¥105.0R°BinaryExpressionÍÍMªIdentifierÍÍ‡¦wg_lat¡-\§LiteralÍŠÍ#¤35.0Â£letT³VariableDeclarationÍšÍß‘U²VariableDeclaratorÍÍŞMªIdentifierÍÍ¢¤dLonV®CallExpressionÍ¥ÍŞW°MemberExpressionÍ¥Í¿MªIdentifierÍ¥Í²­ChaoxingUtilsMªIdentifierÍ³Í¿¬transformLonÂÂ’R°BinaryExpressionÍÀÍÎMªIdentifierÍÀÍÆ¦wg_lon¡-\§LiteralÍÉÍÎÌi¥105.0R°BinaryExpressionÍĞÍİMªIdentifierÍĞÍÖ¦wg_lat¡-\§LiteralÍÙÍİ#¤35.0Â£letT³VariableDeclarationÍéÍ‘U²VariableDeclaratorÍïÍMªIdentifierÍïÍõ¦radLatR°BinaryExpressionÍøÍR°BinaryExpressionÍøÍMªIdentifierÍøÍş¦wg_lat¡/\§LiteralÍÍÌ´¥180.0¡*W°MemberExpressionÍ	ÍMªIdentifierÍ	Í¤MathMªIdentifierÍÍ¢PIÂÂ¥constT³VariableDeclarationÍÍ8‘U²VariableDeclaratorÍÍ7MªIdentifierÍÍ$¥magicV®CallExpressionÍ'Í7W°MemberExpressionÍ'Í/MªIdentifierÍ'Í+¤MathMªIdentifierÍ,Í/£sinÂÂ‘MªIdentifierÍ0Í6¦radLatÂ£letÔra”¤type¥start£endªexpression³ExpressionStatementÍBÍuÔrb–¤type¥start£end¨operator¤left¥right´AssignmentExpressionÍBÍt¡=MªIdentifierÍBÍG¥magicR°BinaryExpressionÍJÍt\§LiteralÍJÍK¡1¡-R°BinaryExpressionÍNÍtR°BinaryExpressionÍNÍl\§LiteralÍNÍdË?{j¯€ï¶0.00669342162296594323¡*MªIdentifierÍgÍl¥magic¡*MªIdentifierÍoÍt¥magicT³VariableDeclarationÍÍ¢‘U²VariableDeclaratorÍ…Í¡MªIdentifierÍ…Í©sqrtMagicV®CallExpressionÍ‘Í¡W°MemberExpressionÍ‘ÍšMªIdentifierÍ‘Í•¤MathMªIdentifierÍ–Íš¤sqrtÂÂ‘MªIdentifierÍ›Í ¥magicÂ¥consta³ExpressionStatementÍ¬Íb´AssignmentExpressionÍ¬Í¡=MªIdentifierÍ¬Í°¤dLatR°BinaryExpressionÍ³ÍR°BinaryExpressionÍ´ÍÀMªIdentifierÍ´Í¸¤dLat¡*\§LiteralÍ»ÍÀÌ´¥180.0¡/R°BinaryExpressionÍÅÍR°BinaryExpressionÍÅÍR°BinaryExpressionÍÆÍî\§LiteralÍÆÍÏÎ aS©6378245.0¡*R°BinaryExpressionÍÓÍí\§LiteralÍÓÍÔ¡1¡-\§LiteralÍ×ÍíË?{j¯€ï¶0.00669342162296594323¡/R°BinaryExpressionÍóÍMªIdentifierÍóÍø¥magic¡*MªIdentifierÍûÍ©sqrtMagic¡*W°MemberExpressionÍÍMªIdentifierÍÍ¤MathMªIdentifierÍÍ¢PIÂÂa³ExpressionStatementÍÍhb´AssignmentExpressionÍÍg¡=MªIdentifierÍÍ¤dLonR°BinaryExpressionÍ"ÍgR°BinaryExpressionÍ#Í/MªIdentifierÍ#Í'¤dLon¡*\§LiteralÍ*Í/Ì´¥180.0¡/R°BinaryExpressionÍ4ÍfR°BinaryExpressionÍ4Í\R°BinaryExpressionÍ4ÍI\§LiteralÍ4Í=Î aS©6378245.0¡/MªIdentifierÍ@ÍI©sqrtMagic¡*V®CallExpressionÍLÍ\W°MemberExpressionÍLÍTMªIdentifierÍLÍP¤MathMªIdentifierÍQÍT£cosÂÂ‘MªIdentifierÍUÍ[¦radLatÂ¡*W°MemberExpressionÍ_ÍfMªIdentifierÍ_Íc¤MathMªIdentifierÍdÍf¢PIÂÂS¯ReturnStatementÍrÍ¤_°ObjectExpressionÍyÍ£’`¨PropertyÍ{ÍÂÂÂMªIdentifierÍ{Í~£latR°BinaryExpressionÍ€ÍMªIdentifierÍ€Í†¦wg_lat¡+MªIdentifierÍ‰Í¤dLat¤init`¨PropertyÍÍ¡ÂÂÂMªIdentifierÍÍ’£lonR°BinaryExpressionÍ”Í¡MªIdentifierÍ”Íš¦wg_lon¡+MªIdentifierÍÍ¡¤dLon¤initO°MethodDefinitionÍÜÍ®ÃÂMªIdentifierÍãÍï¬transformLat¦methodP²FunctionExpressionÍïÍ®ÀÂÂÂ’MªIdentifierÍğÍñ¡xMªIdentifierÍóÍô¡yN®BlockStatementÍöÍ®•T³VariableDeclarationÍÍa‘U²VariableDeclaratorÍÍ`MªIdentifierÍÍ£retR°BinaryExpressionÍÍ`R°BinaryExpressionÍÍAR°BinaryExpressionÍÍ3R°BinaryExpressionÍÍ%R°BinaryExpressionÍÍÔrc–¤type¥start£end¨operator¦prefix¨argument¯UnaryExpressionÍÍ¡-Ã\§LiteralÍÍÌd¥100.0¡+R°BinaryExpressionÍÍ\§LiteralÍÍ£2.0¡*MªIdentifierÍÍ¡x¡+R°BinaryExpressionÍÍ%\§LiteralÍÍ!£3.0¡*MªIdentifierÍ$Í%¡y¡+R°BinaryExpressionÍ(Í3R°BinaryExpressionÍ(Í/\§LiteralÍ(Í+Ë?É™™™™™š£0.2¡*MªIdentifierÍ.Í/¡y¡*MªIdentifierÍ2Í3¡y¡+R°BinaryExpressionÍ6ÍAR°BinaryExpressionÍ6Í=\§LiteralÍ6Í9Ë?¹™™™™™š£0.1¡*MªIdentifierÍ<Í=¡x¡*MªIdentifierÍ@ÍA¡y¡+R°BinaryExpressionÍDÍ`\§LiteralÍDÍGË?É™™™™™š£0.2¡*V®CallExpressionÍJÍ`W°MemberExpressionÍJÍSMªIdentifierÍJÍN¤MathMªIdentifierÍOÍS¤sqrtÂÂ‘V®CallExpressionÍTÍ_W°MemberExpressionÍTÍ\MªIdentifierÍTÍX¤MathMªIdentifierÍYÍ\£absÂÂ‘MªIdentifierÍ]Í^¡xÂÂ£leta³ExpressionStatementÍkÍÈb´AssignmentExpressionÍkÍÇ¢+=MªIdentifierÍkÍn£retR°BinaryExpressionÍrÍÇR°BinaryExpressionÍrÍÁR°BinaryExpressionÍsÍºR°BinaryExpressionÍsÍ•\§LiteralÍsÍw¤20.0¡*V®CallExpressionÍzÍ•W°MemberExpressionÍzÍ‚MªIdentifierÍzÍ~¤MathMªIdentifierÍÍ‚£sinÂÂ‘R°BinaryExpressionÍƒÍ”R°BinaryExpressionÍƒÍŠ\§LiteralÍƒÍ†£6.0¡*MªIdentifierÍ‰ÍŠ¡x¡*W°MemberExpressionÍÍ”MªIdentifierÍÍ‘¤MathMªIdentifierÍ’Í”¢PIÂÂÂ¡+R°BinaryExpressionÍ˜Íº\§LiteralÍ˜Íœ¤20.0¡*V®CallExpressionÍŸÍºW°MemberExpressionÍŸÍ§MªIdentifierÍŸÍ£¤MathMªIdentifierÍ¤Í§£sinÂÂ‘R°BinaryExpressionÍ¨Í¹R°BinaryExpressionÍ¨Í¯\§LiteralÍ¨Í«£2.0¡*MªIdentifierÍ®Í¯¡x¡*W°MemberExpressionÍ²Í¹MªIdentifierÍ²Í¶¤MathMªIdentifierÍ·Í¹¢PIÂÂÂ¡*\§LiteralÍ¾ÍÁ£2.0¡/\§LiteralÍÄÍÇ£3.0a³ExpressionStatementÍÒÍ)b´AssignmentExpressionÍÒÍ(¢+=MªIdentifierÍÒÍÕ£retR°BinaryExpressionÍÙÍ(R°BinaryExpressionÍÙÍ"R°BinaryExpressionÍÚÍR°BinaryExpressionÍÚÍö\§LiteralÍÚÍŞ¤20.0¡*V®CallExpressionÍáÍöW°MemberExpressionÍáÍéMªIdentifierÍáÍå¤MathMªIdentifierÍæÍé£sinÂÂ‘R°BinaryExpressionÍêÍõMªIdentifierÍêÍë¡y¡*W°MemberExpressionÍîÍõMªIdentifierÍîÍò¤MathMªIdentifierÍóÍõ¢PIÂÂÂ¡+R°BinaryExpressionÍùÍ\§LiteralÍùÍı(¤40.0¡*V®CallExpressionÍ ÍW°MemberExpressionÍ ÍMªIdentifierÍ Í¤MathMªIdentifierÍÍ£sinÂÂ‘R°BinaryExpressionÍ	ÍR°BinaryExpressionÍ	ÍMªIdentifierÍ	Í
+¡y¡/\§LiteralÍÍ£3.0¡*W°MemberExpressionÍÍMªIdentifierÍÍ¤MathMªIdentifierÍÍ¢PIÂÂÂ¡*\§LiteralÍÍ"£2.0¡/\§LiteralÍ%Í(£3.0a³ExpressionStatementÍ3Í’b´AssignmentExpressionÍ3Í‘¢+=MªIdentifierÍ3Í6£retR°BinaryExpressionÍ:Í‘R°BinaryExpressionÍ:Í‹R°BinaryExpressionÍ;Í„R°BinaryExpressionÍ;Í_\§LiteralÍ;Í@Ì ¥160.0¡*V®CallExpressionÍCÍ_W°MemberExpressionÍCÍKMªIdentifierÍCÍG¤MathMªIdentifierÍHÍK£sinÂÂ‘R°BinaryExpressionÍLÍ^R°BinaryExpressionÍLÍTMªIdentifierÍLÍM¡y¡/\§LiteralÍPÍT¤12.0¡*W°MemberExpressionÍWÍ^MªIdentifierÍWÍ[¤MathMªIdentifierÍ\Í^¢PIÂÂÂ¡+R°BinaryExpressionÍbÍ„\§LiteralÍbÍeÍ@£320¡*V®CallExpressionÍhÍ„W°MemberExpressionÍhÍpMªIdentifierÍhÍl¤MathMªIdentifierÍmÍp£sinÂÂ‘R°BinaryExpressionÍqÍƒR°BinaryExpressionÍqÍ|MªIdentifierÍqÍr¡y¡*W°MemberExpressionÍuÍ|MªIdentifierÍuÍy¤MathMªIdentifierÍzÍ|¢PIÂÂ¡/\§LiteralÍÍƒ¤30.0Â¡*\§LiteralÍˆÍ‹£2.0¡/\§LiteralÍÍ‘£3.0S¯ReturnStatementÍœÍ§MªIdentifierÍ£Í¦£retO°MethodDefinitionÍßÍ¬ÃÂMªIdentifierÍæÍò¬transformLon¦methodP²FunctionExpressionÍòÍ¬ÀÂÂÂ’MªIdentifierÍóÍô¡xMªIdentifierÍöÍ÷¡yN®BlockStatementÍùÍ¬•T³VariableDeclarationÍÍ]‘U²VariableDeclaratorÍÍ\MªIdentifierÍÍ£retR°BinaryExpressionÍÍ\R°BinaryExpressionÍÍ=R°BinaryExpressionÍÍ/R°BinaryExpressionÍÍ!R°BinaryExpressionÍÍ\§LiteralÍÍÍ,¥300.0¡+MªIdentifierÍÍ¡x¡+R°BinaryExpressionÍÍ!\§LiteralÍÍ£2.0¡*MªIdentifierÍ Í!¡y¡+R°BinaryExpressionÍ$Í/R°BinaryExpressionÍ$Í+\§LiteralÍ$Í'Ë?¹™™™™™š£0.1¡*MªIdentifierÍ*Í+¡x¡*MªIdentifierÍ.Í/¡x¡+R°BinaryExpressionÍ2Í=R°BinaryExpressionÍ2Í9\§LiteralÍ2Í5Ë?¹™™™™™š£0.1¡*MªIdentifierÍ8Í9¡x¡*MªIdentifierÍ<Í=¡y¡+R°BinaryExpressionÍ@Í\\§LiteralÍ@ÍCË?¹™™™™™š£0.1¡*V®CallExpressionÍFÍ\W°MemberExpressionÍFÍOMªIdentifierÍFÍJ¤MathMªIdentifierÍKÍO¤sqrtÂÂ‘V®CallExpressionÍPÍ[W°MemberExpressionÍPÍXMªIdentifierÍPÍT¤MathMªIdentifierÍUÍX£absÂÂ‘MªIdentifierÍYÍZ¡xÂÂ£leta³ExpressionStatementÍgÍÄb´AssignmentExpressionÍgÍÃ¢+=MªIdentifierÍgÍj£retR°BinaryExpressionÍnÍÃR°BinaryExpressionÍnÍ½R°BinaryExpressionÍoÍ¶R°BinaryExpressionÍoÍ‘\§LiteralÍoÍs¤20.0¡*V®CallExpressionÍvÍ‘W°MemberExpressionÍvÍ~MªIdentifierÍvÍz¤MathMªIdentifierÍ{Í~£sinÂÂ‘R°BinaryExpressionÍÍR°BinaryExpressionÍÍ†\§LiteralÍÍ‚£6.0¡*MªIdentifierÍ…Í†¡x¡*W°MemberExpressionÍ‰ÍMªIdentifierÍ‰Í¤MathMªIdentifierÍÍ¢PIÂÂÂ¡+R°BinaryExpressionÍ”Í¶\§LiteralÍ”Í˜¤20.0¡*V®CallExpressionÍ›Í¶W°MemberExpressionÍ›Í£MªIdentifierÍ›ÍŸ¤MathMªIdentifierÍ Í££sinÂÂ‘R°BinaryExpressionÍ¤ÍµR°BinaryExpressionÍ¤Í«\§LiteralÍ¤Í§£2.0¡*MªIdentifierÍªÍ«¡x¡*W°MemberExpressionÍ®ÍµMªIdentifierÍ®Í²¤MathMªIdentifierÍ³Íµ¢PIÂÂÂ¡*\§LiteralÍºÍ½£2.0¡/\§LiteralÍÀÍÃ£3.0a³ExpressionStatementÍÎÍ%b´AssignmentExpressionÍÎÍ$¢+=MªIdentifierÍÎÍÑ£retR°BinaryExpressionÍÕÍ$R°BinaryExpressionÍÕÍR°BinaryExpressionÍÖÍR°BinaryExpressionÍÖÍò\§LiteralÍÖÍÚ¤20.0¡*V®CallExpressionÍİÍòW°MemberExpressionÍİÍåMªIdentifierÍİÍá¤MathMªIdentifierÍâÍå£sinÂÂ‘R°BinaryExpressionÍæÍñMªIdentifierÍæÍç¡x¡*W°MemberExpressionÍêÍñMªIdentifierÍêÍî¤MathMªIdentifierÍïÍñ¢PIÂÂÂ¡+R°BinaryExpressionÍõÍ\§LiteralÍõÍù(¤40.0¡*V®CallExpressionÍüÍW°MemberExpressionÍüÍMªIdentifierÍüÍ ¤MathMªIdentifierÍÍ£sinÂÂ‘R°BinaryExpressionÍÍR°BinaryExpressionÍÍMªIdentifierÍÍ¡x¡/\§LiteralÍ	Í£3.0¡*W°MemberExpressionÍÍMªIdentifierÍÍ¤MathMªIdentifierÍÍ¢PIÂÂÂ¡*\§LiteralÍÍ£2.0¡/\§LiteralÍ!Í$£3.0a³ExpressionStatementÍ/Íb´AssignmentExpressionÍ/Í¢+=MªIdentifierÍ/Í2£retR°BinaryExpressionÍ6ÍR°BinaryExpressionÍ6Í‰R°BinaryExpressionÍ7Í‚R°BinaryExpressionÍ7Í[\§LiteralÍ7Í<Ì–¥150.0¡*V®CallExpressionÍ?Í[W°MemberExpressionÍ?ÍGMªIdentifierÍ?ÍC¤MathMªIdentifierÍDÍG£sinÂÂ‘R°BinaryExpressionÍHÍZR°BinaryExpressionÍHÍPMªIdentifierÍHÍI¡x¡/\§LiteralÍLÍP¤12.0¡*W°MemberExpressionÍSÍZMªIdentifierÍSÍW¤MathMªIdentifierÍXÍZ¢PIÂÂÂ¡+R°BinaryExpressionÍ^Í‚\§LiteralÍ^ÍcÍ,¥300.0¡*V®CallExpressionÍfÍ‚W°MemberExpressionÍfÍnMªIdentifierÍfÍj¤MathMªIdentifierÍkÍn£sinÂÂ‘R°BinaryExpressionÍoÍR°BinaryExpressionÍoÍwMªIdentifierÍoÍp¡x¡/\§LiteralÍsÍw¤30.0¡*W°MemberExpressionÍzÍMªIdentifierÍzÍ~¤MathMªIdentifierÍÍ¢PIÂÂÂ¡*\§LiteralÍ†Í‰£2.0¡/\§LiteralÍŒÍ£3.0S¯ReturnStatementÍšÍ¥MªIdentifierÍ¡Í¤£retO°MethodDefinitionÍ²ÍuÃÂMªIdentifierÍ¹ÍÀ§hasHole¦methodP²FunctionExpressionÍÀÍuÀÂÂÂ‘MªIdentifierÍÁÍÄ£arrN®BlockStatementÍÆÍu’Ôrd—¤type¥start£end¤init¤test¦update¤body¬ForStatementÍÑÍWT³VariableDeclarationÍÖÍß‘U²VariableDeclaratorÍÚÍßMªIdentifierÍÚÍÛ¡i\§LiteralÍŞÍß ¡0£letR°BinaryExpressionÍáÍïMªIdentifierÍáÍâ¡i¡<W°MemberExpressionÍåÍïMªIdentifierÍåÍè£arrMªIdentifierÍéÍï¦lengthÂÂc°UpdateExpressionÍñÍô¢++ÂMªIdentifierÍñÍò¡iN®BlockStatementÍöÍW‘Q«IfStatementÍÍLc¯UnaryExpressionÍ	Í¡!ÃR°BinaryExpressionÍÍMªIdentifierÍÍ¡i¢inMªIdentifierÍÍ£arrN®BlockStatementÍÍL‘S¯ReturnStatementÍ)Í5\§LiteralÍ0Í4Ã¤trueÀS¯ReturnStatementÍaÍn\§LiteralÍhÍmÂ¥falseO°MethodDefinitionÍİÍ8ÃÂMªIdentifierÍäÍğ¬encryptByAES¦methodP²FunctionExpressionÍğÍ8ÀÂÂÂ‘MªIdentifierÍñÍø§messageN®BlockStatementÍúÍ8–T³VariableDeclarationÍ2ÍX‘U²VariableDeclaratorÍ8ÍWMªIdentifierÍ8Í;£keyW°MemberExpressionÍ>ÍWMªIdentifierÍ>ÍK­ChaoxingUtilsMªIdentifierÍLÍW«DEFAULT_KEYÂÂ¥constT³VariableDeclarationÍbÍ‘U²VariableDeclaratorÍhÍ MªIdentifierÍhÍrªCBCOptions_°ObjectExpressionÍuÍ “`¨PropertyÍ„Í¤ÂÂÂMªIdentifierÍ„Í†¢ivV®CallExpressionÍˆÍ¤W°MemberExpressionÍˆÍŸW°MemberExpressionÍˆÍ™W°MemberExpressionÍˆÍ”MªIdentifierÍˆÍ¨CryptoJSMªIdentifierÍ‘Í”£encÂÂMªIdentifierÍ•Í™¤Utf8ÂÂMªIdentifierÍšÍŸ¥parseÂÂ‘MªIdentifierÍ Í££keyÂ¤init`¨PropertyÍ³ÍÊÂÂÂMªIdentifierÍ³Í·¤modeW°MemberExpressionÍ¹ÍÊW°MemberExpressionÍ¹ÍÆMªIdentifierÍ¹ÍÁ¨CryptoJSMªIdentifierÍÂÍÆ¤modeÂÂMªIdentifierÍÇÍÊ£CBCÂÂ¤init`¨PropertyÍÙÍôÂÂÂMªIdentifierÍÙÍà§paddingW°MemberExpressionÍâÍôW°MemberExpressionÍâÍîMªIdentifierÍâÍê¨CryptoJSMªIdentifierÍëÍî£padÂÂMªIdentifierÍïÍô¥Pkcs7ÂÂ¤init¥constT³VariableDeclarationÍÍ7‘U²VariableDeclaratorÍÍ6MªIdentifierÍÍ¦aeskeyV®CallExpressionÍÍ6W°MemberExpressionÍÍ1W°MemberExpressionÍÍ+W°MemberExpressionÍÍ&MªIdentifierÍÍ"¨CryptoJSMªIdentifierÍ#Í&£encÂÂMªIdentifierÍ'Í+¤Utf8ÂÂMªIdentifierÍ,Í1¥parseÂÂ‘MªIdentifierÍ2Í5£keyÂ¥constT³VariableDeclarationÍgÍ›‘U²VariableDeclaratorÍmÍšMªIdentifierÍmÍwªsecretDataV®CallExpressionÍzÍšW°MemberExpressionÍzÍ‘W°MemberExpressionÍzÍ‹W°MemberExpressionÍzÍ†MªIdentifierÍzÍ‚¨CryptoJSMªIdentifierÍƒÍ†£encÂÂMªIdentifierÍ‡Í‹¤Utf8ÂÂMªIdentifierÍŒÍ‘¥parseÂÂ‘MªIdentifierÍ’Í™§messageÂ¥constT³VariableDeclarationÍ¥Íì‘U²VariableDeclaratorÍ«ÍëMªIdentifierÍ«Í´©encryptedV®CallExpressionÍ·ÍëW°MemberExpressionÍ·ÍËW°MemberExpressionÍ·ÍÃMªIdentifierÍ·Í¿¨CryptoJSMªIdentifierÍÀÍÃ£AESÂÂMªIdentifierÍÄÍË§encryptÂÂ“MªIdentifierÍÌÍÖªsecretDataMªIdentifierÍØÍŞ¦aeskeyMªIdentifierÍàÍêªCBCOptionsÂ¥constS¯ReturnStatementÍöÍ1V®CallExpressionÍıÍ0W°MemberExpressionÍıÍW°MemberExpressionÍıÍW°MemberExpressionÍıÍ	MªIdentifierÍıÍ¨CryptoJSMªIdentifierÍÍ	£encÂÂMªIdentifierÍ
+Í¦Base64ÂÂMªIdentifierÍÍ©stringifyÂÂ‘W°MemberExpressionÍÍ/MªIdentifierÍÍ$©encryptedMªIdentifierÍ%Í/ªciphertextÂÂÂO°MethodDefinitionÍ2Í!ÃÂMªIdentifierÍ9ÍE¬getLoginBody¦methodP²FunctionExpressionÍEÍ!ÀÂÂÂ’MªIdentifierÍFÍN¨usernameMªIdentifierÍPÍX¨passwordN®BlockStatementÍZÍ!“T³VariableDeclarationÍÍ¶‘U²VariableDeclaratorÍ‡ÍµMªIdentifierÍ‡Í–¯encodedUsernameV®CallExpressionÍ™ÍµMªIdentifierÍ™Í«²encodeURIComponent‘MªIdentifierÍ¬Í´¨usernameÂ¥constT³VariableDeclarationÍÀÍõ‘U²VariableDeclaratorÍÆÍôMªIdentifierÍÆÍÕ¯encodedPasswordV®CallExpressionÍØÍôMªIdentifierÍØÍê²encodeURIComponent‘MªIdentifierÍëÍó¨passwordÂ¥constS¯ReturnStatementÍ Í!Y¯TemplateLiteralÍ Í!’MªIdentifierÍ -Í <¯encodedUsernameMªIdentifierÍ IÍ X¯encodedPassword“Z¯TemplateElementÍ Í +[­fid=-1&uname=­fid=-1&uname=ÂZ¯TemplateElementÍ =Í G[ª&password=ª&password=ÂZ¯TemplateElementÍ YÍ![Ùµ&refer=https%253A%252F%252Fmooc2-ans.chaoxing.com%252Fmooc2-ans%252Fvisit%252Finteraction&t=true&forbidotherlogin=0&validate=&doubleFactorLogin=0&independentId=0&independentNameId=0Ùµ&refer=https%253A%252F%252Fmooc2-ans.chaoxing.com%252Fmooc2-ans%252Fvisit%252Finteraction&t=true&forbidotherlogin=0&validate=&doubleFactorLogin=0&independentId=0&independentNameId=0ÃO°MethodDefinitionÍ#$Í$fÃÂMªIdentifierÍ#+Í#B·processSetCookieHeaders¦methodP²FunctionExpressionÍ#BÍ$fÀÂÂÂ‘MªIdentifierÍ#CÍ#S°setCookieHeadersN®BlockStatementÍ#UÍ$f’Q«IfStatementÍ#`Í#ËR±LogicalExpressionÍ#dÍ#¥c¯UnaryExpressionÍ#dÍ#„¡!ÃV®CallExpressionÍ#eÍ#„W°MemberExpressionÍ#eÍ#rMªIdentifierÍ#eÍ#j¥ArrayMªIdentifierÍ#kÍ#r§isArrayÂÂ‘MªIdentifierÍ#sÍ#ƒ°setCookieHeadersÂ¢||R°BinaryExpressionÍ#ˆÍ#¥W°MemberExpressionÍ#ˆÍ#ŸMªIdentifierÍ#ˆÍ#˜°setCookieHeadersMªIdentifierÍ#™Í#Ÿ¦lengthÂÂ£===\§LiteralÍ#¤Í#¥ ¡0N®BlockStatementÍ#§Í#Ë‘S¯ReturnStatementÍ#¶Í#À\§LiteralÍ#½Í#¿ ¢''ÀS¯ReturnStatementÍ#ÕÍ$_V®CallExpressionÍ#ÜÍ$^W°MemberExpressionÍ#ÜÍ$XV®CallExpressionÍ#ÜÍ$%W°MemberExpressionÍ#ÜÍ#şMªIdentifierÍ#ÜÍ#ì°setCookieHeadersMªIdentifierÍ#ûÍ#ş£mapÂÂ‘P·ArrowFunctionExpressionÍ#ÿÍ$$ÀÃÂÂ‘MªIdentifierÍ#ÿÍ$¦cookieV®CallExpressionÍ$	Í$$W°MemberExpressionÍ$	Í$"W°MemberExpressionÍ$	Í$V®CallExpressionÍ$	Í$W°MemberExpressionÍ$	Í$MªIdentifierÍ$	Í$¦cookieMªIdentifierÍ$Í$¥splitÂÂ‘\§LiteralÍ$Í$¡;£';'Â\§LiteralÍ$Í$ ¡0ÃÂMªIdentifierÍ$Í$"¤trimÂÂÂÂMªIdentifierÍ$TÍ$X¤joinÂÂ‘\§LiteralÍ$YÍ$]¢; ¤'; 'ÂO°MethodDefinitionÍ%oÍ%õÃÂMªIdentifierÍ%vÍ%†°getRemainingTime¦methodP²FunctionExpressionÍ%†Í%õÀÂÂÂ‘MªIdentifierÍ%‡Í%§endTimeN®BlockStatementÍ%Í%õ’T³VariableDeclarationÍ%›Í%º‘U²VariableDeclaratorÍ%¡Í%¹MªIdentifierÍ%¡Í%¬«currentTimeV®CallExpressionÍ%¯Í%¹W°MemberExpressionÍ%¯Í%·MªIdentifierÍ%¯Í%³¤DateMªIdentifierÍ%´Í%·£nowÂÂÂ¥constS¯ReturnStatementÍ%ÄÍ%îV®CallExpressionÍ%ËÍ%íW°MemberExpressionÍ%ËÍ%ÓMªIdentifierÍ%ËÍ%Ï¤MathMªIdentifierÍ%ĞÍ%Ó£maxÂÂ’\§LiteralÍ%ÔÍ%Õ ¡0R°BinaryExpressionÍ%×Í%ìMªIdentifierÍ%×Í%Ş§endTime¡-MªIdentifierÍ%áÍ%ì«currentTimeÂO°MethodDefinitionÍ&©Í'NÃÂMªIdentifierÍ&°Í&Ä´isSignActivityActive¦methodP²FunctionExpressionÍ&ÄÍ'NÀÂÂÂ’MªIdentifierÍ&ÅÍ&Î©startTimeMªIdentifierÍ&ĞÍ&×§endTimeN®BlockStatementÍ&ÙÍ'N’T³VariableDeclarationÍ&äÍ'‘U²VariableDeclaratorÍ&êÍ'MªIdentifierÍ&êÍ&õ«currentTimeV®CallExpressionÍ&øÍ'W°MemberExpressionÍ&øÍ' MªIdentifierÍ&øÍ&ü¤DateMªIdentifierÍ&ıÍ' £nowÂÂÂ¥constS¯ReturnStatementÍ'Í'GR±LogicalExpressionÍ'Í'FR°BinaryExpressionÍ'Í',MªIdentifierÍ'Í'«currentTime¢>=MªIdentifierÍ'#Í',©startTime¢&&R°BinaryExpressionÍ'0Í'FMªIdentifierÍ'0Í';«currentTime¢<=MªIdentifierÍ'?Í'F§endTimeO°MethodDefinitionÍ'ÓÍ(VÃÂMªIdentifierÍ'ÚÍ'ïµisSignActivityStarted¦methodP²FunctionExpressionÍ'ïÍ(VÀÂÂÂ‘MªIdentifierÍ'ğÍ'ù©startTimeN®BlockStatementÍ'ûÍ(V’T³VariableDeclarationÍ(Í(%‘U²VariableDeclaratorÍ(Í($MªIdentifierÍ(Í(«currentTimeV®CallExpressionÍ(Í($W°MemberExpressionÍ(Í("MªIdentifierÍ(Í(¤DateMªIdentifierÍ(Í("£nowÂÂÂ¥constS¯ReturnStatementÍ(/Í(OR°BinaryExpressionÍ(6Í(NMªIdentifierÍ(6Í(A«currentTime¢>=MªIdentifierÍ(EÍ(N©startTimeO°MethodDefinitionÍ(ÙÍ)UÃÂMªIdentifierÍ(àÍ(ó³isSignActivityEnded¦methodP²FunctionExpressionÍ(óÍ)UÀÂÂÂ‘MªIdentifierÍ(ôÍ(û§endTimeN®BlockStatementÍ(ıÍ)U’T³VariableDeclarationÍ)Í)'‘U²VariableDeclaratorÍ)Í)&MªIdentifierÍ)Í)«currentTimeV®CallExpressionÍ)Í)&W°MemberExpressionÍ)Í)$MªIdentifierÍ)Í) ¤DateMªIdentifierÍ)!Í)$£nowÂÂÂ¥constS¯ReturnStatementÍ)1Í)NR°BinaryExpressionÍ)8Í)MMªIdentifierÍ)8Í)C«currentTime¡>MªIdentifierÍ)FÍ)M§endTimeO°MethodDefinitionÍ)[Í*–ÃÂMªIdentifierÍ)bÍ)j¨copyText¦methodP²FunctionExpressionÍ)jÍ*–ÀÂÂÂ‘MªIdentifierÍ)kÍ)o¤textN®BlockStatementÍ)qÍ*–”T³VariableDeclarationÍ)|Í)Ï‘U²VariableDeclaratorÍ)‚Í)ÎMªIdentifierÍ)‚Í)®pasteboardDataV®CallExpressionÍ)“Í)ÎW°MemberExpressionÍ)“Í)¨MªIdentifierÍ)“Í)ªpasteboardMªIdentifierÍ)Í)¨ªcreateDataÂÂ’W°MemberExpressionÍ)©Í)ÇMªIdentifierÍ)©Í)³ªpasteboardMªIdentifierÍ)´Í)Ç³MIMETYPE_TEXT_PLAINÂÂMªIdentifierÍ)ÉÍ)Í¤textÂ¥constT³VariableDeclarationÍ)ÙÍ*‘U²VariableDeclaratorÍ)ßÍ*MªIdentifierÍ)ßÍ)ï°systemPasteboardV®CallExpressionÍ)òÍ*W°MemberExpressionÍ)òÍ*MªIdentifierÍ)òÍ)üªpasteboardMªIdentifierÍ)ıÍ*³getSystemPasteboardÂÂÂ¥consta³ExpressionStatementÍ*Í*FV®CallExpressionÍ*Í*EW°MemberExpressionÍ*Í*5MªIdentifierÍ*Í*-°systemPasteboardMªIdentifierÍ*.Í*5§setDataÂÂ‘MªIdentifierÍ*6Í*D®pasteboardDataÂa³ExpressionStatementÍ*PÍ*V®CallExpressionÍ*PÍ*W°MemberExpressionÍ*PÍ*fMªIdentifierÍ*PÍ*\¬promptActionMªIdentifierÍ*]Í*f©showToastÂÂ‘_°ObjectExpressionÍ*gÍ*’`¨PropertyÍ*iÍ*{ÂÂÂMªIdentifierÍ*iÍ*p§message\§LiteralÍ*rÍ*{µå·²å¤åˆ¶åˆ°å‰ªè´´æ¿·'å·²å¤åˆ¶åˆ°å‰ªè´´æ¿'¤init`¨PropertyÍ*}Í*‹ÂÂÂMªIdentifierÍ*}Í*…¨duration\§LiteralÍ*‡Í*‹ÍÜ¤1500¤initÂÀ“Ôre•¤type¥start£endªspecifiers¦source±ImportDeclarationÌHÌo‘Ôrf”¤type¥start£end¥local¶ImportDefaultSpecifierÌOÌWMªIdentifierÌOÌW¨CryptoJS\§LiteralÌ]Ìn¯@ohos/crypto-js±'@ohos/crypto-js'e±ImportDeclarationÌqÌ›‘f¶ImportDefaultSpecifierÌxÌ‚MªIdentifierÌxÌ‚ªpasteboard\§LiteralÌˆÌš°@ohos.pasteboard²"@ohos.pasteboard"e±ImportDeclarationÌÌË‘f¶ImportDefaultSpecifierÌ¤Ì°MªIdentifierÌ¤Ì°¬promptAction\§LiteralÌ¶ÌÊ²@ohos.promptAction´"@ohos.promptAction"
