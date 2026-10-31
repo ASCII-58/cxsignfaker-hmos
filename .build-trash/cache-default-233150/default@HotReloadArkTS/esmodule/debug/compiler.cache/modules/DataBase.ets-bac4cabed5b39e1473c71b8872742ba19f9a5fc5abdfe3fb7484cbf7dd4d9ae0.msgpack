@@ -1,2452 +1,0 @@
-Ôr@Ÿªassertions¤code´customTransformCache¬dependencies¢id¤meta±moduleSideEffects¬originalCode±originalSourcemap«resolvedIds®sourcemapChainµsyntheticNamedExportsµtransformDependencies®transformFiles¨cacheAstÔrAÚ£<import relationalStore from '@ohos.data.relationalStore';
-import hilog from "@ohos.hilog";
-class DatabaseManager {
-    constructor() {
-        this.rdbStore = null;
-    }
-    static getInstance() {
-        if (DatabaseManager.instance === null) {
-            DatabaseManager.instance = new DatabaseManager();
-        }
-        return DatabaseManager.instance;
-    }
-    isInitialized() {
-        return this.rdbStore !== null;
-    }
-    async init(context) {
-        if (this.rdbStore !== null) {
-            return;
-        }
-        const STORE_CONFIG = {
-            name: 'data.db',
-            securityLevel: relationalStore.SecurityLevel.S1
-        };
-        try {
-            this.rdbStore = await relationalStore.getRdbStore(context, STORE_CONFIG);
-            await this.createTables();
-        }
-        catch (err) {
-            const error = err;
-            console.error(`Failed to get RdbStore. Code: ${error.code}, Message: ${error.message}`);
-        }
-    }
-    /**
-     * æ£€æŸ¥HostUserè¡¨æ˜¯å¦ä¸ºç©º
-     *
-     * @returns {Promise<boolean>} å¦‚æœè¡¨ä¸ºç©ºåˆ™è¿”å›trueï¼Œå¦åˆ™è¿”å›false
-     * @throws {Error} å¦‚æœæ•°æ®åº“æœªåˆå§‹åŒ–
-     * @throws {BusinessError} å¦‚æœæŸ¥è¯¢è¿‡ç¨‹ä¸­å‘ç”Ÿé”™è¯¯
-     */
-    async isHostUserTableEmpty() {
-        if (!this.rdbStore) {
-            throw new Error('Database not initialized. Call init() first.');
-        }
-        try {
-            // ä½¿ç”¨é«˜æ•ˆæŸ¥è¯¢ï¼šåªéœ€æ£€æŸ¥æ˜¯å¦å­˜åœ¨è‡³å°‘ä¸€è¡Œæ•°æ®
-            const sql = 'SELECT 1 FROM HostUser LIMIT 1';
-            const resultSet = await this.rdbStore.querySql(sql);
-            try {
-                // rowCountä¸º0è¡¨ç¤ºæ²¡æœ‰æ•°æ®
-                return resultSet.rowCount === 0;
-            }
-            finally {
-                // ç¡®ä¿æ— è®ºæŸ¥è¯¢ç»“æœå¦‚ä½•éƒ½å…³é—­ç»“æœé›†
-                resultSet.close();
-            }
-        }
-        catch (error) {
-            const err = new Error(`Database init failed: ${error.message}`);
-            hilog.error(0x0000, 'DB_INIT', err.message);
-            throw err;
-        }
-    }
-    /**
-     * æ’å…¥ç”¨æˆ·æ•°æ®ï¼ˆç»Ÿä¸€å¤„ç†ä¸»ç”¨æˆ·å’Œå…¶ä»–ç”¨æˆ·ï¼‰
-     * @param userData ç”¨æˆ·æ•°æ®å¯¹è±¡
-     * @param isHost æ˜¯å¦æ’å…¥ä¸ºä¸»ç”¨æˆ·ï¼Œé»˜è®¤false
-     * @returns æ’å…¥ç»“æœçŠ¶æ€ç ï¼š1-æˆåŠŸï¼Œ-1-æ‰‹æœºå·å·²å­˜åœ¨ï¼Œ-2-ä¸»ç”¨æˆ·å·²å­˜åœ¨ï¼Œ0-å¤±è´¥
-     */
-    async insertUser(userData, isHost = false) {
-        if (!this.rdbStore) {
-            throw new Error('Database not initialized. Call init() first.');
-        }
-        // è¾“å…¥å‚æ•°éªŒè¯
-        if (!userData.phone || !userData.pwd || !userData.cookies || !userData.uid) {
-            throw new Error('æ‰‹æœºå·ã€å¯†ç ã€cookieså’Œuidä¸èƒ½ä¸ºç©º');
-        }
-        if (userData.phone.trim().length === 0) {
-            throw new Error('æ‰‹æœºå·ä¸èƒ½ä¸ºç©ºå­—ç¬¦ä¸²');
-        }
-        try {
-            this.rdbStore.beginTransaction();
-            try {
-                // æ£€æŸ¥æ‰‹æœºå·æ˜¯å¦å·²å­˜åœ¨
-                const phoneExists = await this.checkPhoneExists(userData.phone);
-                if (phoneExists) {
-                    this.rdbStore.rollBack();
-                    return -1; // æ‰‹æœºå·å·²å­˜åœ¨
-                }
-                // å¦‚æœæ˜¯ä¸»ç”¨æˆ·ï¼Œæ£€æŸ¥æ˜¯å¦å·²æœ‰ä¸»ç”¨æˆ·
-                if (isHost) {
-                    const isHostUserEmpty = await this.isHostUserTableEmpty();
-                    if (!isHostUserEmpty) {
-                        this.rdbStore.rollBack();
-                        return -2; // ä¸»ç”¨æˆ·å·²å­˜åœ¨
-                    }
-                }
-                // æ ¹æ®ç”¨æˆ·ç±»å‹é€‰æ‹©è¡¨å
-                const tableName = isHost ? 'HostUser' : 'OtherUser';
-                // è®°å½•æ’å…¥å‰çš„è®°å½•æ•°
-                const countBefore = await this.getTableCount(tableName);
-                // æ‰§è¡Œæ’å…¥æ“ä½œ
-                const insertSql = `INSERT INTO ${tableName} (phone, pwd, cookies, uid) VALUES (?, ?, ?, ?)`;
-                await this.rdbStore.executeSql(insertSql, [
-                    userData.phone,
-                    userData.pwd,
-                    userData.cookies,
-                    userData.uid
-                ]);
-                // æäº¤äº‹åŠ¡
-                this.rdbStore.commit();
-                // éªŒè¯æ’å…¥ç»“æœï¼šæ£€æŸ¥è®°å½•æ•°æ˜¯å¦å¢åŠ 
-                const countAfter = await this.getTableCount(tableName);
-                if (countAfter !== countBefore + 1) {
-                    throw new Error('æ’å…¥æ“ä½œæœªæˆåŠŸï¼Œè®°å½•æ•°æœªå¢åŠ ');
-                }
-                hilog.info(0x0000, 'DB', `Successfully inserted ${isHost ? 'host' : 'other'} user: ${userData.phone.substring(0, 3)}***`);
-                return 1; // æ’å…¥æˆåŠŸ
-            }
-            catch (error) {
-                // å›æ»šäº‹åŠ¡
-                this.rdbStore.rollBack();
-                throw Error(error);
-            }
-        }
-        catch (err) {
-            // å¤–å±‚é”™è¯¯å¤„ç†
-            hilog.error(0x0000, 'DB', `Failed to insert ${isHost ? 'host' : 'other'} user: ${err.message}`);
-            return 0; // æ’å…¥å¤±è´¥
-        }
-    }
-    /**
-     * è·å–è¡¨ä¸­æ‰€æœ‰ç”¨æˆ·æ•°æ®
-     * @param isHost æ˜¯å¦æŸ¥è¯¢ä¸»ç”¨æˆ·è¡¨ï¼Œé»˜è®¤false
-     * @returns åŒ…å«æ‰€æœ‰ç”¨æˆ·æ•°æ®çš„æ•°ç»„
-     */
-    async getAllUsers(isHost = false) {
-        if (!this.rdbStore) {
-            throw new Error('Database not initialized. Call init() first.');
-        }
-        const tableName = isHost ? 'HostUser' : 'OtherUser';
-        const sql = `SELECT * FROM ${tableName}`;
-        try {
-            const resultSet = await this.rdbStore.querySql(sql);
-            const users = [];
-            while (resultSet.goToNextRow()) {
-                users.push({
-                    id: resultSet.getLong(resultSet.getColumnIndex('id')),
-                    phone: resultSet.getString(resultSet.getColumnIndex('phone')),
-                    pwd: resultSet.getString(resultSet.getColumnIndex('pwd')),
-                    cookies: resultSet.getString(resultSet.getColumnIndex('cookies')),
-                    uid: resultSet.getLong(resultSet.getColumnIndex('uid'))
-                });
-            }
-            resultSet.close();
-            return users;
-        }
-        catch (error) {
-            const err = new Error(`Failed to fetch users from ${tableName}: ${error.message}`);
-            hilog.error(0x0000, 'DB', err.message);
-            throw err;
-        }
-    }
-    /**
-     * æ›´æ–°å•ä¸ªç”¨æˆ·æ•°æ®
-     * @param id ç”¨æˆ·ID
-     * @param userData è¦æ›´æ–°çš„ç”¨æˆ·æ•°æ®
-     * @param isHost æ˜¯å¦æ›´æ–°ä¸»ç”¨æˆ·è¡¨ï¼Œé»˜è®¤false
-     * @returns æ›´æ–°ç»“æœçŠ¶æ€ç ï¼š1-æˆåŠŸï¼Œ-1-ç”¨æˆ·ä¸å­˜åœ¨ï¼Œ-2-æ‰‹æœºå·å·²å­˜åœ¨ï¼Œ0-å¤±è´¥
-     */
-    async updateUser(id, userData, isHost = false) {
-        if (!this.rdbStore) {
-            throw new Error('Database not initialized. Call init() first.');
-        }
-        // å‚æ•°éªŒè¯
-        if (!Number.isInteger(id) || id <= 0) {
-            throw new Error('æ— æ•ˆçš„ç”¨æˆ·ID');
-        }
-        // æ£€æŸ¥æ˜¯å¦æœ‰è¦æ›´æ–°çš„å­—æ®µ
-        const hasUpdateField = userData.phone !== undefined ||
-            userData.pwd !== undefined ||
-            userData.cookies !== undefined;
-        if (!hasUpdateField) {
-            throw new Error('è‡³å°‘éœ€è¦æä¾›ä¸€ä¸ªè¦æ›´æ–°çš„å­—æ®µ');
-        }
-        try {
-            this.rdbStore.beginTransaction();
-            try {
-                const tableName = isHost ? 'HostUser' : 'OtherUser';
-                // æ£€æŸ¥ç”¨æˆ·æ˜¯å¦å­˜åœ¨
-                const userExists = await this.userExists(isHost, id);
-                if (!userExists) {
-                    this.rdbStore.rollBack();
-                    return -1; // ç”¨æˆ·ä¸å­˜åœ¨
-                }
-                // å¦‚æœè¦æ›´æ–°æ‰‹æœºå·ï¼Œæ£€æŸ¥å”¯ä¸€æ€§
-                if (userData.phone !== undefined) {
-                    const phoneExists = await this.checkPhoneExists(userData.phone);
-                    if (phoneExists) {
-                        this.rdbStore.rollBack();
-                        return -2; // æ‰‹æœºå·å·²å­˜åœ¨
-                    }
-                }
-                // æ„å»ºæ›´æ–°è¯­å¥
-                const updateParts = [];
-                const params = [];
-                if (userData.phone !== undefined) {
-                    updateParts.push('phone = ?');
-                    params.push(userData.phone);
-                }
-                if (userData.pwd !== undefined) {
-                    updateParts.push('pwd = ?');
-                    params.push(userData.pwd);
-                }
-                if (userData.cookies !== undefined) {
-                    updateParts.push('cookies = ?');
-                    params.push(userData.cookies);
-                }
-                params.push(id);
-                const updateSql = `UPDATE ${tableName} SET ${updateParts.join(', ')} WHERE id = ?`;
-                // æ‰§è¡Œæ›´æ–°
-                await this.rdbStore.executeSql(updateSql, params);
-                this.rdbStore.commit();
-                return 1; // æ›´æ–°æˆåŠŸ
-            }
-            catch (error) {
-                this.rdbStore.rollBack();
-                throw new Error(error);
-            }
-        }
-        catch (err) {
-            hilog.error(0x0000, 'DB', `Failed to update user: ${err.message}`);
-            return 0; // æ›´æ–°å¤±è´¥
-        }
-    }
-    /**
-     * æ ¹æ®ä½ç½®è·å–ç¬¬å‡ æ¡ç”¨æˆ·æ•°æ®ï¼ˆä»1å¼€å§‹è®¡æ•°ï¼‰- ä½¿ç”¨RdbPredicates
-     * @param position ä½ç½®åºå·ï¼Œä»1å¼€å§‹
-     * @param isHost æ˜¯å¦æŸ¥è¯¢ä¸»ç”¨æˆ·è¡¨ï¼Œé»˜è®¤false
-     * @param orderBy æ’åºå­—æ®µï¼Œé»˜è®¤æŒ‰idæ’åº
-     * @param ascending æ˜¯å¦å‡åºæ’åˆ—ï¼Œé»˜è®¤true
-     * @returns ç”¨æˆ·æ•°æ®æˆ–nullï¼ˆå¦‚æœä½ç½®è¶…å‡ºèŒƒå›´ï¼‰
-     */
-    async getUserByPosition(position, isHost = false, orderBy = 'id', ascending = true) {
-        if (!this.rdbStore) {
-            throw new Error('Database not initialized. Call init() first.');
-        }
-        // å‚æ•°éªŒè¯
-        if (!Number.isInteger(position) || position <= 0) {
-            throw new Error('ä½ç½®åºå·å¿…é¡»æ˜¯å¤§äº0çš„æ•´æ•°');
-        }
-        try {
-            const tableName = isHost ? 'HostUser' : 'OtherUser';
-            // ä½¿ç”¨RdbPredicatesè¿›è¡ŒæŸ¥è¯¢
-            let predicates = new relationalStore.RdbPredicates(tableName);
-            // è®¾ç½®æ’åº
-            if (ascending) {
-                predicates.orderByAsc(orderBy);
-            }
-            else {
-                predicates.orderByDesc(orderBy);
-            }
-            // è®¾ç½®åç§»å’Œé™åˆ¶ï¼šè·å–ç¬¬positionæ¡è®°å½•
-            // offsetAsçš„å‚æ•°æ˜¯ä»0å¼€å§‹çš„ï¼Œæ‰€ä»¥ç¬¬næ¡è®°å½•çš„offsetæ˜¯n-1
-            predicates.limitAs(1).offsetAs(position - 1);
-            const resultSet = await this.rdbStore.query(predicates);
-            if (resultSet.rowCount > 0) {
-                resultSet.goToFirstRow();
-                const userData = {
-                    id: resultSet.getLong(resultSet.getColumnIndex('id')),
-                    uid: resultSet.getLong(resultSet.getColumnIndex('uid')),
-                    phone: resultSet.getString(resultSet.getColumnIndex('phone')),
-                    pwd: resultSet.getString(resultSet.getColumnIndex('pwd')),
-                    cookies: resultSet.getString(resultSet.getColumnIndex('cookies'))
-                };
-                resultSet.close();
-                return userData;
-            }
-            resultSet.close();
-            return null; // ä½ç½®è¶…å‡ºèŒƒå›´
-        }
-        catch (error) {
-            hilog.error(0x0000, 'DB', `Failed to get user by position ${position}: ${error.message}`);
-            throw Error(error);
-        }
-    }
-    /**
-     * æŒ‰ç­¾åˆ°ç”¨æˆ· ID å–ç”¨æˆ·ï¼ˆ0 = ä¸»ç”¨æˆ·/HostUser ç¬¬ 1 æ¡ï¼ŒN = OtherUser ç¬¬ N æ¡ï¼‰
-     *
-     * @param userId ç­¾åˆ°ç”¨æˆ· IDï¼ˆSignerPage å‹¾é€‰åˆ—è¡¨ä¸­çš„ IDï¼‰
-     * @returns ç”¨æˆ·æ•°æ®æˆ–null
-     */
-    async getUserById(userId) {
-        if (userId === 0) {
-            return await this.getUserByPosition(1, true);
-        }
-        return await this.getUserByPosition(userId, false);
-    }
-    /**
-     * è·å–æŒ‡å®šè¡¨çš„è®°å½•æ•°é‡
-     *
-     * @param tableName è¦æŸ¥è¯¢çš„è¡¨åï¼ˆå¿…é¡»æ˜¯å…è®¸çš„è¡¨ï¼‰
-     * @returns {Promise<number>} è¡¨ä¸­çš„è®°å½•æ•°é‡
-     * @throws {Error} å¦‚æœæ•°æ®åº“æœªåˆå§‹åŒ–æˆ–è¡¨åæ— æ•ˆ
-     */
-    async getTableCount(tableName) {
-        // éªŒè¯è¡¨ååˆæ³•æ€§ï¼Œé˜²æ­¢SQLæ³¨å…¥
-        const allowedTables = ['HostUser', 'OtherUser', 'SignRecord'];
-        if (!allowedTables.includes(tableName)) {
-            throw new Error(`æ— æ•ˆçš„è¡¨å: ${tableName}. å…è®¸çš„è¡¨: ${allowedTables.join(', ')}`);
-        }
-        if (!this.rdbStore) {
-            throw new Error('æ•°æ®åº“æœªåˆå§‹åŒ–ã€‚è¯·å…ˆè°ƒç”¨init()æ–¹æ³•ã€‚');
-        }
-        try {
-            // ä½¿ç”¨COUNT(*)è·å–è¡¨è®°å½•æ•°
-            const sql = `SELECT COUNT(*) AS count FROM ${tableName}`;
-            const resultSet = await this.rdbStore.querySql(sql);
-            try {
-                if (resultSet.rowCount > 0) {
-                    resultSet.goToFirstRow();
-                    const columnIndex = resultSet.getColumnIndex('count');
-                    return resultSet.getLong(columnIndex);
-                }
-                return 0;
-            }
-            finally {
-                // ç¡®ä¿ç»“æœé›†è¢«æ­£ç¡®å…³é—­
-                resultSet.close();
-            }
-        }
-        catch (err) {
-            const error = err;
-            console.error(`è·å–è¡¨ ${tableName} è®°å½•æ•°å¤±è´¥. é”™è¯¯ç : ${error.code}, æ¶ˆæ¯: ${error.message}`);
-            throw new Error(`æ— æ³•è·å–è¡¨è®°å½•æ•°: ${error.message}`);
-        }
-    }
-    getRdbStore() {
-        if (!this.rdbStore) {
-            throw new Error('Database not initialized. Call init() first.');
-        }
-        return this.rdbStore;
-    }
-    /**
-     * åˆ é™¤æŒ‡å®šç”¨æˆ·
-     * @param id ç”¨æˆ·ID
-     * @param isHost æ˜¯å¦åˆ é™¤ä¸»ç”¨æˆ·è¡¨ï¼Œé»˜è®¤false
-     * @returns åˆ é™¤ç»“æœçŠ¶æ€ç ï¼š1-æˆåŠŸï¼Œ-1-ç”¨æˆ·ä¸å­˜åœ¨ï¼Œ0-å¤±è´¥
-     */
-    async deleteUser(id, isHost = false) {
-        if (!this.rdbStore) {
-            throw new Error('Database not initialized. Call init() first.');
-        }
-        // å‚æ•°éªŒè¯
-        if (!Number.isInteger(id) || id <= 0) {
-            throw new Error('æ— æ•ˆçš„ç”¨æˆ·ID');
-        }
-        try {
-            this.rdbStore.beginTransaction();
-            try {
-                const tableName = isHost ? 'HostUser' : 'OtherUser';
-                // æ£€æŸ¥ç”¨æˆ·æ˜¯å¦å­˜åœ¨
-                const userExists = await this.userExists(isHost, id);
-                if (!userExists) {
-                    this.rdbStore.rollBack();
-                    return -1; // ç”¨æˆ·ä¸å­˜åœ¨
-                }
-                // ä½¿ç”¨RdbPredicatesè¿›è¡Œåˆ é™¤
-                let predicates = new relationalStore.RdbPredicates(tableName);
-                predicates.equalTo('id', id);
-                // æ‰§è¡Œåˆ é™¤æ“ä½œ
-                const deletedRows = await this.rdbStore.delete(predicates);
-                if (deletedRows > 0) {
-                    this.rdbStore.commit();
-                    hilog.info(0x0000, 'DB', `Successfully deleted ${isHost ? 'host' : 'other'} user ID: ${id}`);
-                    return 1; // åˆ é™¤æˆåŠŸ
-                }
-                else {
-                    this.rdbStore.rollBack();
-                    return -1; // æ²¡æœ‰åˆ é™¤ä»»ä½•è®°å½•
-                }
-            }
-            catch (error) {
-                this.rdbStore.rollBack();
-                throw Error(error);
-            }
-        }
-        catch (err) {
-            hilog.error(0x0000, 'DB', `Failed to delete ${isHost ? 'host' : 'other'} user ID ${id}: ${err.message}`);
-            return 0; // åˆ é™¤å¤±è´¥
-        }
-    }
-    /**
-     * æ’å…¥æ”¶è—ä½ç½®
-     * @param locationData ä½ç½®æ•°æ®ï¼ˆnote å¤‡æ³¨å¯ä¸ºç©ºå­—ç¬¦ä¸²ï¼‰
-     * @returns æ’å…¥ç»“æœçŠ¶æ€ç ï¼š1-æˆåŠŸï¼Œ0-å¤±è´¥
-     */
-    async insertSavedLocation(locationData) {
-        if (!this.rdbStore) {
-            throw new Error('Database not initialized. Call init() first.');
-        }
-        if (!locationData.latitude || !locationData.longitude) {
-            throw new Error('ç»çº¬åº¦ä¸èƒ½ä¸ºç©º');
-        }
-        try {
-            this.rdbStore.beginTransaction();
-            try {
-                await this.rdbStore.executeSql('INSERT INTO SavedLocation (note, latitude, longitude, address) VALUES (?, ?, ?, ?)', [locationData.note, locationData.latitude, locationData.longitude, locationData.address]);
-                this.rdbStore.commit();
-                hilog.info(0x0000, 'DB', `Successfully inserted saved location: ${locationData.note}`);
-                return 1; // æ’å…¥æˆåŠŸ
-            }
-            catch (error) {
-                this.rdbStore.rollBack();
-                throw Error(error);
-            }
-        }
-        catch (err) {
-            hilog.error(0x0000, 'DB', `Failed to insert saved location: ${err.message}`);
-            return 0; // æ’å…¥å¤±è´¥
-        }
-    }
-    /**
-     * è·å–æ‰€æœ‰æ”¶è—ä½ç½®ï¼ˆæŒ‰ id å€’åºï¼Œæœ€æ–°æ·»åŠ çš„åœ¨å‰ï¼‰
-     * @returns æ”¶è—ä½ç½®æ•°ç»„
-     */
-    async getAllSavedLocations() {
-        if (!this.rdbStore) {
-            throw new Error('Database not initialized. Call init() first.');
-        }
-        const sql = 'SELECT * FROM SavedLocation ORDER BY id DESC';
-        try {
-            const resultSet = await this.rdbStore.querySql(sql);
-            const locations = [];
-            while (resultSet.goToNextRow()) {
-                locations.push({
-                    id: resultSet.getLong(resultSet.getColumnIndex('id')),
-                    note: resultSet.getString(resultSet.getColumnIndex('note')),
-                    latitude: resultSet.getString(resultSet.getColumnIndex('latitude')),
-                    longitude: resultSet.getString(resultSet.getColumnIndex('longitude')),
-                    address: resultSet.getString(resultSet.getColumnIndex('address'))
-                });
-            }
-            resultSet.close();
-            return locations;
-        }
-        catch (error) {
-            const err = new Error(`Failed to fetch saved locations: ${error.message}`);
-            hilog.error(0x0000, 'DB', err.message);
-            throw err;
-        }
-    }
-    /**
-     * æ›´æ–°å•ä¸ªæ”¶è—ä½ç½®
-     * @param id ä½ç½®ID
-     * @param locationData è¦æ›´æ–°çš„ä½ç½®æ•°æ®ï¼ˆè‡³å°‘æä¾›ä¸€ä¸ªå­—æ®µï¼‰
-     * @returns æ›´æ–°ç»“æœçŠ¶æ€ç ï¼š1-æˆåŠŸï¼Œ-1-ä½ç½®ä¸å­˜åœ¨ï¼Œ0-å¤±è´¥
-     */
-    async updateSavedLocation(id, locationData) {
-        if (!this.rdbStore) {
-            throw new Error('Database not initialized. Call init() first.');
-        }
-        if (!Number.isInteger(id) || id <= 0) {
-            throw new Error('æ— æ•ˆçš„ä½ç½®ID');
-        }
-        const updateParts = [];
-        const params = [];
-        if (locationData.note !== undefined) {
-            updateParts.push('note = ?');
-            params.push(locationData.note);
-        }
-        if (locationData.latitude !== undefined) {
-            updateParts.push('latitude = ?');
-            params.push(locationData.latitude);
-        }
-        if (locationData.longitude !== undefined) {
-            updateParts.push('longitude = ?');
-            params.push(locationData.longitude);
-        }
-        if (locationData.address !== undefined) {
-            updateParts.push('address = ?');
-            params.push(locationData.address);
-        }
-        if (updateParts.length === 0) {
-            throw new Error('è‡³å°‘éœ€è¦æä¾›ä¸€ä¸ªè¦æ›´æ–°çš„å­—æ®µ');
-        }
-        try {
-            this.rdbStore.beginTransaction();
-            try {
-                const exists = await this.savedLocationExists(id);
-                if (!exists) {
-                    this.rdbStore.rollBack();
-                    return -1; // ä½ç½®ä¸å­˜åœ¨
-                }
-                params.push(id);
-                const updateSql = `UPDATE SavedLocation SET ${updateParts.join(', ')} WHERE id = ?`;
-                await this.rdbStore.executeSql(updateSql, params);
-                this.rdbStore.commit();
-                return 1; // æ›´æ–°æˆåŠŸ
-            }
-            catch (error) {
-                this.rdbStore.rollBack();
-                throw new Error(error);
-            }
-        }
-        catch (err) {
-            hilog.error(0x0000, 'DB', `Failed to update saved location: ${err.message}`);
-            return 0; // æ›´æ–°å¤±è´¥
-        }
-    }
-    /**
-     * åˆ é™¤æŒ‡å®šæ”¶è—ä½ç½®
-     * @param id ä½ç½®ID
-     * @returns åˆ é™¤ç»“æœçŠ¶æ€ç ï¼š1-æˆåŠŸï¼Œ-1-ä½ç½®ä¸å­˜åœ¨ï¼Œ0-å¤±è´¥
-     */
-    async deleteSavedLocation(id) {
-        if (!this.rdbStore) {
-            throw new Error('Database not initialized. Call init() first.');
-        }
-        if (!Number.isInteger(id) || id <= 0) {
-            throw new Error('æ— æ•ˆçš„ä½ç½®ID');
-        }
-        try {
-            this.rdbStore.beginTransaction();
-            try {
-                const exists = await this.savedLocationExists(id);
-                if (!exists) {
-                    this.rdbStore.rollBack();
-                    return -1; // ä½ç½®ä¸å­˜åœ¨
-                }
-                const predicates = new relationalStore.RdbPredicates('SavedLocation');
-                predicates.equalTo('id', id);
-                const deletedRows = await this.rdbStore.delete(predicates);
-                if (deletedRows > 0) {
-                    this.rdbStore.commit();
-                    hilog.info(0x0000, 'DB', `Successfully deleted saved location ID: ${id}`);
-                    return 1; // åˆ é™¤æˆåŠŸ
-                }
-                else {
-                    this.rdbStore.rollBack();
-                    return -1; // æ²¡æœ‰åˆ é™¤ä»»ä½•è®°å½•
-                }
-            }
-            catch (error) {
-                this.rdbStore.rollBack();
-                throw Error(error);
-            }
-        }
-        catch (err) {
-            hilog.error(0x0000, 'DB', `Failed to delete saved location ID ${id}: ${err.message}`);
-            return 0; // åˆ é™¤å¤±è´¥
-        }
-    }
-    /**
-     * æ¸…ç©ºHostUserè¡¨ä¸­çš„æ‰€æœ‰æ•°æ®
-     *
-     * @returns {Promise<number>} åˆ é™¤çš„è®°å½•æ•°é‡
-     * @throws {Error} å¦‚æœæ•°æ®åº“æœªåˆå§‹åŒ–æˆ–æ“ä½œå¤±è´¥
-     */
-    async clearHostUserTable() {
-        if (!this.rdbStore) {
-            throw new Error('æ•°æ®åº“æœªåˆå§‹åŒ–ã€‚è¯·å…ˆè°ƒç”¨init()æ–¹æ³•ã€‚');
-        }
-        try {
-            // å¼€å§‹äº‹åŠ¡ç¡®ä¿æ“ä½œåŸå­æ€§
-            this.rdbStore.beginTransaction();
-            try {
-                // 1. å…ˆè·å–å½“å‰è®°å½•æ•°ï¼ˆç”¨äºè¿”å›ç»“æœï¼‰
-                const countResult = await this.rdbStore.querySql('SELECT COUNT(*) AS count FROM HostUser');
-                let rowCount = 0;
-                try {
-                    if (countResult.rowCount > 0) {
-                        countResult.goToFirstRow();
-                        rowCount = countResult.getLong(countResult.getColumnIndex('count'));
-                    }
-                }
-                finally {
-                    countResult.close();
-                }
-                // 2. æ‰§è¡Œåˆ é™¤æ“ä½œ
-                await this.rdbStore.executeSql('DELETE FROM HostUser');
-                // 3. é‡ç½®è‡ªå¢IDï¼ˆSQLiteä¸­éœ€è¦é¢å¤–æ“ä½œï¼‰
-                await this.rdbStore.executeSql('DELETE FROM sqlite_sequence WHERE name = "HostUser"');
-                // 4. æäº¤äº‹åŠ¡
-                this.rdbStore.commit();
-                console.log(`æˆåŠŸæ¸…ç©ºHostUserè¡¨ï¼Œåˆ é™¤${rowCount}æ¡è®°å½•`);
-                return rowCount;
-            }
-            catch (error) {
-                // 5. å‘ç”Ÿé”™è¯¯æ—¶å›æ»šäº‹åŠ¡
-                this.rdbStore.rollBack();
-                throw this.normalizeError(error, 'æ¸…ç©ºHostUserè¡¨å¤±è´¥');
-            }
-        }
-        catch (err) {
-            throw this.normalizeError(err, 'æ¸…ç©ºHostUserè¡¨æ“ä½œå¼‚å¸¸');
-        }
-    }
-    /**
-     * å¯¼å‡ºæ•°æ®åº“ä¸ºJSONå­—ç¬¦ä¸²
-     * @returns JSONæ ¼å¼çš„æ•°æ®åº“å†…å®¹
-     */
-    async exportToJSON() {
-        if (!this.rdbStore) {
-            throw new Error('Database not initialized. Call init() first.');
-        }
-        const hostUsers = await this.getAllUsers(true);
-        const otherUsers = await this.getAllUsers(false);
-        const exportData = {
-            version: 1,
-            exportedAt: new Date().toISOString(),
-            HostUser: hostUsers.map((u) => ({
-                phone: u.phone,
-                pwd: u.pwd,
-                cookies: u.cookies,
-                uid: u.uid
-            })),
-            OtherUser: otherUsers.map((u) => ({
-                phone: u.phone,
-                pwd: u.pwd,
-                cookies: u.cookies,
-                uid: u.uid
-            }))
-        };
-        return JSON.stringify(exportData, null, 2);
-    }
-    /**
-     * ä»JSONå­—ç¬¦ä¸²å¯¼å…¥æ•°æ®åº“
-     * @param json JSONæ ¼å¼çš„æ•°æ®åº“å†…å®¹
-     * @returns å¯¼å…¥ç»“æœ
-     */
-    async importFromJSON(json) {
-        if (!this.rdbStore) {
-            throw new Error('Database not initialized. Call init() first.');
-        }
-        let data;
-        try {
-            data = JSON.parse(json);
-        }
-        catch {
-            const result = { success: false, message: 'æ–‡ä»¶æ ¼å¼é”™è¯¯ï¼šæ— æ³•è§£æJSON' };
-            return result;
-        }
-        if (typeof data.version !== 'number') {
-            const result = { success: false, message: 'æ–‡ä»¶æ ¼å¼é”™è¯¯ï¼šç¼ºå°‘ç‰ˆæœ¬å·' };
-            return result;
-        }
-        if (!Array.isArray(data.HostUser) || !Array.isArray(data.OtherUser)) {
-            const result = { success: false, message: 'æ–‡ä»¶æ ¼å¼é”™è¯¯ï¼šç¼ºå°‘ç”¨æˆ·æ•°æ®' };
-            return result;
-        }
-        const validateUserEntry = (entry, tableName) => {
-            if (typeof entry.phone !== 'string' || entry.phone.trim().length === 0) {
-                const result = { success: false, message: `${tableName} ä¸­å­˜åœ¨ç¼ºå°‘æ‰‹æœºå·çš„è®°å½•` };
-                return result;
-            }
-            if (typeof entry.pwd !== 'string' || entry.pwd.trim().length === 0) {
-                const result = { success: false, message: `${tableName} ä¸­å­˜åœ¨ç¼ºå°‘å¯†ç çš„è®°å½•` };
-                return result;
-            }
-            if (typeof entry.cookies !== 'string' || entry.cookies.trim().length === 0) {
-                const result = { success: false, message: `${tableName} ä¸­å­˜åœ¨ç¼ºå°‘cookiesçš„è®°å½•` };
-                return result;
-            }
-            if (typeof entry.uid !== 'number' || entry.uid <= 0 || !Number.isInteger(entry.uid)) {
-                const result = { success: false, message: `${tableName} ä¸­å­˜åœ¨æ— æ•ˆuidçš„è®°å½•` };
-                return result;
-            }
-            return null;
-        };
-        for (const entry of data.HostUser) {
-            const err = validateUserEntry(entry, 'HostUser');
-            if (err) {
-                return err;
-            }
-        }
-        for (const entry of data.OtherUser) {
-            const err = validateUserEntry(entry, 'OtherUser');
-            if (err) {
-                return err;
-            }
-        }
-        try {
-            this.rdbStore.beginTransaction();
-            await this.rdbStore.executeSql('DELETE FROM OtherUser');
-            await this.rdbStore.executeSql('DELETE FROM HostUser');
-            await this.rdbStore.executeSql('DELETE FROM sqlite_sequence WHERE name = "HostUser"');
-            await this.rdbStore.executeSql('DELETE FROM sqlite_sequence WHERE name = "OtherUser"');
-            for (const entry of data.HostUser) {
-                await this.rdbStore.executeSql('INSERT INTO HostUser (phone, pwd, cookies, uid) VALUES (?, ?, ?, ?)', [entry.phone, entry.pwd, entry.cookies, entry.uid]);
-            }
-            for (const entry of data.OtherUser) {
-                await this.rdbStore.executeSql('INSERT INTO OtherUser (phone, pwd, cookies, uid) VALUES (?, ?, ?, ?)', [entry.phone, entry.pwd, entry.cookies, entry.uid]);
-            }
-            this.rdbStore.commit();
-            const result = { success: true, message: `å¯¼å…¥æˆåŠŸï¼š${data.HostUser.length} ä¸ªä¸»ç”¨æˆ·ï¼Œ${data.OtherUser.length} ä¸ªå…¶ä»–ç”¨æˆ·` };
-            return result;
-        }
-        catch (err) {
-            this.rdbStore.rollBack();
-            const result = { success: false, message: `å¯¼å…¥å¤±è´¥ï¼š${err.message}` };
-            return result;
-        }
-    }
-    // ---------------- ç­¾åˆ°ç»Ÿè®¡ï¼ˆSignRecord è¡¨ï¼‰ ----------------
-    /**
-     * æ’å…¥ä¸€æ¡ç­¾åˆ°/ç­¾é€€ç»Ÿè®¡è®°å½•
-     * @returns æ’å…¥ç»“æœçŠ¶æ€ç ï¼š1-æˆåŠŸï¼Œ0-å¤±è´¥
-     */
-    async insertSignRecord(record) {
-        if (!this.rdbStore) {
-            throw new Error('Database not initialized. Call init() first.');
-        }
-        if (!record.uname || !record.kind || !record.action) {
-            throw new Error('ç”¨æˆ·åã€æ“ä½œç±»å‹ä¸ç»“æœç±»å‹ä¸èƒ½ä¸ºç©º');
-        }
-        try {
-            await this.rdbStore.executeSql('INSERT INTO SignRecord (uname, activityId, activityName, signType, action, kind, message, createTime) ' +
-                'VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [record.uname, record.activityId, record.activityName, record.signType,
-                record.action, record.kind, record.message, Date.now()]);
-            return 1;
-        }
-        catch (err) {
-            hilog.error(0x0000, 'DB', `Failed to insert sign record: ${err.message}`);
-            return 0;
-        }
-    }
-    /**
-     * è·å–æœ€è¿‘çš„ç­¾åˆ°ç»Ÿè®¡è®°å½•ï¼ˆæŒ‰è½åº“æ—¶é—´å€’åºï¼‰
-     * @param limit è¿”å›æ¡æ•°ä¸Šé™ï¼ˆæ›´æ—©çš„è®°å½•ä¸è¿”å›ï¼Œä½†ä»å‚ä¸æ±‡æ€»ç»Ÿè®¡ï¼‰
-     */
-    async getSignRecords(limit) {
-        if (!this.rdbStore) {
-            throw new Error('Database not initialized. Call init() first.');
-        }
-        try {
-            const resultSet = await this.rdbStore.querySql('SELECT * FROM SignRecord ORDER BY id DESC LIMIT ?', [limit]);
-            const records = [];
-            while (resultSet.goToNextRow()) {
-                records.push({
-                    id: resultSet.getLong(resultSet.getColumnIndex('id')),
-                    uname: resultSet.getString(resultSet.getColumnIndex('uname')),
-                    activityId: resultSet.getString(resultSet.getColumnIndex('activityId')),
-                    activityName: resultSet.getString(resultSet.getColumnIndex('activityName')),
-                    signType: resultSet.getString(resultSet.getColumnIndex('signType')),
-                    action: resultSet.getString(resultSet.getColumnIndex('action')),
-                    kind: resultSet.getString(resultSet.getColumnIndex('kind')),
-                    message: resultSet.getString(resultSet.getColumnIndex('message')),
-                    createTime: resultSet.getLong(resultSet.getColumnIndex('createTime'))
-                });
-            }
-            resultSet.close();
-            return records;
-        }
-        catch (error) {
-            const err = new Error(`Failed to fetch sign records: ${error.message}`);
-            hilog.error(0x0000, 'DB', err.message);
-            throw err;
-        }
-    }
-    /**
-     * è·å–å…¨éƒ¨ç­¾åˆ°ç»Ÿè®¡è®°å½•ï¼ˆä¸é™æ¡æ•°ï¼ŒæŒ‰è½åº“æ—¶é—´å‡åºï¼›äº‘ç«¯è¡¥å½•åŒæ­¥ç”¨ï¼‰
-     */
-    async getAllSignRecords() {
-        if (!this.rdbStore) {
-            throw new Error('Database not initialized. Call init() first.');
-        }
-        try {
-            const resultSet = await this.rdbStore.querySql('SELECT * FROM SignRecord ORDER BY createTime ASC, id ASC');
-            const records = [];
-            while (resultSet.goToNextRow()) {
-                records.push({
-                    id: resultSet.getLong(resultSet.getColumnIndex('id')),
-                    uname: resultSet.getString(resultSet.getColumnIndex('uname')),
-                    activityId: resultSet.getString(resultSet.getColumnIndex('activityId')),
-                    activityName: resultSet.getString(resultSet.getColumnIndex('activityName')),
-                    signType: resultSet.getString(resultSet.getColumnIndex('signType')),
-                    action: resultSet.getString(resultSet.getColumnIndex('action')),
-                    kind: resultSet.getString(resultSet.getColumnIndex('kind')),
-                    message: resultSet.getString(resultSet.getColumnIndex('message')),
-                    createTime: resultSet.getLong(resultSet.getColumnIndex('createTime'))
-                });
-            }
-            resultSet.close();
-            return records;
-        }
-        catch (error) {
-            const err = new Error(`Failed to fetch all sign records: ${error.message}`);
-            hilog.error(0x0000, 'DB', err.message);
-            throw err;
-        }
-    }
-    /**
-     * ç­¾åˆ°ç»Ÿè®¡æ±‡æ€»ï¼šç­¾åˆ°æ¬¡æ•°/æˆåŠŸ/å·²ç­¾åˆ°/å¤±è´¥ã€ç­¾é€€æˆåŠŸæ¬¡æ•°ä¸æŒ‰ç±»å‹åˆ†å¸ƒ
-     */
-    async getSignStats() {
-        if (!this.rdbStore) {
-            throw new Error('Database not initialized. Call init() first.');
-        }
-        const stats = {
-            signTotal: 0, signSuccess: 0, signAlready: 0, signFailed: 0,
-            signOutSuccess: 0, typeCounts: []
-        };
-        try {
-            const summarySet = await this.rdbStore.querySql(`SELECT
-          IFNULL(SUM(CASE WHEN action = 'sign' THEN 1 ELSE 0 END), 0) AS signTotal,
-          IFNULL(SUM(CASE WHEN action = 'sign' AND kind = 'success' THEN 1 ELSE 0 END), 0) AS signSuccess,
-          IFNULL(SUM(CASE WHEN action = 'sign' AND kind = 'already' THEN 1 ELSE 0 END), 0) AS signAlready,
-          IFNULL(SUM(CASE WHEN action = 'sign' AND kind NOT IN ('success', 'already') THEN 1 ELSE 0 END), 0) AS signFailed,
-          IFNULL(SUM(CASE WHEN action = 'signout' AND kind = 'success' THEN 1 ELSE 0 END), 0) AS signOutSuccess
-        FROM SignRecord`);
-            try {
-                if (summarySet.goToFirstRow()) {
-                    stats.signTotal = summarySet.getLong(summarySet.getColumnIndex('signTotal'));
-                    stats.signSuccess = summarySet.getLong(summarySet.getColumnIndex('signSuccess'));
-                    stats.signAlready = summarySet.getLong(summarySet.getColumnIndex('signAlready'));
-                    stats.signFailed = summarySet.getLong(summarySet.getColumnIndex('signFailed'));
-                    stats.signOutSuccess = summarySet.getLong(summarySet.getColumnIndex('signOutSuccess'));
-                }
-            }
-            finally {
-                summarySet.close();
-            }
-            const typeSet = await this.rdbStore.querySql("SELECT signType, COUNT(*) AS count FROM SignRecord WHERE action = 'sign' " +
-                'GROUP BY signType ORDER BY count DESC');
-            try {
-                while (typeSet.goToNextRow()) {
-                    stats.typeCounts.push({
-                        signType: typeSet.getString(typeSet.getColumnIndex('signType')),
-                        count: typeSet.getLong(typeSet.getColumnIndex('count'))
-                    });
-                }
-            }
-            finally {
-                typeSet.close();
-            }
-            return stats;
-        }
-        catch (error) {
-            const err = new Error(`Failed to fetch sign stats: ${error.message}`);
-            hilog.error(0x0000, 'DB', err.message);
-            throw err;
-        }
-    }
-    /**
-     * æ¸…ç©ºå…¨éƒ¨ç­¾åˆ°ç»Ÿè®¡è®°å½•
-     * @returns åˆ é™¤çš„è®°å½•æ•°é‡
-     */
-    async clearSignRecords() {
-        if (!this.rdbStore) {
-            throw new Error('æ•°æ®åº“æœªåˆå§‹åŒ–ã€‚è¯·å…ˆè°ƒç”¨init()æ–¹æ³•ã€‚');
-        }
-        try {
-            this.rdbStore.beginTransaction();
-            try {
-                const countBefore = await this.getTableCount('SignRecord');
-                await this.rdbStore.executeSql('DELETE FROM SignRecord');
-                await this.rdbStore.executeSql('DELETE FROM sqlite_sequence WHERE name = "SignRecord"');
-                this.rdbStore.commit();
-                hilog.info(0x0000, 'DB', `Cleared ${countBefore} sign records`);
-                return countBefore;
-            }
-            catch (error) {
-                this.rdbStore.rollBack();
-                throw this.normalizeError(error, 'æ¸…ç©ºç­¾åˆ°ç»Ÿè®¡è®°å½•å¤±è´¥');
-            }
-        }
-        catch (err) {
-            throw this.normalizeError(err, 'æ¸…ç©ºç­¾åˆ°ç»Ÿè®¡è®°å½•æ“ä½œå¼‚å¸¸');
-        }
-    }
-    async close() {
-        if (this.rdbStore) {
-            try {
-                await this.rdbStore.close();
-                this.rdbStore = null;
-            }
-            catch (err) {
-                const error = err;
-                console.error(`Failed to close database. Code: ${error.code}, Message: ${error.message}`);
-            }
-        }
-        DatabaseManager.instance = null;
-    }
-    //åˆ›å»ºè¡¨
-    async createTables() {
-        if (!this.rdbStore) {
-            return;
-        }
-        try {
-            await this.rdbStore.executeSql(`
-        CREATE TABLE IF NOT EXISTS HostUser (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          phone TEXT NOT NULL,
-          pwd TEXT NOT NULL,
-          cookies TEXT NOT NULL,
-          uid INTEGER NOT NULL
-        );
-      `);
-            await this.rdbStore.executeSql(`
-        CREATE TABLE IF NOT EXISTS OtherUser (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          phone TEXT NOT NULL,
-          pwd TEXT NOT NULL,
-          cookies TEXT NOT NULL,
-          uid INTEGER NOT NULL
-        );
-      `);
-            await this.rdbStore.executeSql(`
-        CREATE TABLE IF NOT EXISTS SavedLocation (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          note TEXT NOT NULL,
-          latitude TEXT NOT NULL,
-          longitude TEXT NOT NULL,
-          address TEXT NOT NULL DEFAULT ''
-        );
-      `);
-            await this.rdbStore.executeSql(`
-        CREATE TABLE IF NOT EXISTS SignRecord (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          uname TEXT NOT NULL,
-          activityId TEXT NOT NULL DEFAULT '',
-          activityName TEXT NOT NULL DEFAULT '',
-          signType TEXT NOT NULL DEFAULT '',
-          action TEXT NOT NULL DEFAULT 'sign',
-          kind TEXT NOT NULL,
-          message TEXT NOT NULL DEFAULT '',
-          createTime INTEGER NOT NULL
-        );
-      `);
-        }
-        catch (err) {
-            const error = err;
-            console.error(`Failed to create tables. Code: ${error.code}, Message: ${error.message}`);
-        }
-    }
-    normalizeError(err, message) {
-        return new Error(`${message} [åŸå› ]: ${err.message}`);
-    }
-    // è¾…åŠ©æ–¹æ³•ï¼šæ£€æŸ¥ç”¨æˆ·æ˜¯å¦å­˜åœ¨
-    async userExists(isHost, id) {
-        if (!this.rdbStore) {
-            return false;
-        }
-        const table = isHost ? 'HostUser' : 'OtherUser';
-        const sql = `SELECT 1 FROM ${table} WHERE id = ? LIMIT 1`;
-        const resultSet = await this.rdbStore.querySql(sql, [id]);
-        try {
-            return resultSet.rowCount > 0;
-        }
-        finally {
-            resultSet.close();
-        }
-    }
-    // è¾…åŠ©æ–¹æ³•ï¼šæ£€æŸ¥æ”¶è—ä½ç½®æ˜¯å¦å­˜åœ¨
-    async savedLocationExists(id) {
-        if (!this.rdbStore) {
-            return false;
-        }
-        const sql = 'SELECT 1 FROM SavedLocation WHERE id = ? LIMIT 1';
-        const resultSet = await this.rdbStore.querySql(sql, [id]);
-        try {
-            return resultSet.rowCount > 0;
-        }
-        finally {
-            resultSet.close();
-        }
-    }
-    /**
-     * æ£€æŸ¥æ‰‹æœºå·æ˜¯å¦å·²å­˜åœ¨ï¼ˆè·¨ä¸¤ä¸ªè¡¨æ£€æŸ¥ï¼‰
-     *
-     * @param phone è¦æ£€æŸ¥çš„æ‰‹æœºå·
-     * @returns {Promise<boolean>} å¦‚æœæ‰‹æœºå·å·²å­˜åœ¨åˆ™è¿”å›true
-     */
-    async checkPhoneExists(phone) {
-        if (!this.rdbStore) {
-            throw new Error('Database not initialized. Call init() first.');
-        }
-        try {
-            // ä½¿ç”¨UNIONæ£€æŸ¥ä¸¤ä¸ªè¡¨
-            const sql = `
-      SELECT 1 FROM HostUser WHERE phone = ?
-      UNION
-      SELECT 1 FROM OtherUser WHERE phone = ?
-      LIMIT 1
-    `;
-            const resultSet = await this.rdbStore.querySql(sql, [phone, phone]);
-            try {
-                return resultSet.rowCount > 0;
-            }
-            finally {
-                // ç¡®ä¿ç»“æœé›†è¢«å…³é—­
-                resultSet.close();
-            }
-        }
-        catch (err) {
-            const error = err;
-            console.error(`Failed to check phone existence. Code: ${error.code}, Message: ${error.message}`);
-            throw new Error(`æ’å…¥é”™è¯¯,${error}`);
-        }
-    }
-}
-DatabaseManager.instance = null;
-export { DatabaseManager };
-//# sourceMappingURL=DataBase.js.mapÂ’Ùh hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.data.relationalStore.d.tsÙY hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.hilog.d.tsÙUE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\DataBase.etsÔrB›ªmoduleName±isLocalDependency¯isNodeEntryFile§pkgPath±belongProjectPath§pkgNameªpkgVersion±dependencyPkgInfo¯hostModulesInfo°belongModulePath¬shouldEmitJs¥entryÃÂÙ5E:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entryÙ/E:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT¥entry¥1.0.0Ô  ’ÔrC’²hostDependencyName®hostModuleName±../utils/DataBase¥entryCª./DataBase¥entryÙ5E:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entryÃÃÚŸfimport relationalStore from '@ohos.data.relationalStore';
-import common from '@ohos.app.ability.common';
-import { BusinessError } from '@ohos.base';
-import { hilog } from '@kit.PerformanceAnalysisKit';
-
-interface UserData {
-  phone: string;
-  pwd: string;
-  cookies: string;
-  uid: number
-}
-
-export interface UserDataAndId {
-  id: number
-  phone: string;
-  pwd: string;
-  cookies: string;
-  uid: number
-}
-
-/**
- * å¯æ›´æ–°çš„ç”¨æˆ·æ•°æ®æ¥å£
- */
-interface UpdateUserData {
-  phone?: string;
-  pwd?: string;
-  cookies?: string;
-}
-
-/**
- * æ”¶è—çš„ä½ç½®ï¼ˆè¡Œè®°å½•ï¼Œå«è‡ªå¢ idï¼‰
- * latitude/longitude ä¸ºç­¾åˆ°æäº¤ç”¨çš„ BD-09 åæ ‡å­—ç¬¦ä¸²ï¼Œé€‰ç”¨æ—¶å¯ç›´æ¥èµ‹ç»™ç­¾åˆ°å‚æ•°
- */
-export interface SavedLocation {
-  id: number
-  note: string
-  latitude: string
-  longitude: string
-  address: string
-}
-
-interface SavedLocationData {
-  note: string
-  latitude: string
-  longitude: string
-  address: string
-}
-
-interface UpdateSavedLocation {
-  note?: string
-  latitude?: string
-  longitude?: string
-  address?: string
-}
-
-interface ExportUserEntry {
-  phone: string;
-  pwd: string;
-  cookies: string;
-  uid: number;
-}
-
-interface ExportData {
-  version: number;
-  exportedAt: string;
-  HostUser: ExportUserEntry[];
-  OtherUser: ExportUserEntry[];
-}
-
-interface ImportResult {
-  success: boolean;
-  message: string;
-}
-
-/**
- * å¾…å†™å…¥çš„ç­¾åˆ°ç»Ÿè®¡è®°å½•ï¼ˆSignRecord è¡¨ï¼‰
- * action: 'sign' = ç­¾åˆ°å°è¯• | 'signout' = ç­¾é€€å°è¯•
- * kind: å¯¹é½ parseSignResult çš„ç»“æœç±»å‹ï¼ˆsuccess/already/error/...ï¼‰
- */
-export interface SignRecordData {
-  uname: string
-  activityId: string
-  activityName: string
-  signType: string
-  action: string
-  kind: string
-  message: string
-}
-
-/** ç­¾åˆ°ç»Ÿè®¡è®°å½•ï¼ˆå«è‡ªå¢ id ä¸è½åº“æ—¶é—´æˆ³ï¼Œæ¯«ç§’ï¼‰ */
-export interface SignRecord {
-  id: number
-  uname: string
-  activityId: string
-  activityName: string
-  signType: string
-  action: string
-  kind: string
-  message: string
-  createTime: number
-}
-
-/** ç­¾åˆ°ç»Ÿè®¡æ±‡æ€»ï¼ˆsign* å­—æ®µä»…ç»Ÿè®¡ action='sign' çš„è®°å½•ï¼‰ */
-export interface SignStats {
-  signTotal: number
-  signSuccess: number
-  signAlready: number
-  signFailed: number
-  signOutSuccess: number
-  typeCounts: SignTypeCount[]
-}
-
-/** æŒ‰ç­¾åˆ°ç±»å‹ï¼ˆSignType å­—ç¬¦ä¸²å€¼ï¼‰çš„æ¬¡æ•°åˆ†å¸ƒ */
-export interface SignTypeCount {
-  signType: string
-  count: number
-}
-
-class DatabaseManager {
-  private static instance: DatabaseManager | null = null;
-  private rdbStore: relationalStore.RdbStore | null = null;
-
-  private constructor() {
-  }
-
-  public static getInstance(): DatabaseManager {
-    if (DatabaseManager.instance === null) {
-      DatabaseManager.instance = new DatabaseManager();
-    }
-    return DatabaseManager.instance;
-  }
-
-  public isInitialized(): boolean {
-    return this.rdbStore !== null;
-  }
-
-  async init(context: common.UIAbilityContext): Promise<void> {
-    if (this.rdbStore !== null) {
-      return;
-    }
-    const STORE_CONFIG: relationalStore.StoreConfig = {
-      name: 'data.db',
-      securityLevel: relationalStore.SecurityLevel.S1
-    };
-
-    try {
-      this.rdbStore = await relationalStore.getRdbStore(context, STORE_CONFIG);
-      await this.createTables();
-    } catch (err) {
-      const error = err as BusinessError;
-      console.error(`Failed to get RdbStore. Code: ${error.code}, Message: ${error.message}`);
-    }
-  }
-
-  /**
-   * æ£€æŸ¥HostUserè¡¨æ˜¯å¦ä¸ºç©º
-   *
-   * @returns {Promise<boolean>} å¦‚æœè¡¨ä¸ºç©ºåˆ™è¿”å›trueï¼Œå¦åˆ™è¿”å›false
-   * @throws {Error} å¦‚æœæ•°æ®åº“æœªåˆå§‹åŒ–
-   * @throws {BusinessError} å¦‚æœæŸ¥è¯¢è¿‡ç¨‹ä¸­å‘ç”Ÿé”™è¯¯
-   */
-  public async isHostUserTableEmpty(): Promise<boolean> {
-    if (!this.rdbStore) {
-      throw new Error('Database not initialized. Call init() first.');
-    }
-
-    try {
-      // ä½¿ç”¨é«˜æ•ˆæŸ¥è¯¢ï¼šåªéœ€æ£€æŸ¥æ˜¯å¦å­˜åœ¨è‡³å°‘ä¸€è¡Œæ•°æ®
-      const sql = 'SELECT 1 FROM HostUser LIMIT 1';
-      const resultSet = await this.rdbStore.querySql(sql);
-
-      try {
-        // rowCountä¸º0è¡¨ç¤ºæ²¡æœ‰æ•°æ®
-        return resultSet.rowCount === 0;
-      } finally {
-        // ç¡®ä¿æ— è®ºæŸ¥è¯¢ç»“æœå¦‚ä½•éƒ½å…³é—­ç»“æœé›†
-        resultSet.close();
-      }
-    } catch (error) {
-      const err = new Error(`Database init failed: ${error.message}`);
-      hilog.error(0x0000, 'DB_INIT', err.message);
-      throw err;
-    }
-  }
-
-  /**
-   * æ’å…¥ç”¨æˆ·æ•°æ®ï¼ˆç»Ÿä¸€å¤„ç†ä¸»ç”¨æˆ·å’Œå…¶ä»–ç”¨æˆ·ï¼‰
-   * @param userData ç”¨æˆ·æ•°æ®å¯¹è±¡
-   * @param isHost æ˜¯å¦æ’å…¥ä¸ºä¸»ç”¨æˆ·ï¼Œé»˜è®¤false
-   * @returns æ’å…¥ç»“æœçŠ¶æ€ç ï¼š1-æˆåŠŸï¼Œ-1-æ‰‹æœºå·å·²å­˜åœ¨ï¼Œ-2-ä¸»ç”¨æˆ·å·²å­˜åœ¨ï¼Œ0-å¤±è´¥
-   */
-  public async insertUser(userData: UserData, isHost: boolean = false): Promise<number> {
-    if (!this.rdbStore) {
-      throw new Error('Database not initialized. Call init() first.');
-    }
-
-    // è¾“å…¥å‚æ•°éªŒè¯
-    if (!userData.phone || !userData.pwd || !userData.cookies || !userData.uid) {
-      throw new Error('æ‰‹æœºå·ã€å¯†ç ã€cookieså’Œuidä¸èƒ½ä¸ºç©º');
-    }
-
-    if (userData.phone.trim().length === 0) {
-      throw new Error('æ‰‹æœºå·ä¸èƒ½ä¸ºç©ºå­—ç¬¦ä¸²');
-    }
-
-    try {
-      this.rdbStore.beginTransaction();
-
-      try {
-        // æ£€æŸ¥æ‰‹æœºå·æ˜¯å¦å·²å­˜åœ¨
-        const phoneExists = await this.checkPhoneExists(userData.phone);
-        if (phoneExists) {
-          this.rdbStore.rollBack();
-          return -1; // æ‰‹æœºå·å·²å­˜åœ¨
-        }
-
-        // å¦‚æœæ˜¯ä¸»ç”¨æˆ·ï¼Œæ£€æŸ¥æ˜¯å¦å·²æœ‰ä¸»ç”¨æˆ·
-        if (isHost) {
-          const isHostUserEmpty = await this.isHostUserTableEmpty();
-          if (!isHostUserEmpty) {
-            this.rdbStore.rollBack();
-            return -2; // ä¸»ç”¨æˆ·å·²å­˜åœ¨
-          }
-        }
-
-        // æ ¹æ®ç”¨æˆ·ç±»å‹é€‰æ‹©è¡¨å
-        const tableName = isHost ? 'HostUser' : 'OtherUser';
-
-        // è®°å½•æ’å…¥å‰çš„è®°å½•æ•°
-        const countBefore = await this.getTableCount(tableName);
-
-        // æ‰§è¡Œæ’å…¥æ“ä½œ
-        const insertSql = `INSERT INTO ${tableName} (phone, pwd, cookies, uid) VALUES (?, ?, ?, ?)`;
-        await this.rdbStore.executeSql(insertSql, [
-          userData.phone,
-          userData.pwd,
-          userData.cookies,
-          userData.uid
-        ]);
-
-        // æäº¤äº‹åŠ¡
-        this.rdbStore.commit();
-        // éªŒè¯æ’å…¥ç»“æœï¼šæ£€æŸ¥è®°å½•æ•°æ˜¯å¦å¢åŠ 
-        const countAfter = await this.getTableCount(tableName);
-        if (countAfter !== countBefore + 1) {
-          throw new Error('æ’å…¥æ“ä½œæœªæˆåŠŸï¼Œè®°å½•æ•°æœªå¢åŠ ');
-        }
-
-
-        hilog.info(0x0000, 'DB',
-          `Successfully inserted ${isHost ? 'host' : 'other'} user: ${userData.phone.substring(0, 3)}***`);
-        return 1; // æ’å…¥æˆåŠŸ
-
-      } catch (error) {
-        // å›æ»šäº‹åŠ¡
-        this.rdbStore.rollBack();
-        throw Error(error);
-      }
-    } catch (err) {
-      // å¤–å±‚é”™è¯¯å¤„ç†
-      hilog.error(0x0000, 'DB', `Failed to insert ${isHost ? 'host' : 'other'} user: ${err.message}`);
-      return 0; // æ’å…¥å¤±è´¥
-    }
-  }
-
-  /**
-   * è·å–è¡¨ä¸­æ‰€æœ‰ç”¨æˆ·æ•°æ®
-   * @param isHost æ˜¯å¦æŸ¥è¯¢ä¸»ç”¨æˆ·è¡¨ï¼Œé»˜è®¤false
-   * @returns åŒ…å«æ‰€æœ‰ç”¨æˆ·æ•°æ®çš„æ•°ç»„
-   */
-  public async getAllUsers(isHost: boolean = false): Promise<UserDataAndId[]> {
-    if (!this.rdbStore) {
-      throw new Error('Database not initialized. Call init() first.');
-    }
-
-    const tableName = isHost ? 'HostUser' : 'OtherUser';
-    const sql = `SELECT * FROM ${tableName}`;
-
-    try {
-      const resultSet = await this.rdbStore.querySql(sql);
-      const users: UserDataAndId[] = [];
-
-      while (resultSet.goToNextRow()) {
-        users.push({
-          id: resultSet.getLong(resultSet.getColumnIndex('id')),
-          phone: resultSet.getString(resultSet.getColumnIndex('phone')),
-          pwd: resultSet.getString(resultSet.getColumnIndex('pwd')),
-          cookies: resultSet.getString(resultSet.getColumnIndex('cookies')),
-          uid: resultSet.getLong(resultSet.getColumnIndex('uid'))
-        });
-      }
-
-      resultSet.close();
-      return users;
-    } catch (error) {
-      const err = new Error(`Failed to fetch users from ${tableName}: ${error.message}`);
-      hilog.error(0x0000, 'DB', err.message);
-      throw err;
-    }
-  }
-
-  /**
-   * æ›´æ–°å•ä¸ªç”¨æˆ·æ•°æ®
-   * @param id ç”¨æˆ·ID
-   * @param userData è¦æ›´æ–°çš„ç”¨æˆ·æ•°æ®
-   * @param isHost æ˜¯å¦æ›´æ–°ä¸»ç”¨æˆ·è¡¨ï¼Œé»˜è®¤false
-   * @returns æ›´æ–°ç»“æœçŠ¶æ€ç ï¼š1-æˆåŠŸï¼Œ-1-ç”¨æˆ·ä¸å­˜åœ¨ï¼Œ-2-æ‰‹æœºå·å·²å­˜åœ¨ï¼Œ0-å¤±è´¥
-   */
-  public async updateUser(
-    id: number,
-    userData: UpdateUserData,
-    isHost: boolean = false
-  ): Promise<number> {
-    if (!this.rdbStore) {
-      throw new Error('Database not initialized. Call init() first.');
-    }
-
-    // å‚æ•°éªŒè¯
-    if (!Number.isInteger(id) || id <= 0) {
-      throw new Error('æ— æ•ˆçš„ç”¨æˆ·ID');
-    }
-
-    // æ£€æŸ¥æ˜¯å¦æœ‰è¦æ›´æ–°çš„å­—æ®µ
-    const hasUpdateField = userData.phone !== undefined ||
-      userData.pwd !== undefined ||
-      userData.cookies !== undefined;
-
-    if (!hasUpdateField) {
-      throw new Error('è‡³å°‘éœ€è¦æä¾›ä¸€ä¸ªè¦æ›´æ–°çš„å­—æ®µ');
-    }
-
-    try {
-      this.rdbStore.beginTransaction();
-
-      try {
-        const tableName = isHost ? 'HostUser' : 'OtherUser';
-
-        // æ£€æŸ¥ç”¨æˆ·æ˜¯å¦å­˜åœ¨
-        const userExists = await this.userExists(isHost, id);
-        if (!userExists) {
-          this.rdbStore.rollBack();
-          return -1; // ç”¨æˆ·ä¸å­˜åœ¨
-        }
-
-        // å¦‚æœè¦æ›´æ–°æ‰‹æœºå·ï¼Œæ£€æŸ¥å”¯ä¸€æ€§
-        if (userData.phone !== undefined) {
-          const phoneExists = await this.checkPhoneExists(userData.phone);
-          if (phoneExists) {
-            this.rdbStore.rollBack();
-            return -2; // æ‰‹æœºå·å·²å­˜åœ¨
-          }
-        }
-
-        // æ„å»ºæ›´æ–°è¯­å¥
-        const updateParts: string[] = [];
-        const params: (string | number)[] = [];
-
-        if (userData.phone !== undefined) {
-          updateParts.push('phone = ?');
-          params.push(userData.phone);
-        }
-        if (userData.pwd !== undefined) {
-          updateParts.push('pwd = ?');
-          params.push(userData.pwd);
-        }
-        if (userData.cookies !== undefined) {
-          updateParts.push('cookies = ?');
-          params.push(userData.cookies);
-        }
-
-        params.push(id);
-        const updateSql = `UPDATE ${tableName} SET ${updateParts.join(', ')} WHERE id = ?`;
-
-        // æ‰§è¡Œæ›´æ–°
-        await this.rdbStore.executeSql(updateSql, params);
-        this.rdbStore.commit();
-
-        return 1; // æ›´æ–°æˆåŠŸ
-
-      } catch (error) {
-        this.rdbStore.rollBack();
-        throw new Error(error);
-      }
-    } catch (err) {
-      hilog.error(0x0000, 'DB', `Failed to update user: ${err.message}`);
-      return 0; // æ›´æ–°å¤±è´¥
-    }
-  }
-
-  /**
-   * æ ¹æ®ä½ç½®è·å–ç¬¬å‡ æ¡ç”¨æˆ·æ•°æ®ï¼ˆä»1å¼€å§‹è®¡æ•°ï¼‰- ä½¿ç”¨RdbPredicates
-   * @param position ä½ç½®åºå·ï¼Œä»1å¼€å§‹
-   * @param isHost æ˜¯å¦æŸ¥è¯¢ä¸»ç”¨æˆ·è¡¨ï¼Œé»˜è®¤false
-   * @param orderBy æ’åºå­—æ®µï¼Œé»˜è®¤æŒ‰idæ’åº
-   * @param ascending æ˜¯å¦å‡åºæ’åˆ—ï¼Œé»˜è®¤true
-   * @returns ç”¨æˆ·æ•°æ®æˆ–nullï¼ˆå¦‚æœä½ç½®è¶…å‡ºèŒƒå›´ï¼‰
-   */
-  public async getUserByPosition(
-    position: number,
-    isHost: boolean = false,
-    orderBy: string = 'id',
-    ascending: boolean = true
-  ): Promise<UserDataAndId | null> {
-    if (!this.rdbStore) {
-      throw new Error('Database not initialized. Call init() first.');
-    }
-
-    // å‚æ•°éªŒè¯
-    if (!Number.isInteger(position) || position <= 0) {
-      throw new Error('ä½ç½®åºå·å¿…é¡»æ˜¯å¤§äº0çš„æ•´æ•°');
-    }
-
-    try {
-      const tableName = isHost ? 'HostUser' : 'OtherUser';
-
-      // ä½¿ç”¨RdbPredicatesè¿›è¡ŒæŸ¥è¯¢
-      let predicates = new relationalStore.RdbPredicates(tableName);
-
-      // è®¾ç½®æ’åº
-      if (ascending) {
-        predicates.orderByAsc(orderBy);
-      } else {
-        predicates.orderByDesc(orderBy);
-      }
-
-      // è®¾ç½®åç§»å’Œé™åˆ¶ï¼šè·å–ç¬¬positionæ¡è®°å½•
-      // offsetAsçš„å‚æ•°æ˜¯ä»0å¼€å§‹çš„ï¼Œæ‰€ä»¥ç¬¬næ¡è®°å½•çš„offsetæ˜¯n-1
-      predicates.limitAs(1).offsetAs(position - 1);
-
-      const resultSet = await this.rdbStore.query(predicates);
-
-      if (resultSet.rowCount > 0) {
-        resultSet.goToFirstRow();
-
-        const userData: UserDataAndId = {
-          id: resultSet.getLong(resultSet.getColumnIndex('id')),
-          uid: resultSet.getLong(resultSet.getColumnIndex('uid')),
-          phone: resultSet.getString(resultSet.getColumnIndex('phone')),
-          pwd: resultSet.getString(resultSet.getColumnIndex('pwd')),
-          cookies: resultSet.getString(resultSet.getColumnIndex('cookies'))
-        };
-
-        resultSet.close();
-        return userData;
-      }
-
-      resultSet.close();
-      return null; // ä½ç½®è¶…å‡ºèŒƒå›´
-
-    } catch (error) {
-      hilog.error(0x0000, 'DB', `Failed to get user by position ${position}: ${error.message}`);
-      throw Error(error);
-    }
-  }
-
-  /**
-   * æŒ‰ç­¾åˆ°ç”¨æˆ· ID å–ç”¨æˆ·ï¼ˆ0 = ä¸»ç”¨æˆ·/HostUser ç¬¬ 1 æ¡ï¼ŒN = OtherUser ç¬¬ N æ¡ï¼‰
-   *
-   * @param userId ç­¾åˆ°ç”¨æˆ· IDï¼ˆSignerPage å‹¾é€‰åˆ—è¡¨ä¸­çš„ IDï¼‰
-   * @returns ç”¨æˆ·æ•°æ®æˆ–null
-   */
-  public async getUserById(userId: number): Promise<UserDataAndId | null> {
-    if (userId === 0) {
-      return await this.getUserByPosition(1, true);
-    }
-    return await this.getUserByPosition(userId, false);
-  }
-
-  /**
-   * è·å–æŒ‡å®šè¡¨çš„è®°å½•æ•°é‡
-   *
-   * @param tableName è¦æŸ¥è¯¢çš„è¡¨åï¼ˆå¿…é¡»æ˜¯å…è®¸çš„è¡¨ï¼‰
-   * @returns {Promise<number>} è¡¨ä¸­çš„è®°å½•æ•°é‡
-   * @throws {Error} å¦‚æœæ•°æ®åº“æœªåˆå§‹åŒ–æˆ–è¡¨åæ— æ•ˆ
-   */
-  public async getTableCount(tableName: 'HostUser' | 'OtherUser' | 'SignRecord'): Promise<number> {
-    // éªŒè¯è¡¨ååˆæ³•æ€§ï¼Œé˜²æ­¢SQLæ³¨å…¥
-    const allowedTables = ['HostUser', 'OtherUser', 'SignRecord'];
-    if (!allowedTables.includes(tableName)) {
-      throw new Error(`æ— æ•ˆçš„è¡¨å: ${tableName}. å…è®¸çš„è¡¨: ${allowedTables.join(', ')}`);
-    }
-
-    if (!this.rdbStore) {
-      throw new Error('æ•°æ®åº“æœªåˆå§‹åŒ–ã€‚è¯·å…ˆè°ƒç”¨init()æ–¹æ³•ã€‚');
-    }
-
-    try {
-      // ä½¿ç”¨COUNT(*)è·å–è¡¨è®°å½•æ•°
-      const sql = `SELECT COUNT(*) AS count FROM ${tableName}`;
-      const resultSet = await this.rdbStore.querySql(sql);
-
-      try {
-        if (resultSet.rowCount > 0) {
-          resultSet.goToFirstRow();
-          const columnIndex = resultSet.getColumnIndex('count');
-          return resultSet.getLong(columnIndex);
-        }
-        return 0;
-      } finally {
-        // ç¡®ä¿ç»“æœé›†è¢«æ­£ç¡®å…³é—­
-        resultSet.close();
-      }
-    } catch (err) {
-      const error = err as BusinessError;
-      console.error(`è·å–è¡¨ ${tableName} è®°å½•æ•°å¤±è´¥. é”™è¯¯ç : ${error.code}, æ¶ˆæ¯: ${error.message}`);
-      throw new Error(`æ— æ³•è·å–è¡¨è®°å½•æ•°: ${error.message}`);
-    }
-  }
-
-  getRdbStore(): relationalStore.RdbStore {
-    if (!this.rdbStore) {
-      throw new Error('Database not initialized. Call init() first.');
-    }
-    return this.rdbStore;
-  }
-
-  /**
-   * åˆ é™¤æŒ‡å®šç”¨æˆ·
-   * @param id ç”¨æˆ·ID
-   * @param isHost æ˜¯å¦åˆ é™¤ä¸»ç”¨æˆ·è¡¨ï¼Œé»˜è®¤false
-   * @returns åˆ é™¤ç»“æœçŠ¶æ€ç ï¼š1-æˆåŠŸï¼Œ-1-ç”¨æˆ·ä¸å­˜åœ¨ï¼Œ0-å¤±è´¥
-   */
-  public async deleteUser(id: number, isHost: boolean = false): Promise<number> {
-    if (!this.rdbStore) {
-      throw new Error('Database not initialized. Call init() first.');
-    }
-
-    // å‚æ•°éªŒè¯
-    if (!Number.isInteger(id) || id <= 0) {
-      throw new Error('æ— æ•ˆçš„ç”¨æˆ·ID');
-    }
-
-    try {
-      this.rdbStore.beginTransaction();
-
-      try {
-        const tableName = isHost ? 'HostUser' : 'OtherUser';
-
-        // æ£€æŸ¥ç”¨æˆ·æ˜¯å¦å­˜åœ¨
-        const userExists = await this.userExists(isHost, id);
-        if (!userExists) {
-          this.rdbStore.rollBack();
-          return -1; // ç”¨æˆ·ä¸å­˜åœ¨
-        }
-
-        // ä½¿ç”¨RdbPredicatesè¿›è¡Œåˆ é™¤
-        let predicates = new relationalStore.RdbPredicates(tableName);
-        predicates.equalTo('id', id);
-
-        // æ‰§è¡Œåˆ é™¤æ“ä½œ
-        const deletedRows = await this.rdbStore.delete(predicates);
-
-        if (deletedRows > 0) {
-          this.rdbStore.commit();
-          hilog.info(0x0000, 'DB', `Successfully deleted ${isHost ? 'host' : 'other'} user ID: ${id}`);
-          return 1; // åˆ é™¤æˆåŠŸ
-        } else {
-          this.rdbStore.rollBack();
-          return -1; // æ²¡æœ‰åˆ é™¤ä»»ä½•è®°å½•
-        }
-
-      } catch (error) {
-        this.rdbStore.rollBack();
-        throw Error(error);
-      }
-    } catch (err) {
-      hilog.error(0x0000, 'DB', `Failed to delete ${isHost ? 'host' : 'other'} user ID ${id}: ${err.message}`);
-      return 0; // åˆ é™¤å¤±è´¥
-    }
-  }
-
-  /**
-   * æ’å…¥æ”¶è—ä½ç½®
-   * @param locationData ä½ç½®æ•°æ®ï¼ˆnote å¤‡æ³¨å¯ä¸ºç©ºå­—ç¬¦ä¸²ï¼‰
-   * @returns æ’å…¥ç»“æœçŠ¶æ€ç ï¼š1-æˆåŠŸï¼Œ0-å¤±è´¥
-   */
-  public async insertSavedLocation(locationData: SavedLocationData): Promise<number> {
-    if (!this.rdbStore) {
-      throw new Error('Database not initialized. Call init() first.');
-    }
-
-    if (!locationData.latitude || !locationData.longitude) {
-      throw new Error('ç»çº¬åº¦ä¸èƒ½ä¸ºç©º');
-    }
-
-    try {
-      this.rdbStore.beginTransaction();
-
-      try {
-        await this.rdbStore.executeSql(
-          'INSERT INTO SavedLocation (note, latitude, longitude, address) VALUES (?, ?, ?, ?)',
-          [locationData.note, locationData.latitude, locationData.longitude, locationData.address]
-        );
-        this.rdbStore.commit();
-        hilog.info(0x0000, 'DB', `Successfully inserted saved location: ${locationData.note}`);
-        return 1; // æ’å…¥æˆåŠŸ
-      } catch (error) {
-        this.rdbStore.rollBack();
-        throw Error(error);
-      }
-    } catch (err) {
-      hilog.error(0x0000, 'DB', `Failed to insert saved location: ${err.message}`);
-      return 0; // æ’å…¥å¤±è´¥
-    }
-  }
-
-  /**
-   * è·å–æ‰€æœ‰æ”¶è—ä½ç½®ï¼ˆæŒ‰ id å€’åºï¼Œæœ€æ–°æ·»åŠ çš„åœ¨å‰ï¼‰
-   * @returns æ”¶è—ä½ç½®æ•°ç»„
-   */
-  public async getAllSavedLocations(): Promise<SavedLocation[]> {
-    if (!this.rdbStore) {
-      throw new Error('Database not initialized. Call init() first.');
-    }
-
-    const sql = 'SELECT * FROM SavedLocation ORDER BY id DESC';
-
-    try {
-      const resultSet = await this.rdbStore.querySql(sql);
-      const locations: SavedLocation[] = [];
-
-      while (resultSet.goToNextRow()) {
-        locations.push({
-          id: resultSet.getLong(resultSet.getColumnIndex('id')),
-          note: resultSet.getString(resultSet.getColumnIndex('note')),
-          latitude: resultSet.getString(resultSet.getColumnIndex('latitude')),
-          longitude: resultSet.getString(resultSet.getColumnIndex('longitude')),
-          address: resultSet.getString(resultSet.getColumnIndex('address'))
-        });
-      }
-
-      resultSet.close();
-      return locations;
-    } catch (error) {
-      const err = new Error(`Failed to fetch saved locations: ${error.message}`);
-      hilog.error(0x0000, 'DB', err.message);
-      throw err;
-    }
-  }
-
-  /**
-   * æ›´æ–°å•ä¸ªæ”¶è—ä½ç½®
-   * @param id ä½ç½®ID
-   * @param locationData è¦æ›´æ–°çš„ä½ç½®æ•°æ®ï¼ˆè‡³å°‘æä¾›ä¸€ä¸ªå­—æ®µï¼‰
-   * @returns æ›´æ–°ç»“æœçŠ¶æ€ç ï¼š1-æˆåŠŸï¼Œ-1-ä½ç½®ä¸å­˜åœ¨ï¼Œ0-å¤±è´¥
-   */
-  public async updateSavedLocation(id: number, locationData: UpdateSavedLocation): Promise<number> {
-    if (!this.rdbStore) {
-      throw new Error('Database not initialized. Call init() first.');
-    }
-
-    if (!Number.isInteger(id) || id <= 0) {
-      throw new Error('æ— æ•ˆçš„ä½ç½®ID');
-    }
-
-    const updateParts: string[] = [];
-    const params: (string | number)[] = [];
-
-    if (locationData.note !== undefined) {
-      updateParts.push('note = ?');
-      params.push(locationData.note);
-    }
-    if (locationData.latitude !== undefined) {
-      updateParts.push('latitude = ?');
-      params.push(locationData.latitude);
-    }
-    if (locationData.longitude !== undefined) {
-      updateParts.push('longitude = ?');
-      params.push(locationData.longitude);
-    }
-    if (locationData.address !== undefined) {
-      updateParts.push('address = ?');
-      params.push(locationData.address);
-    }
-
-    if (updateParts.length === 0) {
-      throw new Error('è‡³å°‘éœ€è¦æä¾›ä¸€ä¸ªè¦æ›´æ–°çš„å­—æ®µ');
-    }
-
-    try {
-      this.rdbStore.beginTransaction();
-
-      try {
-        const exists = await this.savedLocationExists(id);
-        if (!exists) {
-          this.rdbStore.rollBack();
-          return -1; // ä½ç½®ä¸å­˜åœ¨
-        }
-
-        params.push(id);
-        const updateSql = `UPDATE SavedLocation SET ${updateParts.join(', ')} WHERE id = ?`;
-        await this.rdbStore.executeSql(updateSql, params);
-        this.rdbStore.commit();
-
-        return 1; // æ›´æ–°æˆåŠŸ
-      } catch (error) {
-        this.rdbStore.rollBack();
-        throw new Error(error);
-      }
-    } catch (err) {
-      hilog.error(0x0000, 'DB', `Failed to update saved location: ${err.message}`);
-      return 0; // æ›´æ–°å¤±è´¥
-    }
-  }
-
-  /**
-   * åˆ é™¤æŒ‡å®šæ”¶è—ä½ç½®
-   * @param id ä½ç½®ID
-   * @returns åˆ é™¤ç»“æœçŠ¶æ€ç ï¼š1-æˆåŠŸï¼Œ-1-ä½ç½®ä¸å­˜åœ¨ï¼Œ0-å¤±è´¥
-   */
-  public async deleteSavedLocation(id: number): Promise<number> {
-    if (!this.rdbStore) {
-      throw new Error('Database not initialized. Call init() first.');
-    }
-
-    if (!Number.isInteger(id) || id <= 0) {
-      throw new Error('æ— æ•ˆçš„ä½ç½®ID');
-    }
-
-    try {
-      this.rdbStore.beginTransaction();
-
-      try {
-        const exists = await this.savedLocationExists(id);
-        if (!exists) {
-          this.rdbStore.rollBack();
-          return -1; // ä½ç½®ä¸å­˜åœ¨
-        }
-
-        const predicates = new relationalStore.RdbPredicates('SavedLocation');
-        predicates.equalTo('id', id);
-        const deletedRows = await this.rdbStore.delete(predicates);
-
-        if (deletedRows > 0) {
-          this.rdbStore.commit();
-          hilog.info(0x0000, 'DB', `Successfully deleted saved location ID: ${id}`);
-          return 1; // åˆ é™¤æˆåŠŸ
-        } else {
-          this.rdbStore.rollBack();
-          return -1; // æ²¡æœ‰åˆ é™¤ä»»ä½•è®°å½•
-        }
-      } catch (error) {
-        this.rdbStore.rollBack();
-        throw Error(error);
-      }
-    } catch (err) {
-      hilog.error(0x0000, 'DB', `Failed to delete saved location ID ${id}: ${err.message}`);
-      return 0; // åˆ é™¤å¤±è´¥
-    }
-  }
-
-  /**
-   * æ¸…ç©ºHostUserè¡¨ä¸­çš„æ‰€æœ‰æ•°æ®
-   *
-   * @returns {Promise<number>} åˆ é™¤çš„è®°å½•æ•°é‡
-   * @throws {Error} å¦‚æœæ•°æ®åº“æœªåˆå§‹åŒ–æˆ–æ“ä½œå¤±è´¥
-   */
-  public async clearHostUserTable(): Promise<number> {
-    if (!this.rdbStore) {
-      throw new Error('æ•°æ®åº“æœªåˆå§‹åŒ–ã€‚è¯·å…ˆè°ƒç”¨init()æ–¹æ³•ã€‚');
-    }
-
-    try {
-      // å¼€å§‹äº‹åŠ¡ç¡®ä¿æ“ä½œåŸå­æ€§
-      this.rdbStore.beginTransaction();
-
-      try {
-        // 1. å…ˆè·å–å½“å‰è®°å½•æ•°ï¼ˆç”¨äºè¿”å›ç»“æœï¼‰
-        const countResult = await this.rdbStore.querySql('SELECT COUNT(*) AS count FROM HostUser');
-        let rowCount = 0;
-
-        try {
-          if (countResult.rowCount > 0) {
-            countResult.goToFirstRow();
-            rowCount = countResult.getLong(countResult.getColumnIndex('count'));
-          }
-        } finally {
-          countResult.close();
-        }
-
-        // 2. æ‰§è¡Œåˆ é™¤æ“ä½œ
-        await this.rdbStore.executeSql('DELETE FROM HostUser');
-
-        // 3. é‡ç½®è‡ªå¢IDï¼ˆSQLiteä¸­éœ€è¦é¢å¤–æ“ä½œï¼‰
-        await this.rdbStore.executeSql('DELETE FROM sqlite_sequence WHERE name = "HostUser"');
-
-        // 4. æäº¤äº‹åŠ¡
-        this.rdbStore.commit();
-
-        console.log(`æˆåŠŸæ¸…ç©ºHostUserè¡¨ï¼Œåˆ é™¤${rowCount}æ¡è®°å½•`);
-        return rowCount;
-      } catch (error) {
-        // 5. å‘ç”Ÿé”™è¯¯æ—¶å›æ»šäº‹åŠ¡
-        this.rdbStore.rollBack();
-        throw this.normalizeError(error, 'æ¸…ç©ºHostUserè¡¨å¤±è´¥');
-      }
-    } catch (err) {
-      throw this.normalizeError(err, 'æ¸…ç©ºHostUserè¡¨æ“ä½œå¼‚å¸¸');
-    }
-  }
-
-  /**
-   * å¯¼å‡ºæ•°æ®åº“ä¸ºJSONå­—ç¬¦ä¸²
-   * @returns JSONæ ¼å¼çš„æ•°æ®åº“å†…å®¹
-   */
-  public async exportToJSON(): Promise<string> {
-    if (!this.rdbStore) {
-      throw new Error('Database not initialized. Call init() first.');
-    }
-
-    const hostUsers = await this.getAllUsers(true);
-    const otherUsers = await this.getAllUsers(false);
-
-    const exportData: ExportData = {
-      version: 1,
-      exportedAt: new Date().toISOString(),
-      HostUser: hostUsers.map((u: UserDataAndId): ExportUserEntry => ({
-        phone: u.phone,
-        pwd: u.pwd,
-        cookies: u.cookies,
-        uid: u.uid
-      })),
-      OtherUser: otherUsers.map((u: UserDataAndId): ExportUserEntry => ({
-        phone: u.phone,
-        pwd: u.pwd,
-        cookies: u.cookies,
-        uid: u.uid
-      }))
-    };
-
-    return JSON.stringify(exportData, null, 2);
-  }
-
-  /**
-   * ä»JSONå­—ç¬¦ä¸²å¯¼å…¥æ•°æ®åº“
-   * @param json JSONæ ¼å¼çš„æ•°æ®åº“å†…å®¹
-   * @returns å¯¼å…¥ç»“æœ
-   */
-  public async importFromJSON(json: string): Promise<ImportResult> {
-    if (!this.rdbStore) {
-      throw new Error('Database not initialized. Call init() first.');
-    }
-
-    let data: ExportData;
-
-    try {
-      data = JSON.parse(json) as ExportData;
-    } catch {
-      const result: ImportResult = { success: false, message: 'æ–‡ä»¶æ ¼å¼é”™è¯¯ï¼šæ— æ³•è§£æJSON' };
-      return result;
-    }
-
-    if (typeof data.version !== 'number') {
-      const result: ImportResult = { success: false, message: 'æ–‡ä»¶æ ¼å¼é”™è¯¯ï¼šç¼ºå°‘ç‰ˆæœ¬å·' };
-      return result;
-    }
-    if (!Array.isArray(data.HostUser) || !Array.isArray(data.OtherUser)) {
-      const result: ImportResult = { success: false, message: 'æ–‡ä»¶æ ¼å¼é”™è¯¯ï¼šç¼ºå°‘ç”¨æˆ·æ•°æ®' };
-      return result;
-    }
-
-    const validateUserEntry = (entry: ExportUserEntry, tableName: string): ImportResult | null => {
-      if (typeof entry.phone !== 'string' || entry.phone.trim().length === 0) {
-        const result: ImportResult = { success: false, message: `${tableName} ä¸­å­˜åœ¨ç¼ºå°‘æ‰‹æœºå·çš„è®°å½•` };
-        return result;
-      }
-      if (typeof entry.pwd !== 'string' || entry.pwd.trim().length === 0) {
-        const result: ImportResult = { success: false, message: `${tableName} ä¸­å­˜åœ¨ç¼ºå°‘å¯†ç çš„è®°å½•` };
-        return result;
-      }
-      if (typeof entry.cookies !== 'string' || entry.cookies.trim().length === 0) {
-        const result: ImportResult = { success: false, message: `${tableName} ä¸­å­˜åœ¨ç¼ºå°‘cookiesçš„è®°å½•` };
-        return result;
-      }
-      if (typeof entry.uid !== 'number' || entry.uid <= 0 || !Number.isInteger(entry.uid)) {
-        const result: ImportResult = { success: false, message: `${tableName} ä¸­å­˜åœ¨æ— æ•ˆuidçš„è®°å½•` };
-        return result;
-      }
-      return null;
-    };
-
-    for (const entry of data.HostUser) {
-      const err = validateUserEntry(entry, 'HostUser');
-      if (err) {
-        return err;
-      }
-    }
-    for (const entry of data.OtherUser) {
-      const err = validateUserEntry(entry, 'OtherUser');
-      if (err) {
-        return err;
-      }
-    }
-
-    try {
-      this.rdbStore.beginTransaction();
-
-      await this.rdbStore.executeSql('DELETE FROM OtherUser');
-      await this.rdbStore.executeSql('DELETE FROM HostUser');
-      await this.rdbStore.executeSql('DELETE FROM sqlite_sequence WHERE name = "HostUser"');
-      await this.rdbStore.executeSql('DELETE FROM sqlite_sequence WHERE name = "OtherUser"');
-
-      for (const entry of data.HostUser) {
-        await this.rdbStore.executeSql(
-          'INSERT INTO HostUser (phone, pwd, cookies, uid) VALUES (?, ?, ?, ?)',
-          [entry.phone, entry.pwd, entry.cookies, entry.uid]
-        );
-      }
-      for (const entry of data.OtherUser) {
-        await this.rdbStore.executeSql(
-          'INSERT INTO OtherUser (phone, pwd, cookies, uid) VALUES (?, ?, ?, ?)',
-          [entry.phone, entry.pwd, entry.cookies, entry.uid]
-        );
-      }
-
-      this.rdbStore.commit();
-      const result: ImportResult = { success: true, message: `å¯¼å…¥æˆåŠŸï¼š${data.HostUser.length} ä¸ªä¸»ç”¨æˆ·ï¼Œ${data.OtherUser.length} ä¸ªå…¶ä»–ç”¨æˆ·` };
-      return result;
-    } catch (err) {
-      this.rdbStore.rollBack();
-      const result: ImportResult = { success: false, message: `å¯¼å…¥å¤±è´¥ï¼š${(err as Error).message}` };
-      return result;
-    }
-  }
-
-  // ---------------- ç­¾åˆ°ç»Ÿè®¡ï¼ˆSignRecord è¡¨ï¼‰ ----------------
-
-  /**
-   * æ’å…¥ä¸€æ¡ç­¾åˆ°/ç­¾é€€ç»Ÿè®¡è®°å½•
-   * @returns æ’å…¥ç»“æœçŠ¶æ€ç ï¼š1-æˆåŠŸï¼Œ0-å¤±è´¥
-   */
-  public async insertSignRecord(record: SignRecordData): Promise<number> {
-    if (!this.rdbStore) {
-      throw new Error('Database not initialized. Call init() first.');
-    }
-
-    if (!record.uname || !record.kind || !record.action) {
-      throw new Error('ç”¨æˆ·åã€æ“ä½œç±»å‹ä¸ç»“æœç±»å‹ä¸èƒ½ä¸ºç©º');
-    }
-
-    try {
-      await this.rdbStore.executeSql(
-        'INSERT INTO SignRecord (uname, activityId, activityName, signType, action, kind, message, createTime) ' +
-        'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        [record.uname, record.activityId, record.activityName, record.signType,
-          record.action, record.kind, record.message, Date.now()]
-      );
-      return 1;
-    } catch (err) {
-      hilog.error(0x0000, 'DB', `Failed to insert sign record: ${err.message}`);
-      return 0;
-    }
-  }
-
-  /**
-   * è·å–æœ€è¿‘çš„ç­¾åˆ°ç»Ÿè®¡è®°å½•ï¼ˆæŒ‰è½åº“æ—¶é—´å€’åºï¼‰
-   * @param limit è¿”å›æ¡æ•°ä¸Šé™ï¼ˆæ›´æ—©çš„è®°å½•ä¸è¿”å›ï¼Œä½†ä»å‚ä¸æ±‡æ€»ç»Ÿè®¡ï¼‰
-   */
-  public async getSignRecords(limit: number): Promise<SignRecord[]> {
-    if (!this.rdbStore) {
-      throw new Error('Database not initialized. Call init() first.');
-    }
-
-    try {
-      const resultSet = await this.rdbStore.querySql(
-        'SELECT * FROM SignRecord ORDER BY id DESC LIMIT ?', [limit]);
-      const records: SignRecord[] = [];
-      while (resultSet.goToNextRow()) {
-        records.push({
-          id: resultSet.getLong(resultSet.getColumnIndex('id')),
-          uname: resultSet.getString(resultSet.getColumnIndex('uname')),
-          activityId: resultSet.getString(resultSet.getColumnIndex('activityId')),
-          activityName: resultSet.getString(resultSet.getColumnIndex('activityName')),
-          signType: resultSet.getString(resultSet.getColumnIndex('signType')),
-          action: resultSet.getString(resultSet.getColumnIndex('action')),
-          kind: resultSet.getString(resultSet.getColumnIndex('kind')),
-          message: resultSet.getString(resultSet.getColumnIndex('message')),
-          createTime: resultSet.getLong(resultSet.getColumnIndex('createTime'))
-        });
-      }
-      resultSet.close();
-      return records;
-    } catch (error) {
-      const err = new Error(`Failed to fetch sign records: ${error.message}`);
-      hilog.error(0x0000, 'DB', err.message);
-      throw err;
-    }
-  }
-
-  /**
-   * è·å–å…¨éƒ¨ç­¾åˆ°ç»Ÿè®¡è®°å½•ï¼ˆä¸é™æ¡æ•°ï¼ŒæŒ‰è½åº“æ—¶é—´å‡åºï¼›äº‘ç«¯è¡¥å½•åŒæ­¥ç”¨ï¼‰
-   */
-  public async getAllSignRecords(): Promise<SignRecord[]> {
-    if (!this.rdbStore) {
-      throw new Error('Database not initialized. Call init() first.');
-    }
-
-    try {
-      const resultSet = await this.rdbStore.querySql(
-        'SELECT * FROM SignRecord ORDER BY createTime ASC, id ASC');
-      const records: SignRecord[] = [];
-      while (resultSet.goToNextRow()) {
-        records.push({
-          id: resultSet.getLong(resultSet.getColumnIndex('id')),
-          uname: resultSet.getString(resultSet.getColumnIndex('uname')),
-          activityId: resultSet.getString(resultSet.getColumnIndex('activityId')),
-          activityName: resultSet.getString(resultSet.getColumnIndex('activityName')),
-          signType: resultSet.getString(resultSet.getColumnIndex('signType')),
-          action: resultSet.getString(resultSet.getColumnIndex('action')),
-          kind: resultSet.getString(resultSet.getColumnIndex('kind')),
-          message: resultSet.getString(resultSet.getColumnIndex('message')),
-          createTime: resultSet.getLong(resultSet.getColumnIndex('createTime'))
-        });
-      }
-      resultSet.close();
-      return records;
-    } catch (error) {
-      const err = new Error(`Failed to fetch all sign records: ${error.message}`);
-      hilog.error(0x0000, 'DB', err.message);
-      throw err;
-    }
-  }
-
-  /**
-   * ç­¾åˆ°ç»Ÿè®¡æ±‡æ€»ï¼šç­¾åˆ°æ¬¡æ•°/æˆåŠŸ/å·²ç­¾åˆ°/å¤±è´¥ã€ç­¾é€€æˆåŠŸæ¬¡æ•°ä¸æŒ‰ç±»å‹åˆ†å¸ƒ
-   */
-  public async getSignStats(): Promise<SignStats> {
-    if (!this.rdbStore) {
-      throw new Error('Database not initialized. Call init() first.');
-    }
-
-    const stats: SignStats = {
-      signTotal: 0, signSuccess: 0, signAlready: 0, signFailed: 0,
-      signOutSuccess: 0, typeCounts: []
-    };
-
-    try {
-      const summarySet = await this.rdbStore.querySql(
-        `SELECT
-          IFNULL(SUM(CASE WHEN action = 'sign' THEN 1 ELSE 0 END), 0) AS signTotal,
-          IFNULL(SUM(CASE WHEN action = 'sign' AND kind = 'success' THEN 1 ELSE 0 END), 0) AS signSuccess,
-          IFNULL(SUM(CASE WHEN action = 'sign' AND kind = 'already' THEN 1 ELSE 0 END), 0) AS signAlready,
-          IFNULL(SUM(CASE WHEN action = 'sign' AND kind NOT IN ('success', 'already') THEN 1 ELSE 0 END), 0) AS signFailed,
-          IFNULL(SUM(CASE WHEN action = 'signout' AND kind = 'success' THEN 1 ELSE 0 END), 0) AS signOutSuccess
-        FROM SignRecord`);
-      try {
-        if (summarySet.goToFirstRow()) {
-          stats.signTotal = summarySet.getLong(summarySet.getColumnIndex('signTotal'));
-          stats.signSuccess = summarySet.getLong(summarySet.getColumnIndex('signSuccess'));
-          stats.signAlready = summarySet.getLong(summarySet.getColumnIndex('signAlready'));
-          stats.signFailed = summarySet.getLong(summarySet.getColumnIndex('signFailed'));
-          stats.signOutSuccess = summarySet.getLong(summarySet.getColumnIndex('signOutSuccess'));
-        }
-      } finally {
-        summarySet.close();
-      }
-
-      const typeSet = await this.rdbStore.querySql(
-        "SELECT signType, COUNT(*) AS count FROM SignRecord WHERE action = 'sign' " +
-        'GROUP BY signType ORDER BY count DESC');
-      try {
-        while (typeSet.goToNextRow()) {
-          stats.typeCounts.push({
-            signType: typeSet.getString(typeSet.getColumnIndex('signType')),
-            count: typeSet.getLong(typeSet.getColumnIndex('count'))
-          });
-        }
-      } finally {
-        typeSet.close();
-      }
-      return stats;
-    } catch (error) {
-      const err = new Error(`Failed to fetch sign stats: ${error.message}`);
-      hilog.error(0x0000, 'DB', err.message);
-      throw err;
-    }
-  }
-
-  /**
-   * æ¸…ç©ºå…¨éƒ¨ç­¾åˆ°ç»Ÿè®¡è®°å½•
-   * @returns åˆ é™¤çš„è®°å½•æ•°é‡
-   */
-  public async clearSignRecords(): Promise<number> {
-    if (!this.rdbStore) {
-      throw new Error('æ•°æ®åº“æœªåˆå§‹åŒ–ã€‚è¯·å…ˆè°ƒç”¨init()æ–¹æ³•ã€‚');
-    }
-
-    try {
-      this.rdbStore.beginTransaction();
-      try {
-        const countBefore = await this.getTableCount('SignRecord');
-        await this.rdbStore.executeSql('DELETE FROM SignRecord');
-        await this.rdbStore.executeSql('DELETE FROM sqlite_sequence WHERE name = "SignRecord"');
-        this.rdbStore.commit();
-        hilog.info(0x0000, 'DB', `Cleared ${countBefore} sign records`);
-        return countBefore;
-      } catch (error) {
-        this.rdbStore.rollBack();
-        throw this.normalizeError(error, 'æ¸…ç©ºç­¾åˆ°ç»Ÿè®¡è®°å½•å¤±è´¥');
-      }
-    } catch (err) {
-      throw this.normalizeError(err, 'æ¸…ç©ºç­¾åˆ°ç»Ÿè®¡è®°å½•æ“ä½œå¼‚å¸¸');
-    }
-  }
-
-  async close(): Promise<void> {
-    if (this.rdbStore) {
-      try {
-        await this.rdbStore.close();
-        this.rdbStore = null;
-      } catch (err) {
-        const error = err as BusinessError;
-        console.error(`Failed to close database. Code: ${error.code}, Message: ${error.message}`);
-      }
-    }
-    DatabaseManager.instance = null;
-  }
-
-  //åˆ›å»ºè¡¨
-  private async createTables(): Promise<void> {
-    if (!this.rdbStore) {
-      return;
-    }
-
-    try {
-      await this.rdbStore.executeSql(`
-        CREATE TABLE IF NOT EXISTS HostUser (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          phone TEXT NOT NULL,
-          pwd TEXT NOT NULL,
-          cookies TEXT NOT NULL,
-          uid INTEGER NOT NULL
-        );
-      `);
-
-      await this.rdbStore.executeSql(`
-        CREATE TABLE IF NOT EXISTS OtherUser (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          phone TEXT NOT NULL,
-          pwd TEXT NOT NULL,
-          cookies TEXT NOT NULL,
-          uid INTEGER NOT NULL
-        );
-      `);
-
-      await this.rdbStore.executeSql(`
-        CREATE TABLE IF NOT EXISTS SavedLocation (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          note TEXT NOT NULL,
-          latitude TEXT NOT NULL,
-          longitude TEXT NOT NULL,
-          address TEXT NOT NULL DEFAULT ''
-        );
-      `);
-
-      await this.rdbStore.executeSql(`
-        CREATE TABLE IF NOT EXISTS SignRecord (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          uname TEXT NOT NULL,
-          activityId TEXT NOT NULL DEFAULT '',
-          activityName TEXT NOT NULL DEFAULT '',
-          signType TEXT NOT NULL DEFAULT '',
-          action TEXT NOT NULL DEFAULT 'sign',
-          kind TEXT NOT NULL,
-          message TEXT NOT NULL DEFAULT '',
-          createTime INTEGER NOT NULL
-        );
-      `);
-    } catch (err) {
-      const error = err as BusinessError;
-      console.error(`Failed to create tables. Code: ${error.code}, Message: ${error.message}`);
-    }
-  }
-
-  private normalizeError(err: Error, message: string): Error {
-    return new Error(`${message} [åŸå› ]: ${err.message}`);
-  }
-
-  // è¾…åŠ©æ–¹æ³•ï¼šæ£€æŸ¥ç”¨æˆ·æ˜¯å¦å­˜åœ¨
-  private async userExists(isHost: boolean, id: number): Promise<boolean> {
-    if (!this.rdbStore) {
-      return false;
-    }
-    const table = isHost ? 'HostUser' : 'OtherUser';
-    const sql = `SELECT 1 FROM ${table} WHERE id = ? LIMIT 1`;
-    const resultSet = await this.rdbStore.querySql(sql, [id]);
-    try {
-      return resultSet.rowCount > 0;
-    } finally {
-      resultSet.close();
-    }
-  }
-
-  // è¾…åŠ©æ–¹æ³•ï¼šæ£€æŸ¥æ”¶è—ä½ç½®æ˜¯å¦å­˜åœ¨
-  private async savedLocationExists(id: number): Promise<boolean> {
-    if (!this.rdbStore) {
-      return false;
-    }
-    const sql = 'SELECT 1 FROM SavedLocation WHERE id = ? LIMIT 1';
-    const resultSet = await this.rdbStore.querySql(sql, [id]);
-    try {
-      return resultSet.rowCount > 0;
-    } finally {
-      resultSet.close();
-    }
-  }
-
-  /**
-   * æ£€æŸ¥æ‰‹æœºå·æ˜¯å¦å·²å­˜åœ¨ï¼ˆè·¨ä¸¤ä¸ªè¡¨æ£€æŸ¥ï¼‰
-   *
-   * @param phone è¦æ£€æŸ¥çš„æ‰‹æœºå·
-   * @returns {Promise<boolean>} å¦‚æœæ‰‹æœºå·å·²å­˜åœ¨åˆ™è¿”å›true
-   */
-  private async checkPhoneExists(phone: string): Promise<boolean> {
-    if (!this.rdbStore) {
-      throw new Error('Database not initialized. Call init() first.');
-    }
-
-    try {
-      // ä½¿ç”¨UNIONæ£€æŸ¥ä¸¤ä¸ªè¡¨
-      const sql = `
-      SELECT 1 FROM HostUser WHERE phone = ?
-      UNION
-      SELECT 1 FROM OtherUser WHERE phone = ?
-      LIMIT 1
-    `;
-
-      const resultSet = await this.rdbStore.querySql(sql, [phone, phone]);
-
-      try {
-        return resultSet.rowCount > 0;
-      } finally {
-        // ç¡®ä¿ç»“æœé›†è¢«å…³é—­
-        resultSet.close();
-      }
-    } catch (err) {
-      const error = err as BusinessError;
-      console.error(`Failed to check phone existence. Code: ${error.code}, Message: ${error.message}`);
-      throw new Error(`æ’å…¥é”™è¯¯,${error}`)
-    }
-  }
-}
-export {
-  DatabaseManager, UserData
-}ÀÔrD’º@ohos.data.relationalStore«@ohos.hilogÔrE—ªassertions¨external¢id¤meta±moduleSideEffectsªresolvedByµsyntheticNamedExportsAÃÙh hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.data.relationalStore.d.tsÔrF‘¯hostModulesInfo‘Cº@ohos.data.relationalStore¥entryÃªoh-resolveÂEAÃÙY hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.hilog.d.tsAÃªoh-resolveÂ“ÔrG–§version¤fileªsourceRoot§sources¥names¨mappings«DataBase.js ‘¬DataBase.etsÜë–”    ”  ”  ”  ”8  8”9  9–”   ” 	” ” ” 3”  4“”  Ìv ” Ìv” Ìv‘” Ìz•” Ìx
-” Ìx” Ìx6” Ìx:” Ìx;’” Ì{” Ì{”” Ì}	”
- Ì}” Ì}” Ì}˜” Ì~” Ì~” Ì~” Ì~”$ Ì~ ”) Ì~%”- Ì~)”/ Ì~+™” Ì” Ì” Ì”$ Ì”' Ì!”+ Ì%”: Ì4”< Ì6”= Ì7‘”	 Ì€–” Ì” Ì” Ì” Ì”' Ì#”( Ì$’” Ì‚” Ì‚’” Ì„	” Ì„˜” Ì…” Ì…” Ì…” Ì…” Ì…”! Ì…”% Ì…!”& Ì…"’” Ì†” Ì†–” Ìˆ”	 Ìˆ”
- Ìˆ” Ìˆ” Ìˆ” Ìˆ-˜” Ì‰” Ì‰” Ì‰” Ì‰” Ì‰” Ì‰”" Ì‰”$ Ì‰ ’” ÌŠ” ÌŠ‘”	 Ì‹”” ÌŒ” ÌŒ
-” ÌŒ” ÌŒ6”” Ì” Ì
-” Ì” Ì˜” Ì” Ì” Ì”* Ì$”+ Ì%”8 Ì2”9 Ì3”; Ì5’”	 Ì”
- Ì’” Ì‘” Ì‘Ÿ” Ì’” Ì’
-” Ì’” Ì’” Ì’”" Ì’”1 Ì’+”2 Ì’,”= Ì’7”> Ì’8”ÌE Ì’?”ÌG Ì’ÌA”ÌS Ì’ÌM”ÌT Ì’ÌN”ÌU Ì’ÌO—” Ì“” Ì“” Ì“” Ì“”# Ì“”% Ì“”& Ì“ ‘”	 Ì””” Ì”” Ì”” Ì”” Ì”–” Ì•” Ì•” Ì•” Ì•” Ì•(” Ì•)Ü ” Ì–” Ì–” Ì–” Ì–” Ì–”; Ì–5”Ì@ Ì–:”ÌA Ì–;”ÌE Ì–?”ÌS Ì–ÌM”ÌX Ì–ÌR”ÌY Ì–ÌS”Ì` Ì–ÌZ”Ìb Ì–Ì\”Ìc Ì–Ì]”Ìd Ì–Ì^‘”	 Ì—’” Ì˜” Ì˜‘” Ìš‘” Ì ”” Ì¡	”	 Ì¡”
- Ì¡” Ì¡#—” Ì¢” Ì¢” Ì¢	” Ì¢” Ì¢” Ì¢” Ì¢˜” Ì£” Ì£” Ì£” Ì£” Ì£”ÌJ Ì£ÌD”ÌK Ì£ÌE”ÌL Ì£ÌF‘”	 Ì¤’” Ì¦” Ì¦’” Ì§”$ Ì§–” Ì¨” Ì¨” Ì¨” Ì¨”8 Ì¨2”9 Ì¨3” Ì©” Ì©” Ì©” Ì©”$ Ì©”( Ì©"”) Ì©#”1 Ì©+”2 Ì©,”: Ì©4”; Ì©5”> Ì©8”? Ì©9”Ì@ Ì©:’” Ì«” Ì«
-’” Ì¬”# Ì¬˜” Ì­” Ì­”  Ì­”! Ì­”) Ì­!”. Ì­&”/ Ì­'”0 Ì­(‘” Ì®‘” Ì®’” Ì¯”# Ì¯–” Ì°” Ì°” Ì°” Ì°”! Ì°”" Ì°‘” Ì±‘”	 Ì²”” Ì²” Ì²” Ì²” Ì²” Ì³” Ì³” Ì³” Ì³” Ì³”! Ì³”" Ì³”; Ì³5”Ì@ Ì³:”ÌA Ì³;”ÌH Ì³ÌB”ÌJ Ì³ÌD”ÌK Ì³ÌE”ÌL Ì³ÌF” Ì´” Ì´” Ì´” Ì´” Ì´” Ì´”  Ì´”) Ì´#”+ Ì´%”. Ì´(”/ Ì´)”6 Ì´0”7 Ì´1”8 Ì´2”” Ìµ” Ìµ” Ìµ” Ìµ‘”	 Ì¶’” Ì·” Ì·‘” Ì¹‘” Ì¾™” Ì¿	”	 Ì¿”
- Ì¿” Ì¿” Ì¿” Ì¿,” Ì¿.”( Ì¿Ì@”- Ì¿ÌE—” ÌÀ” ÌÀ” ÌÀ	” ÌÀ” ÌÀ” ÌÀ” ÌÀ˜” ÌÁ” ÌÁ” ÌÁ” ÌÁ” ÌÁ”ÌJ ÌÁÌD”ÌK ÌÁÌE”ÌL ÌÁÌF‘”	 ÌÂ’” ÌÄ” ÌÄÜ ” ÌÅ” ÌÅ” ÌÅ	” ÌÅ” ÌÅ” ÌÅ” ÌÅ”  ÌÅ”( ÌÅ$”) ÌÅ%”, ÌÅ(”0 ÌÅ,”1 ÌÅ-”9 ÌÅ5”: ÌÅ6”ÌA ÌÅ=”ÌE ÌÅÌA”ÌF ÌÅÌB”ÌN ÌÅÌJ”ÌO ÌÅÌK”ÌR ÌÅÌN”ÌT ÌÅÌP˜” ÌÆ” ÌÆ” ÌÆ” ÌÆ” ÌÆ”4 ÌÆ.”5 ÌÆ/”6 ÌÆ0‘”	 ÌÇ” ÌÉ” ÌÉ” ÌÉ” ÌÉ” ÌÉ” ÌÉ” ÌÉ”! ÌÉ”" ÌÉ”( ÌÉ$”- ÌÉ)”. ÌÉ*”0 ÌÉ,˜” ÌÊ” ÌÊ” ÌÊ” ÌÊ” ÌÊ”( ÌÊ"”) ÌÊ#”* ÌÊ$‘”	 ÌË’” ÌÍ” ÌÍ˜” ÌÎ” ÌÎ
-” ÌÎ” ÌÎ” ÌÎ”* ÌÎ$”, ÌÎ&”- ÌÎ'’” ÌĞ” ÌĞ
-’” ÌÑ” ÌÑ” ÌÒ” ÌÒ”! ÌÒ”$ ÌÒ”* ÌÒ"”. ÌÒ&”/ ÌÒ'”? ÌÒ7”Ì@ ÌÒ8”ÌH ÌÒÌ@”ÌI ÌÒÌA”ÌN ÌÒÌF”ÌO ÌÒÌG”ÌP ÌÒÌH”” ÌÓ” ÌÓ” ÌÓ”! ÌÓ˜” ÌÔ
-” ÌÔ” ÌÔ”! ÌÔ”" ÌÔ”* ÌÔ ”, ÌÔ"”- ÌÔ#—” ÌÕ
-” ÌÕ” ÌÕ” ÌÕ” ÌÕ” ÌÕ”( ÌÕ‘” ÌÖ	’” ÌØ”# ÌØ”” ÌÙ” ÌÙ” ÌÙ” ÌÙš” ÌÚ
-” ÌÚ”) ÌÚ”, ÌÚ"”2 ÌÚ(”6 ÌÚ,”7 ÌÚ-”ÌK ÌÚÌA”ÌM ÌÚÌC”ÌN ÌÚÌD•” ÌÛ
-” ÌÛ” ÌÛ”( ÌÛ”* ÌÛ ˜” ÌÜ” ÌÜ” ÌÜ”% ÌÜ”& ÌÜ”. ÌÜ"”0 ÌÜ$”1 ÌÜ%—” Ìİ” Ìİ”  Ìİ”! Ìİ”" Ìİ”# Ìİ”, Ìİ ‘” ÌŞ‘” Ìß	’” Ìá” Ìá” Ìâ” Ìâ” Ìâ”" Ìâ”( Ìâ ”) Ìâ!”* Ìâ"”+ Ìâ#”5 Ìâ-”6 Ìâ.”7 Ìâ/”8 Ìâ0”ÌC Ìâ;”ÌD Ìâ<’” Ìä” Ìäœ” Ìå” Ìå”! Ìå”$ Ìå”* Ìå"”. Ìå&”/ Ìå'”< Ìå4”= Ìå5”ÌF Ìå>”ÌG Ìå?”ÌH ÌåÌ@’” Ìç” Ìç˜” Ìè” Ìè” Ìè”" Ìè”1 Ìè)”: Ìè2”Ìk ÌèÌc”Ìl ÌèÌdš” Ìé” Ìé” Ìé” Ìé”# Ìé”$ Ìé”. Ìé&”/ Ìé'”8 Ìé0”: Ìé2”” Ìê
-” Ìê” Ìê”" Ìê”” Ìë
-” Ìë” Ìë”  Ìë”” Ìì
-” Ìì” Ìì”$ Ìì”” Ìí
-” Ìí” Ìí”  Ìí“” Ìî	” Ìî
-” Ìî’” Ìğ” Ìğ˜” Ìñ” Ìñ” Ìñ” Ìñ” Ìñ”$ Ìñ”& Ìñ”' Ìñ’” Ìò”# Ìòœ” Ìó” Ìó”  Ìó”# Ìó”) Ìó!”- Ìó%”. Ìó&”; Ìó3”< Ìó4”ÌE Ìó=”ÌF Ìó>”ÌG Ìó?˜” Ìô” Ìô” Ìô”# Ìô”. Ìô&”1 Ìô)”2 Ìô*”4 Ìô,˜” Ìõ
-” Ìõ” Ìõ”# Ìõ”$ Ìõ”4 Ìõ*”5 Ìõ+”6 Ìõ,‘” Ìö	Ü !” Ìù” Ìù” Ìù” Ìù” Ìù”! Ìù”# Ìù”' Ìù”) Ìú
-”ÌB Ìú#”ÌH Ìú)”ÌI Ìú*”ÌJ Ìú+”ÌK Ìú,”ÌQ Ìú2”ÌR Ìú3”ÌS Ìú4”ÌT Ìú5”Ì[ Ìú<”Ìe ÌúÌF”Ìm ÌúÌN”Ìn ÌúÌO”Ìs ÌúÌT”Ìt ÌúÌU”Ì} ÌúÌ^”Ì~ ÌúÌ_”Ì ÌúÌ`”Ì ÌúÌb”Ì‚ ÌúÌc”Ìƒ ÌúÌd”Ìˆ ÌúÌi”Ì‰ ÌúÌj”ÌŠ ÌúÌk–” Ìû” Ìû” Ìû” Ìû” Ìû”! Ìû‘” Ìı”” Ìı” Ìı” Ìı” Ìı’” Ìş” Ìş˜” Ìÿ” Ìÿ” Ìÿ” Ìÿ” Ìÿ”& Ìÿ”( Ìÿ ”) Ìÿ!—” Í ” Í ” Í ” Í ”! Í ”" Í ”# Í ‘” Í‘”	 Í”” Í” Í” Í” Í’” Í” ÍÜ ” Í” Í” Í” Í” Í” Í”  Í”$ Í”& Í ”: Í4”Ì@ Í:”ÌA Í;”ÌB Í<”ÌC Í=”ÌI ÍÌC”ÌJ ÍÌD”ÌK ÍÌE”ÌL ÍÌF”ÌS ÍÌM”Ì] ÍÌW”Ì` ÍÌZ”Ìa ÍÌ[”Ìh ÍÌb”Ìj ÍÌd”Ìk ÍÌe”Ìl ÍÌf–” Í” Í” Í” Í” Í” Í‘”	 Í’” Í” Í‘” Í	‘” Í—” Í	”	 Í”
- Í” Í” Í” Í-”$ Í2—” Í” Í” Í	” Í” Í” Í” Í˜” Í” Í” Í” Í” Í”ÌJ ÍÌD”ÌK ÍÌE”ÌL ÍÌF‘”	 Í” Í” Í
-” Í” Í”  Í”! Í”" Í”# Í”- Í)”. Í*”/ Í+”0 Í,”; Í7”< Í8˜” Í” Í
-” Í” Í”% Í!”. Í*”0 Í,”1 Í-’” Í” Í” Í” Í” Í” Í”$ Í”( Í"”) Í#”1 Í+”2 Í,”: Í4”; Í5”> Í8”? Í9”Ì@ Í:–” Í” Í” Í” Í%” Í'” Í(—” Í” Í” Í” Í”( Í"”* Í$”, Í&•” Í” Í” Í” Í” Í” Í
-” Í” Í”! Í”" Í”) Í”* Í ”3 Í)”4 Í*”ÌB Í8”ÌC Í9”ÌG Í=”ÌH Í>”ÌI Í?” Í
-” Í” Í”$ Í”% Í”. Í$”/ Í%”8 Í.”9 Í/”ÌG Í=”ÌH Í>”ÌO ÍÌE”ÌP ÍÌF”ÌQ ÍÌG” Í
-” Í” Í”" Í”# Í”, Í"”- Í#”6 Í,”7 Í-”ÌE Í;”ÌF Í<”ÌK ÍÌA”ÌL ÍÌB”ÌM ÍÌC” Í
-” Í” Í”& Í”' Í”0 Í&”1 Í'”: Í0”; Í1”ÌI Í?”ÌJ ÍÌ@”ÌS ÍÌI”ÌT ÍÌJ”ÌU ÍÌK” Í 
-” Í ” Í ”" Í ”# Í ”* Í  ”+ Í !”4 Í *”5 Í +”ÌC Í 9”ÌD Í :”ÌI Í ?”ÌJ Í Ì@”ÌK Í ÌA“” Í!	” Í!
-” Í!‘” Í"–” Í$” Í$” Í$” Í$” Í$” Í$”” Í%” Í%” Í%” Í%‘”	 Í&”” Í&” Í&” Í&” Í&Ü ” Í'” Í'” Í'” Í'” Í'”! Í'”" Í'”Ì@ Í':”ÌI Í'ÌC”ÌN Í'ÌH”ÌS Í'ÌM”ÌT Í'ÌN”Ì[ Í'ÌU”Ì] Í'ÌW”Ì^ Í'ÌX”Ì_ Í'ÌY” Í(” Í(” Í(” Í(” Í(” Í(”  Í(”$ Í(”& Í( ”) Í(#”* Í($”1 Í(+”2 Í(,”3 Í(-”” Í)” Í)” Í)” Í)‘”	 Í*’” Í+” Í+‘” Í-‘” Í3›” Í4	”	 Í4”
- Í4” Í4” Í5” Í5” Í6”! Í6”# Í7”, Í7”1 Í7—” Í9” Í9” Í9	” Í9” Í9” Í9” Í9˜” Í:” Í:” Í:” Í:” Í:”ÌJ Í:ÌD”ÌK Í:ÌE”ÌL Í:ÌF‘”	 Í;’” Í=” Í=” Í>” Í>” Í>	” Í>” Í>” Í>” Í>”  Í>”! Í>”% Í>!”' Í>#”+ Í>'”, Í>(”. Í>*˜” Í?” Í?” Í?” Í?” Í?”% Í?”& Í? ”' Í?!‘”	 Í@’” ÍB” ÍB™” ÍC” ÍC
-” ÍC” ÍC”' ÍC#”( ÍC$”- ÍC)”2 ÍC.”; ÍC7–” ÍD” ÍD” ÍD” ÍD” ÍD”& ÍD —” ÍE” ÍE” ÍE” ÍE”! ÍE”* ÍE$”+ ÍE%•” ÍG” ÍG” ÍG	” ÍG” ÍG˜” ÍH” ÍH” ÍH” ÍH” ÍH”, ÍH&”- ÍH'”. ÍH(‘”	 ÍI’” ÍK” ÍK˜” ÍL” ÍL
-” ÍL” ÍL” ÍL”* ÍL$”, ÍL&”- ÍL'’” ÍN” ÍN
-” ÍO” ÍO” ÍO”" ÍO”( ÍO ”) ÍO!”* ÍO"”+ ÍO#”5 ÍO-”6 ÍO.”7 ÍO/”8 ÍO0”ÌC ÍO;”ÌD ÍO<’” ÍQ” ÍQ” ÍR” ÍR”  ÍR”# ÍR”) ÍR!”- ÍR%”. ÍR&”8 ÍR0”9 ÍR1”? ÍR7”ÌA ÍR9”ÌC ÍR;”ÌD ÍR<”ÌE ÍR=•” ÍS” ÍS” ÍS” ÍS”! ÍS˜” ÍT
-” ÍT” ÍT”! ÍT”" ÍT”* ÍT ”, ÍT"”- ÍT#—” ÍU
-” ÍU” ÍU” ÍU” ÍU” ÍU”' ÍU‘” ÍV	’” ÍX”! ÍX˜” ÍY” ÍY” ÍY” ÍY”" ÍY”' ÍY”0 ÍY(”2 ÍY*” ÍZ
-” ÍZ”% ÍZ”( ÍZ”. ÍZ$”2 ÍZ(”3 ÍZ)”ÌC ÍZ9”ÌD ÍZ:”ÌL ÍZÌB”ÌM ÍZÌC”ÌR ÍZÌH”ÌS ÍZÌI”ÌT ÍZÌJ”” Í[
-” Í[”# Í[”% Í[˜” Í\” Í\” Í\”% Í\”& Í\”. Í\"”0 Í\$”1 Í\%—” Í]” Í]”  Í]”! Í]”" Í]”# Í]”, Í] ‘” Í^‘” Í_	’” Ía” Ía–” Íb” Íb”! Íb”$ Íb&”& Íb(”' Íb)–” Íc” Íc” Íc” Íc,”! Íc.”" Íc/˜” Íe” Íe” Íe” Íe”" Íe”' Íe”0 Íe(”2 Íe*˜” Íf
-” Íf”  Íf”$ Íf”% Íf”0 Íf&”1 Íf'”2 Íf(š” Íg
-” Íg” Íg” Íg”  Íg”( Íg”) Íg”. Íg$”/ Íg%”0 Íg&‘” Íh	˜” Íi” Íi” Íi” Íi”  Íi”% Íi”. Íi&”0 Íi(˜” Íj
-” Íj”  Íj”$ Íj”% Íj”. Íj$”/ Íj%”0 Íj&š” Ík
-” Ík” Ík” Ík”  Ík”( Ík”) Ík”, Ík"”- Ík#”. Ík$‘” Íl	˜” Ím” Ím” Ím” Ím”$ Ím”) Ím!”2 Ím*”4 Ím,˜” Ín
-” Ín”  Ín”$ Ín”% Ín”2 Ín(”3 Ín)”4 Ín*š” Ío
-” Ío” Ío” Ío”  Ío”( Ío”) Ío”0 Ío&”1 Ío'”2 Ío(‘” Íp	˜” Ír” Ír” Ír” Ír” Ír” Ír” Ír”  ÍrŸ” Ís” Ís” Ís”" Ís”, Ís$”5 Ís-”= Ís5”ÌH ÍsÌ@”ÌI ÍsÌA”ÌM ÍsÌE”ÌN ÍsÌF”ÌR ÍsÌJ”ÌS ÍsÌK”Ìb ÍsÌZ”Ìc ÍsÌ[’” Íu” Íu” Ív” Ív” Ív” Ív”# Ív”$ Ív”. Ív&”/ Ív'”8 Ív0”: Ív2”Ì@ Ív8”ÌA Ív9”ÌB Ív:˜” Íw” Íw” Íw” Íw” Íw”$ Íw”& Íw”' Íw–” Íy” Íy” Íy” Íy” Íy”! Íy‘” Í{”” Í{” Í{” Í{” Í{˜” Í|” Í|” Í|” Í|” Í|”& Í|”( Í| ”) Í|!˜” Í}” Í}” Í}” Í}”  Í}”% Í}”& Í}”' Í}‘” Í~‘”	 Í”” Í” Í” Í” ÍÜ ” Í€” Í€” Í€” Í€” Í€” Í€”  Í€”$ Í€”& Í€ ”Ì@ Í€:”ÌC Í€=”ÌD Í€>”ÌK Í€ÌE”ÌM Í€ÌG”ÌN Í€ÌH”ÌO Í€ÌI–” Í” Í” Í” Í” Í” Í‘”	 Í‚’” Íƒ” Íƒ‘” Í…‘” ÍŒŸ” Í	”	 Í”
- Í” Í ” Í”$ Í”& Í”/ Í”4 Í”6 Í”Ì@ Í”ÌD Í”ÌF Í‘”ÌR Í‘”ÌV Í‘—” Í“” Í“” Í“	” Í“” Í“” Í“” Í“˜” Í”” Í”” Í”” Í”” Í””ÌJ Í”ÌD”ÌK Í”ÌE”ÌL Í”ÌF‘”	 Í•’” Í—” Í—” Í˜” Í˜” Í˜	” Í˜” Í˜” Í˜” Í˜”& Í˜"”' Í˜#”+ Í˜'”3 Í˜/”7 Í˜3”8 Í˜4”: Í˜6˜” Í™” Í™” Í™” Í™” Í™”+ Í™%”, Í™&”- Í™'‘”	 Íš’” Íœ” Íœ” Í” Í” Í” Í”$ Í”% Í”& Í ”' Í!”1 Í+”2 Í,”3 Í-”4 Í.”? Í9”Ì@ Í:’” ÍŸ”" ÍŸœ” Í ” Í 
-” Í ” Í ”! Í ”0 Í *”1 Í +”> Í 8”? Í 9”ÌH Í ÌB”ÌI Í ÌC”ÌJ Í ÌD’” Í¢” Í¢”” Í£” Í£
-” Í£” Í£˜” Í¤” Í¤” Í¤”% Í¤”& Í¤”- Í¤%”. Í¤&”/ Í¤'‘” Í¥‘” Í¥˜” Í¦” Í¦” Í¦”& Í¦”' Í¦”. Í¦&”/ Í¦'”0 Í¦(‘” Í§’” Í©”% Í©’” Íª”3 Íª-Ÿ” Í«” Í«” Í«” Í«” Í«”  Í«”! Í«”" Í«”* Í«$”+ Í«%”3 Í«-”6 Í«0”7 Í«1”8 Í«2”9 Í«3” Í­” Í­” Í­” Í­”$ Í­”( Í­"”) Í­#”1 Í­+”2 Í­,”7 Í­1”8 Í­2”ÌB Í­<”ÌC Í­=”ÌD Í­>˜” Í¯” Í¯
-” Í¯” Í¯”" Í¯”% Í¯”& Í¯ ”( Í¯"–” Í°” Í°” Í°”& Í°”( Í° ”) Í°!”” Í²” Í²” Í²”! Í²(” Í³
-” Í³” Í³”! Í³”" Í³”) Í³”* Í³ ”3 Í³)”4 Í³*”ÌB Í³8”ÌC Í³9”ÌG Í³=”ÌH Í³>”ÌI Í³?” Í´
-” Í´” Í´”" Í´”# Í´”* Í´ ”+ Í´!”4 Í´*”5 Í´+”ÌC Í´9”ÌD Í´:”ÌI Í´?”ÌJ Í´Ì@”ÌK Í´ÌA” Íµ
-” Íµ” Íµ”$ Íµ”% Íµ”. Íµ$”/ Íµ%”8 Íµ.”9 Íµ/”ÌG Íµ=”ÌH Íµ>”ÌO ÍµÌE”ÌP ÍµÌF”ÌQ ÍµÌG” Í¶
-” Í¶” Í¶”" Í¶”# Í¶”, Í¶"”- Í¶#”6 Í¶,”7 Í¶-”ÌE Í¶;”ÌF Í¶<”ÌK Í¶ÌA”ÌL Í¶ÌB”ÌM Í¶ÌC” Í·
-” Í·” Í·”& Í·”' Í·”0 Í·&”1 Í·'”: Í·0”; Í·1”ÌI Í·?”ÌJ Í·Ì@”ÌS Í·ÌI”ÌT Í·ÌJ”ÌU Í·ÌK’” Í¸	” Í¸
-–” Íº” Íº” Íº” Íº”! Íº”" Íº”” Í»” Í»” Í»”  Í»‘” Í¼–” Í¾” Í¾” Í¾” Í¾” Í¾” Í¾–” Í¿” Í¿” Í¿” Í¿” Í¿”" Í¿‘”	 ÍÁ”” ÍÁ” ÍÁ” ÍÁ” ÍÁÜ ” ÍÂ” ÍÂ” ÍÂ” ÍÂ” ÍÂ” ÍÂ”  ÍÂ”$ ÍÂ”& ÍÂ ”ÌH ÍÂÌB”ÌP ÍÂÌJ”ÌU ÍÂÌO”ÌZ ÍÂÌT”Ì[ ÍÂÌU”Ìb ÍÂÌ\”Ìd ÍÂÌ^”Ìe ÍÂÌ_”Ìf ÍÂÌ`—” ÍÃ” ÍÃ” ÍÃ” ÍÃ” ÍÃ” ÍÃ” ÍÃ‘”	 ÍÄ’” ÍÅ” ÍÅ‘” ÍÇ‘” ÍÌ–” ÍÍ	”	 ÍÍ”
- ÍÍ” ÍÍ” ÍÍ” ÍÍ)–” ÍÎ” ÍÎ” ÍÎ” ÍÎ” ÍÎ” ÍÎœ” ÍÏ” ÍÏ” ÍÏ” ÍÏ” ÍÏ”/ ÍÏ)”0 ÍÏ*”1 ÍÏ+”3 ÍÏ-”7 ÍÏ1”8 ÍÏ2”9 ÍÏ3‘”	 ÍĞœ” ÍÑ” ÍÑ” ÍÑ” ÍÑ” ÍÑ”+ ÍÑ'”, ÍÑ(”2 ÍÑ.”4 ÍÑ0”9 ÍÑ5”: ÍÑ6”; ÍÑ7’” ÍÒ” ÍÒ‘” ÍÔ‘” ÍÚ–” ÍÛ	”	 ÍÛ”
- ÍÛ” ÍÛ” ÍÛ”! ÍÛÌO’” ÍÜ” ÍÜœ” Íİ” Íİ
-” Íİ” Íİ” Íİ”) Íİ%”+ Íİ'”6 Íİ2”8 Íİ4”ÌD ÍİÌ@”ÌE ÍİÌA”ÌF ÍİÌBš” ÍŞ” ÍŞ” ÍŞ	” ÍŞ” ÍŞ”# ÍŞ”$ ÍŞ ”- ÍŞ)”. ÍŞ*”0 ÍŞ,Ü ” Íß” Íß” Íß” Íß” Íß”& Íß ”/ Íß)”: Íß4”ÌG ÍßÌA”ÌH ÍßÌB”ÌL ÍßÌF”ÌM ÍßÌG”ÌQ ÍßÌK”ÌR ÍßÌL”ÌT ÍßÌN”ÌU ÍßÌO”ÌV ÍßÌP‘”	 Íà—” Íâ” Íâ” Íâ	” Íâ” Íâ” Íâ” Íâ˜” Íã” Íã” Íã” Íã” Íã”3 Íã-”4 Íã.”5 Íã/‘”	 Íä’” Íæ” Íæ’” Íç” Íç˜” Íè” Íè” Íè” Íè”9 Íè3”ÌB Íè<”ÌD Íè>”ÌE Íè?” Íé” Íé” Íé” Íé”$ Íé”( Íé"”) Íé#”1 Íé+”2 Íé,”: Íé4”; Íé5”> Íé8”? Íé9”Ì@ Íé:’” Íë” Íë
-˜” Íì” Íì” Íì” Íì”& Íì”) Íì!”* Íì"”, Íì$–” Íí
-” Íí” Íí”* Íí ”, Íí"”- Íí#›” Íî
-” Íî”% Íî”( Íî”1 Íî'”2 Íî(”Ì@ Íî6”ÌA Íî7”ÌH Íî>”ÌI Íî?”ÌJ ÍîÌ@™” Íï
-” Íï”$ Íï”% Íï”, Íï"”- Íï#”8 Íï.”9 Íï/”: Íï0‘” Íğ	”” Íñ” Íñ” Íñ” Íñ‘” Íò‘” Íò’” Íó” Íó–” Íô” Íô” Íô” Íô”! Íô”" Íô‘” Íõ‘”	 Íö”” Íö” Íö” Íö” Íö–” Í÷” Í÷” Í÷” Í÷” Í÷(” Í÷)Ü ” Íø” Íø” Íø” Íø” Íø”! Íø”* Íø$”: Íø4”? Íø9”Ì@ Íø:”ÌD Íø>”ÌM ÍøÌG”ÌR ÍøÌL”ÌS ÍøÌM”ÌZ ÍøÌT”Ì\ ÍøÌV”Ì] ÍøÌW”Ì^ ÍøÌXœ” Íù” Íù” Íù” Íù” Íù”) Íù#”. Íù(”/ Íù)”6 Íù0”8 Íù2”9 Íù3”: Íù4‘”	 Íú’” Íû” Íû’” Íı” Íı—” Íş” Íş” Íş	” Íş” Íş” Íş” Íş˜” Íÿ” Íÿ” Íÿ” Íÿ” Íÿ”ÌJ ÍÿÌD”ÌK ÍÿÌE”ÌL ÍÿÌF‘”	 Í –” Í” Í” Í” Í” Í” Í’” Í” Í‘” Í‘” Í	™” Í
-	”	 Í
-”
- Í
-” Í
-” Í
-” Í
-$” Í
-&”" Í
-8”' Í
-=—” Í” Í” Í	” Í” Í” Í” Í˜” Í” Í” Í” Í” Í”ÌJ ÍÌD”ÌK ÍÌE”ÌL ÍÌF‘”	 Í’” Í” Í” Í” Í” Í	” Í” Í” Í” Í”  Í”! Í”% Í!”' Í#”+ Í'”, Í(”. Í*˜” Í” Í” Í” Í” Í”% Í”& Í ”' Í!‘”	 Í’” Í” Í˜” Í” Í
-” Í” Í” Í”* Í$”, Í&”- Í'’” Í” Í
-” Í” Í” Í”" Í”( Í ”) Í!”* Í"”+ Í#”5 Í-”6 Í.”7 Í/”8 Í0”ÌC Í;”ÌD Í<’” Í” Í” Í” Í”  Í”# Í”) Í!”- Í%”. Í&”8 Í0”9 Í1”? Í7”ÌA Í9”ÌC Í;”ÌD Í<”ÌE Í=•” Í” Í” Í” Í”! Í˜” Í
-” Í” Í”! Í”" Í”* Í ”, Í"”- Í#—” Í
-” Í” Í” Í” Í” Í”' Í‘” Í	’” Í!”& Í!œ” Í"” Í"” Í"”! Í"”% Í"”4 Í",”5 Í"-”ÌB Í":”ÌC Í";”ÌL Í"ÌD”ÌM Í"ÌE”ÌN Í"ÌFš” Í#” Í#” Í#”" Í#”# Í#”' Í#”) Í#!”+ Í##”, Í#$”- Í#%’” Í%” Í%” Í&” Í&”! Í&”$ Í&”* Í&"”. Í&&”/ Í&'”7 Í&/”8 Í&0”> Í&6”? Í&7”ÌI Í&ÌA”ÌJ Í&ÌB”ÌK Í&ÌC–” Í(” Í(” Í(”" Í(”# Í(”% Í(˜” Í)
-” Í)” Í)”! Í)”" Í)”( Í)”* Í) ”+ Í)!Ü ” Í*
-” Í*” Í*” Í*” Í*”% Í*”' Í*”+ Í*!”- Í*#”ÌE Í*;”ÌK Í*ÌA”ÌL Í*ÌB”ÌM Í*ÌC”ÌN Í*ÌD”ÌT Í*ÌJ”ÌU Í*ÌK”ÌV Í*ÌL”ÌW Í*ÌM”Ì^ Í*ÌT”Ìk Í*Ìa”Ìm Í*Ìc”Ìo Í*Ìe”Ìp Í*Ìf”Ìq Í*Ìg–” Í+
-” Í+” Í+” Í+” Í+”% Í+‘” Í,	‘” Í,˜” Í-
-” Í-” Í-”! Í-”" Í-”* Í- ”, Í-"”- Í-#—” Í.
-” Í.” Í.” Í.” Í.” Í.”* Í. ‘” Í/	‘” Í1”” Í1” Í1” Í1” Í1˜” Í2” Í2” Í2” Í2” Í2”& Í2”( Í2 ”) Í2!—” Í3” Í3” Í3” Í3”! Í3”" Í3”# Í3‘” Í4‘”	 Í5”” Í5” Í5” Í5” Í5Ü ” Í6” Í6” Í6” Í6” Í6” Í6”  Í6”$ Í6”& Í6 ”: Í64”Ì@ Í6:”ÌA Í6;”ÌB Í6<”ÌC Í6=”ÌI Í6ÌC”ÌJ Í6ÌD”ÌK Í6ÌE”ÌL Í6ÌF”ÌS Í6ÌM”Ì_ Í6ÌY”Ìa Í6Ì[”Ìf Í6Ì`”Ìi Í6Ìc”Ìj Í6Ìd”Ìq Í6Ìk”Ìs Í6Ìm”Ìt Í6Ìn”Ìu Í6Ìo–” Í7” Í7” Í7” Í7” Í7” Í7‘”	 Í8’” Í9” Í9‘” Í;‘” Í?–” Í@	”	 Í@”
- Í@” Í@"” Í@#”* Í@ÌB—” ÍA” ÍA” ÍA	” ÍA” ÍA” ÍA” ÍA˜” ÍB” ÍB” ÍB” ÍB” ÍB”ÌJ ÍBÌD”ÌK ÍBÌE”ÌL ÍBÌF‘”	 ÍCœ” ÍE” ÍE” ÍE	” ÍE” ÍE”" ÍE”& ÍE"”' ÍE#”3 ÍE/”4 ÍE0”= ÍE9”? ÍE;˜” ÍF” ÍF” ÍF” ÍF” ÍF”% ÍF”& ÍF ”' ÍF!‘”	 ÍG’” ÍI” ÍI˜” ÍJ” ÍJ
-” ÍJ” ÍJ” ÍJ”* ÍJ$”, ÍJ&”- ÍJ'’” ÍL” ÍL
-Ü ” ÍM” ÍM” ÍM” ÍM”# ÍM”$ ÍM”. ÍM&”/ ÍN
-”Ìƒ ÍNÌ^”Ì… ÍO
-”Ì† ÍO”Ì’ ÍO”Ì“ ÍO”Ì— ÍO”Ì™ ÍO”Ì¥ ÍO*”Ì¦ ÍO+”Ì® ÍO3”Ì° ÍO5”Ì¼ ÍOÌA”Ì½ ÍOÌB”ÌÆ ÍOÌK”ÌÈ ÍOÌM”ÌÔ ÍOÌY”ÌÕ ÍOÌZ”ÌÜ ÍOÌa”Ìİ ÍOÌb”ÌŞ ÍP	”Ìß ÍP
-˜” ÍQ” ÍQ” ÍQ” ÍQ” ÍQ”$ ÍQ”& ÍQ”' ÍQÜ ” ÍR” ÍR” ÍR” ÍR” ÍR”! ÍR”# ÍR”' ÍR”) ÍR!”ÌR ÍRÌJ”Ì^ ÍRÌV”Ì_ ÍRÌW”Ìc ÍRÌ[”Ìe ÍRÌ]”Ìf ÍRÌ^”Ìg ÍRÌ_–” ÍS” ÍS” ÍS” ÍS” ÍS”! ÍS‘” ÍT”” ÍT” ÍT” ÍT” ÍT˜” ÍU” ÍU” ÍU” ÍU” ÍU”& ÍU”( ÍU ”) ÍU!—” ÍV” ÍV” ÍV” ÍV”! ÍV”" ÍV”# ÍV‘” ÍW‘”	 ÍX”” ÍX” ÍX” ÍX” ÍXÜ ” ÍY” ÍY” ÍY” ÍY” ÍY” ÍY”  ÍY”$ ÍY”& ÍY ”ÌJ ÍYÌD”ÌM ÍYÌG”ÌN ÍYÌH”ÌU ÍYÌO”ÌW ÍYÌQ”ÌX ÍYÌR”ÌY ÍYÌS–” ÍZ” ÍZ” ÍZ” ÍZ” ÍZ” ÍZ‘”	 Í[’” Í\” Í\‘” Í^‘” Ía”” Íb	”	 Íb”
- Íb” Íb#—” Íc” Íc” Íc	” Íc” Íc” Íc” Íc˜” Íd” Íd” Íd” Íd” Íd”ÌJ ÍdÌD”ÌK ÍdÌE”ÌL ÍdÌF‘”	 Íe–” Íg” Íg
-” Íg” Íg”ÌB Íg>”ÌC Íg?’” Íi” Íi” Íj” Íj” Íj” Íj”$ Íj”( Íj"”) Íj#”1 Íj+”2 Íj,”: Íj4”; Íj5”> Íj8”? Íj9”Ì@ Íj:–” Ík” Ík” Ík” Ík)”  Ík+”! Ík,—” Ím” Ím” Ím” Ím”( Ím"”* Ím$”, Ím&•” Ín” Ín” Ín” Ín” Ín” Ío
-” Ío” Ío”! Ío”" Ío”) Ío”* Ío ”3 Ío)”4 Ío*”ÌB Ío8”ÌC Ío9”ÌG Ío=”ÌH Ío>”ÌI Ío?” Íp
-” Íp” Íp”# Íp”$ Íp”- Íp#”. Íp$”7 Íp-”8 Íp.”ÌF Íp<”ÌG Íp=”ÌM ÍpÌC”ÌN ÍpÌD”ÌO ÍpÌE” Íq
-” Íq” Íq”' Íq”( Íq”1 Íq'”2 Íq(”; Íq1”< Íq2”ÌJ ÍqÌ@”ÌK ÍqÌA”ÌU ÍqÌK”ÌV ÍqÌL”ÌW ÍqÌM” Ír
-” Ír” Ír”( Ír”) Ír”2 Ír(”3 Ír)”< Ír2”= Ír3”ÌK ÍrÌA”ÌL ÍrÌB”ÌW ÍrÌM”ÌX ÍrÌN”ÌY ÍrÌO” Ís
-” Ís” Ís”& Ís”' Ís”0 Ís&”1 Ís'”: Ís0”; Ís1”ÌI Ís?”ÌJ ÍsÌ@”ÌS ÍsÌI”ÌT ÍsÌJ”ÌU ÍsÌK“” Ít	” Ít
-” Ít‘” Íu–” Íw” Íw” Íw” Íw” Íw” Íw”” Íx” Íx” Íx” Íx‘”	 Íy”” Íy” Íy” Íy” Íy” Íz” Íz” Íz” Íz” Íz”! Íz”" Íz”ÌF ÍzÌ@”ÌK ÍzÌE”ÌL ÍzÌF”ÌS ÍzÌM”ÌU ÍzÌO”ÌV ÍzÌP”ÌW ÍzÌQ” Í{” Í{” Í{” Í{” Í{” Í{”  Í{”$ Í{”& Í{ ”) Í{#”* Í{$”1 Í{+”2 Í{,”3 Í{-”” Í|” Í|” Í|” Í|‘”	 Í}’” Í~” Í~‘” Í€‘” Í…˜” Í†	”	 Í†”
- Í†” Í†"” Í†#”  Í†-”" Í†/”. Í†ÌP—” Í‡” Í‡” Í‡	” Í‡” Í‡” Í‡” Í‡˜” Íˆ” Íˆ” Íˆ” Íˆ” Íˆ”ÌJ ÍˆÌD”ÌK ÍˆÌE”ÌL ÍˆÌF‘”	 Í‰” Í‹” Í‹” Í‹	” Í‹” Í‹” Í‹” Í‹”  Í‹”! Í‹”% Í‹!”' Í‹#”+ Í‹'”, Í‹(”. Í‹*˜” ÍŒ” ÍŒ” ÍŒ” ÍŒ” ÍŒ”% ÍŒ”& ÍŒ ”' ÍŒ!‘”	 Í–” Í” Í
-” Í” Í"” Í$” Í%–” Í” Í
-” Í” Í(” Í*” Í+˜” Í’” Í’” Í’” Í’” Í’”" Í’”+ Í’'”- Í’)˜” Í“” Í“” Í“” Í“” Í“”' Í“!”( Í“"”) Í“#š” Í”” Í”” Í”” Í”” Í””$ Í””% Í””) Í”#”* Í”$”+ Í”%‘”	 Í•˜” Í–” Í–” Í–” Í–”! Í–”& Í–"”/ Í–+”1 Í–-˜” Í—” Í—” Í—” Í—” Í—”+ Í—%”, Í—&”- Í—'š” Í˜” Í˜” Í˜” Í˜” Í˜”$ Í˜”% Í˜”- Í˜'”. Í˜(”/ Í˜)‘”	 Í™˜” Íš” Íš” Íš” Íš”" Íš”' Íš#”0 Íš,”2 Íš.˜” Í›” Í›” Í›” Í›” Í›”, Í›&”- Í›'”. Í›(š” Íœ” Íœ” Íœ” Íœ” Íœ”$ Íœ”% Íœ”. Íœ(”/ Íœ)”0 Íœ*‘”	 Í˜” Í” Í” Í” Í”  Í”% Í!”. Í*”0 Í,˜” ÍŸ” ÍŸ” ÍŸ” ÍŸ” ÍŸ”* ÍŸ$”+ ÍŸ%”, ÍŸ&š” Í ” Í ” Í ” Í ” Í ”$ Í ”% Í ”, Í &”- Í '”. Í (‘”	 Í¡˜” Í£” Í£” Í£” Í£” Í£”# Í£”$ Í£ ”& Í£"˜” Í¤” Í¤” Í¤” Í¤” Í¤”, Í¤&”- Í¤'”. Í¤(‘”	 Í¥’” Í§” Í§˜” Í¨” Í¨
-” Í¨” Í¨” Í¨”* Í¨$”, Í¨&”- Í¨'’” Íª” Íª
-œ” Í«” Í«” Í«” Í«”% Í«”) Í«!”* Í«"”= Í«5”> Í«6”Ì@ Í«8”ÌA Í«9”ÌB Í«:•” Í¬” Í¬” Í¬” Í¬” Í¬˜” Í­
-” Í­” Í­”! Í­”" Í­”* Í­ ”, Í­"”- Í­#—” Í®
-” Í®” Í®” Í®” Í®” Í®”' Í®‘” Í¯	˜” Í±” Í±” Í±” Í±” Í±” Í±” Í±”  Í±” Í²” Í²” Í²”" Í²”> Í²6”ÌI Í²ÌA”ÌJ Í²ÌB”ÌN Í²ÌF”ÌO Í²ÌG”ÌS Í²ÌK”ÌT Í²ÌL”Ìc Í²Ì[”Ìd Í²Ì\” Í³” Í³” Í³” Í³”# Í³”$ Í³”. Í³&”/ Í³'”8 Í³0”: Í³2”Ì@ Í³8”ÌA Í³9”ÌB Í³:˜” Í´” Í´” Í´” Í´” Í´”$ Í´”& Í´”' Í´–” Í¶” Í¶” Í¶” Í¶” Í¶”! Í¶‘” Í·”” Í·” Í·” Í·” Í·˜” Í¸” Í¸” Í¸” Í¸” Í¸”& Í¸”( Í¸ ”) Í¸!˜” Í¹” Í¹” Í¹” Í¹”  Í¹”% Í¹”& Í¹”' Í¹‘” Íº‘”	 Í»”” Í»” Í»” Í»” Í»Ü ” Í¼” Í¼” Í¼” Í¼” Í¼” Í¼”  Í¼”$ Í¼”& Í¼ ”ÌJ Í¼ÌD”ÌM Í¼ÌG”ÌN Í¼ÌH”ÌU Í¼ÌO”ÌW Í¼ÌQ”ÌX Í¼ÌR”ÌY Í¼ÌS–” Í½” Í½” Í½” Í½” Í½” Í½‘”	 Í¾’” Í¿” Í¿‘” ÍÁ‘” ÍÅ–” ÍÆ	”	 ÍÆ”
- ÍÆ” ÍÆ"” ÍÆ#”  ÍÆ-—” ÍÇ” ÍÇ” ÍÇ	” ÍÇ” ÍÇ” ÍÇ” ÍÇ˜” ÍÈ” ÍÈ” ÍÈ” ÍÈ” ÍÈ”ÌJ ÍÈÌD”ÌK ÍÈÌE”ÌL ÍÈÌF‘”	 ÍÉ” ÍË” ÍË” ÍË	” ÍË” ÍË” ÍË” ÍË”  ÍË”! ÍË”% ÍË!”' ÍË#”+ ÍË'”, ÍË(”. ÍË*˜” ÍÌ” ÍÌ” ÍÌ” ÍÌ” ÍÌ”% ÍÌ”& ÍÌ ”' ÍÌ!‘”	 ÍÍ’” ÍÏ” ÍÏ˜” ÍĞ” ÍĞ
-” ÍĞ” ÍĞ” ÍĞ”* ÍĞ$”, ÍĞ&”- ÍĞ'’” ÍÒ” ÍÒ
-œ” ÍÓ” ÍÓ” ÍÓ” ÍÓ”% ÍÓ”) ÍÓ!”* ÍÓ"”= ÍÓ5”> ÍÓ6”Ì@ ÍÓ8”ÌA ÍÓ9”ÌB ÍÓ:•” ÍÔ” ÍÔ” ÍÔ” ÍÔ” ÍÔ˜” ÍÕ
-” ÍÕ” ÍÕ”! ÍÕ”" ÍÕ”* ÍÕ ”, ÍÕ"”- ÍÕ#—” ÍÖ
-” ÍÖ” ÍÖ” ÍÖ” ÍÖ” ÍÖ”' ÍÖ‘” Í×	œ” ÍÙ” ÍÙ”  ÍÙ”# ÍÙ”' ÍÙ”6 ÍÙ.”7 ÍÙ/”ÌD ÍÙ<”ÌE ÍÙ=”ÌT ÍÙÌL”ÌU ÍÙÌM”ÌV ÍÙÌNš” ÍÚ” ÍÚ” ÍÚ”" ÍÚ”# ÍÚ”' ÍÚ”) ÍÚ!”+ ÍÚ#”, ÍÚ$”- ÍÚ%” ÍÛ” ÍÛ”! ÍÛ”$ ÍÛ”* ÍÛ"”. ÍÛ&”/ ÍÛ'”7 ÍÛ/”8 ÍÛ0”> ÍÛ6”? ÍÛ7”ÌI ÍÛÌA”ÌJ ÍÛÌB”ÌK ÍÛÌC–” Íİ” Íİ” Íİ”" Íİ”# Íİ”% Íİ˜” ÍŞ
-” ÍŞ” ÍŞ”! ÍŞ”" ÍŞ”( ÍŞ”* ÍŞ ”+ ÍŞ!” Íß
-” Íß” Íß” Íß” Íß”% Íß”' Íß”+ Íß!”- Íß#”ÌX ÍßÌN”ÌZ ÍßÌP”Ì\ ÍßÌR”Ì] ÍßÌS”Ì^ ÍßÌT–” Íà
-” Íà” Íà” Íà” Íà”% Íà‘” Íá	‘” Íá˜” Íâ
-” Íâ” Íâ”! Íâ”" Íâ”* Íâ ”, Íâ"”- Íâ#—” Íã
-” Íã” Íã” Íã” Íã” Íã”* Íã ‘” Íä	‘” Íå”” Íå” Íå” Íå” Íå˜” Íæ” Íæ” Íæ” Íæ” Íæ”& Íæ”( Íæ ”) Íæ!—” Íç” Íç” Íç” Íç”! Íç”" Íç”# Íç‘” Íè‘”	 Íé”” Íé” Íé” Íé” ÍéÜ ” Íê” Íê” Íê” Íê” Íê” Íê”  Íê”$ Íê”& Íê ”ÌL ÍêÌF”ÌN ÍêÌH”ÌS ÍêÌM”ÌV ÍêÌP”ÌW ÍêÌQ”Ì^ ÍêÌX”Ì` ÍêÌZ”Ìa ÍêÌ[”Ìb ÍêÌ\–” Íë” Íë” Íë” Íë” Íë” Íë‘”	 Íì’” Íí” Íí‘” Íï‘” Íô”” Íõ	”	 Íõ”
- Íõ” Íõ!—” Íö” Íö” Íö	” Íö” Íö” Íö” Íö˜” Í÷” Í÷” Í÷” Í÷” Í÷”3 Í÷-”4 Í÷.”5 Í÷/‘”	 Íø’” Íú” Íú’” Íû” Íû˜” Íü” Íü
-” Íü” Íü” Íü”* Íü$”, Íü&”- Íü'’” Íş” Íş
-’” Íÿ”& Íÿ” Í ” Í ”! Í ”$ Í ”* Í "”. Í &”/ Í '”7 Í /”8 Í 0”Ì@ Í 8”ÌA Í 9”Ìi Í Ìa”Ìj Í Ìb”Ìk Í Ìc–” Í” Í” Í” Í”  Í”! Í’” Í” Í˜” Í
-” Í”# Í”$ Í”, Í"”/ Í%”0 Í&”2 Í(–” Í”# Í”$ Í”0 Í$”2 Í&”3 Í'Ÿ” Í”  Í”# Í”. Í"”/ Í#”6 Í*”7 Í+”ÌB Í6”ÌC Í7”ÌQ ÍÌE”ÌR ÍÌF”ÌY ÍÌM”ÌZ ÍÌN”Ì[ ÍÌO”Ì\ ÍÌP‘” Í‘” Í	‘” Í–” Í	
-” Í	”  Í	”% Í	”' Í	”( Í	‘” Í
-	’” Í” Í›” Í” Í” Í” Í”# Í”$ Í”. Í&”/ Í'”ÌE Í=”ÌF Í>”ÌG Í?’” Í”+ Í#›” Í” Í” Í” Í”# Í”$ Í”. Í&”/ Í'”Ìd ÍÌ\”Ìe ÍÌ]”Ìf ÍÌ^’” Í” Í˜” Í” Í” Í” Í” Í”$ Í”& Í”' Íš” Í” Í” Í” Í” Í”/ Í'”7 Í/”< Í4”= Í5”> Í6”” Í” Í” Í”  Í‘” Í”” Í” Í” Í” Í’” Í” Í˜” Í” Í” Í” Í” Í”& Í”( Í ”) Í!›” Í” Í” Í” Í”) Í!”* Í"”/ Í'”1 Í)”Ì@ Í8”ÌA Í9”ÌB Í:‘” Í‘”	 Í”” Í” Í” Í” Í›” Í” Í” Í” Í”% Í”& Í ”) Í#”+ Í%”< Í6”= Í7”> Í8‘”	 Í’” Í” Í‘” Í!‘” Í$”” Í%	”	 Í%”
- Í%” Í%—” Í&” Í&” Í&	” Í&” Í&” Í&” Í&˜” Í'” Í'” Í'” Í'” Í'”ÌJ Í'ÌD”ÌK Í'ÌE”ÌL Í'ÌF‘”	 Í(œ” Í*” Í*
-” Í*” Í*”  Í*”$ Í* ”% Í*!”0 Í*,”1 Í*-”5 Í*1”6 Í*2”7 Í*3œ” Í+” Í+
-” Í+” Í+”! Í+”% Í+!”& Í+"”1 Í+-”2 Í+.”7 Í+3”8 Í+4”9 Í+5”” Í-” Í-
-” Í-” Í-#”” Í.” Í.” Í.” Í.™” Í/” Í/” Í/” Í/”  Í/”" Í/”# Í/”. Í/(”0 Í/*” Í0” Í0” Í0” Í0”  Í0”# Í0”$ Í0”% Í0”& Í0/”( Í0ÌB”* Í0ÌD”+ Í0ÌE”, Í0ÌF–” Í1” Í1” Í1” Í1” Í1” Í1–” Í2” Í2” Í2” Í2” Í2” Í2–” Í3” Í3” Í3” Í3” Í3”" Í3–” Í4” Í4” Í4” Í4” Í4” Í4“” Í5” Í5” Í5	” Í6” Í6” Í6”! Í6”" Í6”% Í6”& Í6 ”' Í6!”( Í61”* Í6ÌD”, Í6ÌF”- Í6ÌG”. Í6ÌH–” Í7” Í7” Í7” Í7” Í7” Í7–” Í8” Í8” Í8” Í8” Í8” Í8–” Í9” Í9” Í9” Í9” Í9”" Í9–” Í:” Í:” Í:” Í:” Í:” Í:“” Í;” Í;” Í;	’”	 Í<”
- Í<” Í>” Í>” Í>” Í>” Í>” Í>”( Í>$”* Í>&”. Í>*”0 Í>,”1 Í>-”2 Í>.”3 Í>/’” Í?” Í?‘” ÍA‘” ÍE–” ÍF	”	 ÍF”
- ÍF” ÍF” ÍF” ÍF*—” ÍG” ÍG” ÍG	” ÍG” ÍG” ÍG” ÍG˜” ÍH” ÍH” ÍH” ÍH” ÍH”ÌJ ÍHÌD”ÌK ÍHÌE”ÌL ÍHÌF‘”	 ÍI”” ÍK” ÍK” ÍK” ÍK’” ÍM” ÍMš” ÍN” ÍN
-” ÍN” ÍN” ÍN” ÍN” ÍN”" ÍN”# ÍN+”$ ÍN,‘”	 ÍO’” ÍO” ÍO” ÍP” ÍP” ÍP” ÍP#” ÍP%”$ ÍP,”& ÍP.”+ ÍP3”- ÍP5”4 ÍP<”6 ÍP>”ÌG ÍPÌO”ÌI ÍPÌQ”ÌJ ÍPÌR”” ÍQ” ÍQ” ÍQ” ÍQ‘”	 ÍR™” ÍT” ÍT” ÍT” ÍT” ÍT” ÍT”$ ÍT ”, ÍT(”. ÍT*” ÍU” ÍU” ÍU” ÍU#” ÍU%”$ ÍU,”& ÍU.”+ ÍU3”- ÍU5”4 ÍU<”6 ÍU>”ÌD ÍUÌL”ÌF ÍUÌN”ÌG ÍUÌO”” ÍV” ÍV” ÍV” ÍV‘”	 ÍWÜ ” ÍX” ÍX” ÍX	” ÍX” ÍX” ÍX” ÍX” ÍX”  ÍX”( ÍX$”) ÍX%”- ÍX)”. ÍX*”3 ÍX/”4 ÍX0”; ÍX7”< ÍX8”Ì@ ÍX<”ÌA ÍX=”ÌJ ÍXÌF”ÌK ÍXÌG”ÌM ÍXÌI” ÍY” ÍY” ÍY” ÍY#” ÍY%”$ ÍY,”& ÍY.”+ ÍY3”- ÍY5”4 ÍY<”6 ÍY>”ÌE ÍYÌM”ÌG ÍYÌO”ÌH ÍYÌP”” ÍZ” ÍZ” ÍZ” ÍZ‘”	 Í[š” Í]” Í]
-” Í]”" Í]”# Í]”( Í]5”* Í]7”3 Í]ÌH”5 Í]Ì_”7 Í]ÌaÜ ” Í^” Í^
-” Í^” Í^” Í^”" Í^”' Í^!”/ Í^)”3 Í^-”8 Í^2”9 Í^3”> Í^8”? Í^9”ÌC Í^=”ÌE Í^?”ÌF Í^Ì@”ÌL Í^ÌF”ÌQ Í^ÌK”ÌR Í^ÌL”ÌT Í^ÌNÜ ” Í_” Í_” Í_” Í_%”! Í_'”( Í_.”* Í_0”/ Í_5”1 Í_7”8 Í_>”: Í_Ì@”= Í_ÌC”ÌF Í_ÌL”ÌT Í_ÌZ”ÌV Í_Ì\”ÌW Í_Ì]”” Í`” Í`” Í`” Í`‘” ÍaÜ ” Íb” Íb
-” Íb” Íb” Íb”  Íb”% Íb”- Íb'”1 Íb+”6 Íb0”7 Íb1”: Íb4”; Íb5”? Íb9”ÌA Íb;”ÌB Íb<”ÌH ÍbÌB”ÌM ÍbÌG”ÌN ÍbÌH”ÌP ÍbÌJÜ ” Íc” Íc” Íc” Íc%”! Íc'”( Íc.”* Íc0”/ Íc5”1 Íc7”8 Íc>”: ÍcÌ@”= ÍcÌC”ÌF ÍcÌL”ÌS ÍcÌY”ÌU ÍcÌ[”ÌV ÍcÌ\”” Íd” Íd” Íd” Íd‘” ÍeÜ ” Íf” Íf
-” Íf” Íf” Íf”$ Íf”) Íf#”1 Íf+”5 Íf/”: Íf4”; Íf5”ÌB Íf<”ÌC Íf=”ÌG ÍfÌA”ÌI ÍfÌC”ÌJ ÍfÌD”ÌP ÍfÌJ”ÌU ÍfÌO”ÌV ÍfÌP”ÌX ÍfÌRÜ ” Íg” Íg” Íg” Íg%”! Íg'”( Íg.”* Íg0”/ Íg5”1 Íg7”8 Íg>”: ÍgÌ@”= ÍgÌC”ÌF ÍgÌL”ÌX ÍgÌ^”ÌZ ÍgÌ`”Ì[ ÍgÌa”” Íh” Íh” Íh” Íh‘” ÍiÜ ” Íj” Íj
-” Íj” Íj” Íj”  Íj”% Íj”- Íj'”1 Íj+”6 Íj0”7 Íj1”: Íj4”> Íj8”? Íj9”ÌC Íj=”ÌD Íj>”ÌJ ÍjÌD”ÌK ÍjÌE”ÌT ÍjÌN”ÌU ÍjÌO”ÌZ ÍjÌT”Ì[ ÍjÌU”Ì^ ÍjÌX”Ì_ ÍjÌY”Ìa ÍjÌ[Ü ” Ík” Ík” Ík” Ík%”! Ík'”( Ík.”* Ík0”/ Ík5”1 Ík7”8 Ík>”: ÍkÌ@”= ÍkÌC”ÌF ÍkÌL”ÌT ÍkÌZ”ÌV ÍkÌ\”ÌW ÍkÌ]”” Íl” Íl” Íl” Íl‘” Ím”” Ín” Ín” Ín” Ín“” Ío”	 Ío”
- Ío™” Íq” Íq	” Íq” Íq” Íq”  Íq”! Íq”) Íq%”+ Íq'›” Ír” Ír” Ír” Ír”) Ír#”* Ír$”/ Ír)”1 Ír+”; Ír5”< Ír6”= Ír7”” Ís” Ís
-” Ís” Ís”” Ít” Ít” Ít” Ít‘” Íu‘”	 Ív™” Íw” Íw	” Íw” Íw” Íw”  Íw”! Íw”* Íw&”, Íw(›” Íx” Íx” Íx” Íx”) Íx#”* Íx$”/ Íx)”1 Íx+”< Íx6”= Íx7”> Íx8”” Íy” Íy
-” Íy” Íy”” Íz” Íz” Íz” Íz‘” Í{‘”	 Í|’” Í~” Í~˜” Í” Í
-” Í” Í” Í”* Í$”, Í&”- Í'›” Í” Í” Í” Í” Í”  Í”* Í$”+ Í%”ÌB Í<”ÌC Í=”ÌD Í>›” Í‚” Í‚” Í‚” Í‚” Í‚”  Í‚”* Í‚$”+ Í‚%”ÌA Í‚;”ÌB Í‚<”ÌC Í‚=›” Íƒ” Íƒ” Íƒ” Íƒ” Íƒ”  Íƒ”* Íƒ$”+ Íƒ%”Ì` ÍƒÌZ”Ìa ÍƒÌ[”Ìb ÍƒÌ\›” Í„” Í„” Í„” Í„” Í„”  Í„”* Í„$”+ Í„%”Ìa Í„Ì[”Ìb Í„Ì\”Ìc Í„Ì]™” Í†” Í†” Í†” Í†”  Í†”$ Í†”% Í†”- Í†'”/ Í†)Ü ” Í‡” Í‡” Í‡” Í‡”# Í‡”$ Í‡”. Í‡&”/ Íˆ
-”Ìt ÍˆÌO”Ìv Í‰
-”Ìw Í‰”Ì| Í‰”Ì} Í‰”Ì‚ Í‰”Ì„ Í‰”Ì‰ Í‰”ÌŠ Í‰”Ì Í‰!”Ì Í‰#”Ì” Í‰(”Ì• Í‰)”Ìœ Í‰0”Ì Í‰2”Ì£ Í‰7”Ì¤ Í‰8”Ì§ Í‰;”Ì¨ Í‰<”Ì© ÍŠ	”Ìª ÍŠ
-‘” Í‹™” ÍŒ” ÍŒ” ÍŒ” ÍŒ”  ÍŒ”$ ÍŒ”% ÍŒ”. ÍŒ(”0 ÍŒ*Ü ” Í” Í” Í” Í”# Í”$ Í”. Í&”/ Í
-”Ìu ÍÌP”Ìw Í
-”Ìx Í”Ì} Í”Ì~ Í”Ìƒ Í”Ì… Í”ÌŠ Í”Ì‹ Í”Ì Í!”Ì Í#”Ì• Í(”Ì– Í)”Ì Í0”ÌŸ Í2”Ì¤ Í7”Ì¥ Í8”Ì¨ Í;”Ì© Í<”Ìª Í	”Ì« Í
-‘” Í‘˜” Í“” Í“
-” Í“” Í“” Í“”  Í“”" Í“”# Í“Ü ” Í”” Í”” Í”” Í”#” Í”%”$ Í”,”& Í”.”* Í”2”, Í”4”3 Í”;”5 Í”=”= Í”ÌE”ÌA Í”ÌI”ÌB Í”ÌJ”ÌJ Í”ÌR”ÌK Í”ÌS”ÌQ Í”ÌY”ÌZ Í”Ìb”Ì^ Í”Ìf”Ì_ Í”Ìg”Ìh Í”Ìp”Ìi Í”Ìq”Ìo Í”Ìw”Ìw Í”Ì”Ìy Í”Ì”Ìz Í”Ì‚”” Í•” Í•” Í•” Í•‘”	 Í–”” Í–” Í–” Í–” Í–˜” Í—” Í—
-” Í—” Í—” Í—”" Í—”$ Í—”% Í—Ü ” Í˜” Í˜” Í˜” Í˜#” Í˜%”$ Í˜,”& Í˜.”+ Í˜3”- Í˜5”4 Í˜<”6 Í˜>”> Í˜ÌG”ÌA Í˜ÌT”ÌB Í˜ÌU”ÌI Í˜Ì\”ÌK Í˜Ì^”ÌM Í˜Ì`”ÌN Í˜Ìa”” Í™” Í™” Í™” Í™‘”	 Íš’” Í›” Í›’” Í”; Í9‘” ÍŸ‘” Í¢–” Í£	”	 Í£”
- Í£” Í£” Í£ ”! Í£6—” Í¤” Í¤” Í¤	” Í¤” Í¤” Í¤” Í¤˜” Í¥” Í¥” Í¥” Í¥” Í¥”ÌJ Í¥ÌD”ÌK Í¥ÌE”ÌL Í¥ÌF‘”	 Í¦Ü ” Í¨” Í¨” Í¨	” Í¨” Í¨” Í¨” Í¨” Í¨”$ Í¨ ”% Í¨!”) Í¨%”- Í¨)”. Í¨*”4 Í¨0”5 Í¨1”; Í¨7”= Í¨9˜” Í©” Í©” Í©” Í©” Í©”/ Í©)”0 Í©*”1 Í©+‘”	 Íª’” Í¬” Í¬™” Í­” Í­” Í­” Í­” Í­”  Í­”* Í­$”+ Í®”Ì“ Í®ÌpÜ ” Í¯”1 Í¯)”3 Í°”4 Í°	”: Í°”; Í°”Ì@ Í°”ÌB Í°”ÌH Í°”ÌI Í°”ÌS Í°(”ÌU Í°*”Ì[ Í°0”Ì\ Í°1”Ìh Í°=”Ìj Í°?”Ìp Í°ÌE”Ìq Í°ÌF”Ìy Í°ÌNÜ ” Í±
-” Í±” Í±” Í±” Í±”% Í±”& Í± ”* Í±$”, Í±&”2 Í±,”3 Í±-”: Í±4”< Í±6”Ì@ Í±:”ÌA Í±;”ÌD Í±>”ÌF Í±Ì@”ÌG Í±ÌA”ÌH Í²”ÌI Í²”” Í³” Í³” Í³” Í³‘”	 Í´”” Í´” Í´” Í´” Í´Ü ” Íµ” Íµ” Íµ” Íµ” Íµ” Íµ”  Íµ”$ Íµ”& Íµ ”ÌG ÍµÌA”ÌJ ÍµÌD”ÌK ÍµÌE”ÌR ÍµÌL”ÌT ÍµÌN”ÌU ÍµÌO”ÌV ÍµÌP”” Í¶” Í¶” Í¶” Í¶‘”	 Í·’” Í¸” Í¸‘” Íº‘” Í½–” Í¾	”	 Í¾”
- Í¾” Í¾” Í¾” Í¾+—” Í¿” Í¿” Í¿	” Í¿” Í¿” Í¿” Í¿˜” ÍÀ” ÍÀ” ÍÀ” ÍÀ” ÍÀ”ÌJ ÍÀÌD”ÌK ÍÀÌE”ÌL ÍÀÌF‘”	 ÍÁ’” ÍÃ” ÍÃÜ ” ÍÄ” ÍÄ” ÍÄ” ÍÄ”$ ÍÄ”( ÍÄ"”) ÍÄ#”1 ÍÄ+”2 ÍÄ,”: ÍÄ4”; ÍÅ”Ìn ÍÅ;”Ìp ÍÅ=”Ìq ÍÅ>”Ìv ÍÅÌC”Ìw ÍÅÌD”Ìx ÍÅÌE”Ìy ÍÅÌF–” ÍÆ” ÍÆ” ÍÆ” ÍÆ$” ÍÆ&” ÍÆ'—” ÍÇ” ÍÇ” ÍÇ” ÍÇ”( ÍÇ"”* ÍÇ$”, ÍÇ&•” ÍÈ” ÍÈ” ÍÈ” ÍÈ” ÍÈ” ÍÉ
-” ÍÉ” ÍÉ”! ÍÉ”" ÍÉ”) ÍÉ”* ÍÉ ”3 ÍÉ)”4 ÍÉ*”ÌB ÍÉ8”ÌC ÍÉ9”ÌG ÍÉ=”ÌH ÍÉ>”ÌI ÍÉ?” ÍÊ
-” ÍÊ” ÍÊ”$ ÍÊ”% ÍÊ”. ÍÊ$”/ ÍÊ%”8 ÍÊ.”9 ÍÊ/”ÌG ÍÊ=”ÌH ÍÊ>”ÌO ÍÊÌE”ÌP ÍÊÌF”ÌQ ÍÊÌG” ÍË
-” ÍË”  ÍË”) ÍË”* ÍË ”3 ÍË)”4 ÍË*”= ÍË3”> ÍË4”ÌL ÍËÌB”ÌM ÍËÌC”ÌY ÍËÌO”ÌZ ÍËÌP”Ì[ ÍËÌQ” ÍÌ
-”  ÍÌ”" ÍÌ”+ ÍÌ!”, ÍÌ"”5 ÍÌ+”6 ÍÌ,”? ÍÌ5”Ì@ ÍÌ6”ÌN ÍÌÌD”ÌO ÍÌÌE”Ì] ÍÌÌS”Ì^ ÍÌÌT”Ì_ ÍÌÌU” ÍÍ
-” ÍÍ” ÍÍ”' ÍÍ”( ÍÍ”1 ÍÍ'”2 ÍÍ(”; ÍÍ1”< ÍÍ2”ÌJ ÍÍÌ@”ÌK ÍÍÌA”ÌU ÍÍÌK”ÌV ÍÍÌL”ÌW ÍÍÌM” ÍÎ
-” ÍÎ” ÍÎ”% ÍÎ”& ÍÎ”/ ÍÎ%”0 ÍÎ&”9 ÍÎ/”: ÍÎ0”ÌH ÍÎ>”ÌI ÍÎ?”ÌQ ÍÎÌG”ÌR ÍÎÌH”ÌS ÍÎÌI” ÍÏ
-” ÍÏ” ÍÏ”# ÍÏ”$ ÍÏ”- ÍÏ#”. ÍÏ$”7 ÍÏ-”8 ÍÏ.”ÌF ÍÏ<”ÌG ÍÏ=”ÌM ÍÏÌC”ÌN ÍÏÌD”ÌO ÍÏÌE” ÍĞ
-” ÍĞ” ÍĞ”& ÍĞ”' ÍĞ”0 ÍĞ&”1 ÍĞ'”: ÍĞ0”; ÍĞ1”ÌI ÍĞ?”ÌJ ÍĞÌ@”ÌS ÍĞÌI”ÌT ÍĞÌJ”ÌU ÍĞÌK” ÍÑ
-” ÍÑ”  ÍÑ”) ÍÑ”* ÍÑ ”1 ÍÑ'”2 ÍÑ(”; ÍÑ1”< ÍÑ2”ÌJ ÍÑÌ@”ÌK ÍÑÌA”ÌW ÍÑÌM”ÌX ÍÑÌN”ÌY ÍÑÌO“” ÍÒ	” ÍÒ
-” ÍÒ‘” ÍÓ–” ÍÔ” ÍÔ” ÍÔ” ÍÔ” ÍÔ” ÍÔ”” ÍÕ” ÍÕ” ÍÕ” ÍÕ‘”	 ÍÖ”” ÍÖ” ÍÖ” ÍÖ” ÍÖ” Í×” Í×” Í×” Í×” Í×”! Í×”" Í×”ÌC Í×=”ÌH Í×ÌB”ÌI Í×ÌC”ÌP Í×ÌJ”ÌR Í×ÌL”ÌS Í×ÌM”ÌT Í×ÌN” ÍØ” ÍØ” ÍØ” ÍØ” ÍØ” ÍØ”  ÍØ”$ ÍØ”& ÍØ ”) ÍØ#”* ÍØ$”1 ÍØ+”2 ÍØ,”3 ÍØ-”” ÍÙ” ÍÙ” ÍÙ” ÍÙ‘”	 ÍÚ’” ÍÛ” ÍÛ‘” Íİ‘” Íß”” Íà	”	 Íà”
- Íà” Íà —” Íá” Íá” Íá	” Íá” Íá” Íá” Íá˜” Íâ” Íâ” Íâ” Íâ” Íâ”ÌJ ÍâÌD”ÌK ÍâÌE”ÌL ÍâÌF‘”	 Íã’” Íå” Íå” Íæ” Íæ” Íæ” Íæ”$ Íæ”( Íæ"”) Íæ#”1 Íæ+”2 Íæ,”: Íæ4”; Íç”Ìu ÍçÌB”Ìv ÍçÌC”Ìw ÍçÌD–” Íè” Íè” Íè” Íè$” Íè&” Íè'—” Íé” Íé” Íé” Íé”( Íé"”* Íé$”, Íé&•” Íê” Íê” Íê” Íê” Íê” Íë
-” Íë” Íë”! Íë”" Íë”) Íë”* Íë ”3 Íë)”4 Íë*”ÌB Íë8”ÌC Íë9”ÌG Íë=”ÌH Íë>”ÌI Íë?” Íì
-” Íì” Íì”$ Íì”% Íì”. Íì$”/ Íì%”8 Íì.”9 Íì/”ÌG Íì=”ÌH Íì>”ÌO ÍìÌE”ÌP ÍìÌF”ÌQ ÍìÌG” Íí
-” Íí”  Íí”) Íí”* Íí ”3 Íí)”4 Íí*”= Íí3”> Íí4”ÌL ÍíÌB”ÌM ÍíÌC”ÌY ÍíÌO”ÌZ ÍíÌP”Ì[ ÍíÌQ” Íî
-”  Íî”" Íî”+ Íî!”, Íî"”5 Íî+”6 Íî,”? Íî5”Ì@ Íî6”ÌN ÍîÌD”ÌO ÍîÌE”Ì] ÍîÌS”Ì^ ÍîÌT”Ì_ ÍîÌU” Íï
-” Íï” Íï”' Íï”( Íï”1 Íï'”2 Íï(”; Íï1”< Íï2”ÌJ ÍïÌ@”ÌK ÍïÌA”ÌU ÍïÌK”ÌV ÍïÌL”ÌW ÍïÌM” Íğ
-” Íğ” Íğ”% Íğ”& Íğ”/ Íğ%”0 Íğ&”9 Íğ/”: Íğ0”ÌH Íğ>”ÌI Íğ?”ÌQ ÍğÌG”ÌR ÍğÌH”ÌS ÍğÌI” Íñ
-” Íñ” Íñ”# Íñ”$ Íñ”- Íñ#”. Íñ$”7 Íñ-”8 Íñ.”ÌF Íñ<”ÌG Íñ=”ÌM ÍñÌC”ÌN ÍñÌD”ÌO ÍñÌE” Íò
-” Íò” Íò”& Íò”' Íò”0 Íò&”1 Íò'”: Íò0”; Íò1”ÌI Íò?”ÌJ ÍòÌ@”ÌS ÍòÌI”ÌT ÍòÌJ”ÌU ÍòÌK” Íó
-” Íó”  Íó”) Íó”* Íó ”1 Íó'”2 Íó(”; Íó1”< Íó2”ÌJ ÍóÌ@”ÌK ÍóÌA”ÌW ÍóÌM”ÌX ÍóÌN”ÌY ÍóÌO“” Íô	” Íô
-” Íô‘” Íõ–” Íö” Íö” Íö” Íö” Íö” Íö”” Í÷” Í÷” Í÷” Í÷‘”	 Íø”” Íø” Íø” Íø” Íø” Íù” Íù” Íù” Íù” Íù”! Íù”" Íù”ÌG ÍùÌA”ÌL ÍùÌF”ÌM ÍùÌG”ÌT ÍùÌN”ÌV ÍùÌP”ÌW ÍùÌQ”ÌX ÍùÌR” Íú” Íú” Íú” Íú” Íú” Íú”  Íú”$ Íú”& Íú ”) Íú#”* Íú$”1 Íú+”2 Íú,”3 Íú-”” Íû” Íû” Íû” Íû‘”	 Íü’” Íı” Íı‘” Íÿ‘” Í”” Í	”	 Í”
- Í” Í—” Í” Í” Í	” Í” Í” Í” Í˜” Í” Í” Í” Í” Í”ÌJ ÍÌD”ÌK ÍÌE”ÌL ÍÌF‘”	 Í”” Í” Í
-” Í” ÍÜ ” Í” Í” Í” Í” Í”% Í”' Í!”( Í"”* Í$”5 Í/”7 Í1”8 Í2”: Í4”ÌD Í>”ÌF ÍÌ@”ÌG ÍÌA˜” Í	” Í	” Í	” Í	” Í	”) Í	#”+ Í	%”- Í	'’”	 Í
-”
- Í
-’” Í” Í›” Í” Í” Í” Í”% Í”) Í#”* Í$”2 Í,”3 Í-”; Í5”< Í“” Í” Í” Í’” Í” Í
-—” Í” Í” Í” Í”+ Í#”- Í%”/ Í'Ü ” Í
-” Í” Í”# Í”& Í”0 Í&”1 Í'”8 Í.”9 Í/”ÌC Í9”ÌD Í:”ÌR ÍÌH”ÌS ÍÌI”Ì^ ÍÌT”Ì_ ÍÌU”Ì` ÍÌV”Ìa ÍÌWÜ ” Í
-” Í” Í”% Í”( Í”2 Í(”3 Í)”: Í0”; Í1”ÌE Í;”ÌF Í<”ÌT ÍÌJ”ÌU ÍÌK”Ìb ÍÌX”Ìc ÍÌY”Ìd ÍÌZ”Ìe ÍÌ[Ü ” Í
-” Í” Í”% Í”( Í”2 Í(”3 Í)”: Í0”; Í1”ÌE Í;”ÌF Í<”ÌT ÍÌJ”ÌU ÍÌK”Ìb ÍÌX”Ìc ÍÌY”Ìd ÍÌZ”Ìe ÍÌ[Ü ” Í
-” Í” Í”$ Í”' Í”1 Í'”2 Í(”9 Í/”: Í0”ÌD Í:”ÌE Í;”ÌS ÍÌI”ÌT ÍÌJ”Ì` ÍÌV”Ìa ÍÌW”Ìb ÍÌX”Ìc ÍÌYÜ ” Í
-” Í” Í”( Í”+ Í!”5 Í+”6 Í,”= Í3”> Í4”ÌH Í>”ÌI Í?”ÌW ÍÌM”ÌX ÍÌN”Ìh ÍÌ^”Ìi ÍÌ_”Ìj ÍÌ`”Ìk ÍÌa‘” Í	‘” Í‘” Í–” Í” Í” Í”  Í”" Í”# Í‘” Íœ” Í!” Í!” Í!” Í!”" Í!”& Í! ”' Í!!”/ Í!)”0 Í!*”8 Í!2”9 Í"”Ì„ Í"ÌS”” Í#”7 Í#/”8 Í#0”9 Í#1’” Í$” Í$
-—” Í%” Í%” Í%” Í%”* Í%"”, Í%$”. Í%&—” Í&
-” Í&” Í&”$ Í&”% Í&”) Í&”* Í& ” Í'”  Í'”" Í'”) Í'”* Í'”3 Í''”4 Í'(”; Í'/”< Í'0”ÌJ Í'>”ÌK Í'?”ÌU Í'ÌI”ÌV Í'ÌJ”ÌW Í'ÌK” Í(” Í(” Í(”& Í(”' Í(”. Í("”/ Í(#”6 Í(*”7 Í(+”ÌE Í(9”ÌF Í(:”ÌM Í(ÌA”ÌN Í(ÌB”ÌO Í(ÌC“” Í)” Í)” Í)‘” Í*	‘” Í+‘” Í+–” Í,” Í,” Í,” Í,” Í,”  Í,‘” Í-”” Í.” Í.” Í.” Í.‘”	 Í/”” Í/” Í/” Í/” Í/” Í0” Í0” Í0” Í0” Í0”! Í0”" Í0”ÌA Í0;”ÌF Í0Ì@”ÌG Í0ÌA”ÌN Í0ÌH”ÌP Í0ÌJ”ÌQ Í0ÌK”ÌR Í0ÌL” Í1” Í1” Í1” Í1” Í1” Í1”  Í1”$ Í1”& Í1 ”) Í1#”* Í1$”1 Í1+”2 Í1,”3 Í1-”” Í2” Í2” Í2” Í2‘”	 Í3’” Í4” Í4‘” Í6‘” Í9”” Í:	”	 Í:”
- Í:” Í:—” Í;” Í;” Í;	” Í;” Í;” Í;” Í;˜” Í<” Í<” Í<” Í<” Í<”3 Í<-”4 Í<.”5 Í</‘”	 Í=’” Í?” Í?˜” Í@” Í@
-” Í@” Í@” Í@”* Í@$”, Í@&”- Í@'’” ÍA” ÍA
-œ” ÍB” ÍB”! ÍB”$ ÍB”* ÍB"”. ÍB&”/ ÍB'”< ÍB4”= ÍB5”ÌI ÍBÌA”ÌJ ÍBÌB”ÌK ÍBÌC›” ÍC” ÍC” ÍC” ÍC”# ÍC”$ ÍC”. ÍC&”/ ÍC'”ÌG ÍC?”ÌH ÍCÌ@”ÌI ÍCÌA›” ÍD” ÍD” ÍD” ÍD”# ÍD”$ ÍD”. ÍD&”/ ÍD'”Ìf ÍDÌ^”Ìg ÍDÌ_”Ìh ÍDÌ`˜” ÍE” ÍE” ÍE” ÍE” ÍE”$ ÍE”& ÍE”' ÍE” ÍF” ÍF” ÍF” ÍF” ÍF”! ÍF”# ÍF”' ÍF”) ÍF!”4 ÍF,”? ÍF7”ÌN ÍFÌF”ÌO ÍFÌG”ÌP ÍFÌH”” ÍG” ÍG”" ÍG”# ÍG‘” ÍH”” ÍH” ÍH” ÍH” ÍH˜” ÍI” ÍI” ÍI” ÍI” ÍI”& ÍI”( ÍI ”) ÍI!›” ÍJ” ÍJ” ÍJ” ÍJ”) ÍJ!”* ÍJ"”/ ÍJ'”1 ÍJ)”= ÍJ5”> ÍJ6”? ÍJ7‘” ÍK‘”	 ÍL”” ÍL” ÍL” ÍL” ÍL›” ÍM” ÍM” ÍM” ÍM”% ÍM”& ÍM ”) ÍM#”+ ÍM%”9 ÍM3”: ÍM4”; ÍM5‘”	 ÍN’” ÍO” ÍO”” ÍQ”	 ÍQ”
- ÍQ” ÍQ–” ÍR” ÍR” ÍR” ÍR” ÍR” ÍR’” ÍS” ÍS
-™” ÍT” ÍT” ÍT” ÍT”# ÍT”$ ÍT”) ÍT!”+ ÍT#”, ÍT$—” ÍU” ÍU” ÍU” ÍU”  ÍU”$ ÍU”% ÍU‘” ÍV”” ÍV” ÍV” ÍV” ÍV–” ÍW” ÍW” ÍW” ÍW”! ÍW*”" ÍW+Ü ” ÍX” ÍX” ÍX” ÍX” ÍX”ÌA ÍX9”ÌF ÍX>”ÌG ÍX?”ÌK ÍXÌC”ÌY ÍXÌQ”Ì^ ÍXÌV”Ì_ ÍXÌW”Ìf ÍXÌ^”Ìh ÍXÌ`”Ìi ÍXÌa”Ìj ÍXÌb‘” ÍY‘”	 ÍZ—” Í[” Í[” Í[”  Í[”# Í[”' Í[#”( Í[$’” Í\” Í\’” Í^”	 Í^”” Í_
-”	 Í_”
- Í_” Í_—” Í`” Í`” Í`	” Í`” Í`” Í`” Í`’” Ía” Ía‘”	 Íb’” Íd” Íd˜” Íe” Íe” Íe” Íe” Íe”  Íe”* Íe$”+ Íe%“” Ím” Ím”	 Ím	˜” Ío” Ío” Ío” Ío” Ío”  Ío”* Ío$”+ Ío%“” Íw” Íw”	 Íw	˜” Íy” Íy” Íy” Íy” Íy”  Íy”* Íy$”+ Íy%“” Í” Í”	 Í	˜” Íƒ” Íƒ” Íƒ” Íƒ” Íƒ”  Íƒ”* Íƒ$”+ Íƒ%“” Í” Í”	 Í	‘”	 Í”” Í” Í” Í” Í–” Í‘” Í‘” Í‘” Í‘” Í‘(” Í‘)Ü ” Í’” Í’” Í’” Í’” Í’”< Í’6”ÌA Í’;”ÌB Í’<”ÌF Í’Ì@”ÌT Í’ÌN”ÌY Í’ÌS”ÌZ Í’ÌT”Ìa Í’Ì[”Ìc Í’Ì]”Ìd Í’Ì^”Ìe Í’Ì_‘”	 Í“’” Í”” Í”–” Í–
-” Í–” Í–” Í–#” Í–%” Í–4” Í—” Í—” Í—” Í—” Í—” Í—”# Í—”- Í—)”0 Í—,”1 Í—-”8 Í—4”: Í—6”; Í—7”< Í—8’” Í˜” Í˜’” Íš” Íš˜” Í›
-”	 Í›”
- Í›” Í›” Í›” Í›*” Í›,” Í›6—” Íœ” Íœ” Íœ	” Íœ” Íœ” Íœ” Íœ”” Í” Í” Í” Í‘”	 Í” ÍŸ” ÍŸ
-” ÍŸ” ÍŸ” ÍŸ” ÍŸ” ÍŸ” ÍŸ”) ÍŸ%”* ÍŸ&”+ ÍŸ'”, ÍŸ(”7 ÍŸ3”8 ÍŸ4˜” Í ” Í 
-” Í ” Í ”% Í !”* Í &”ÌA Í =”ÌB Í >Ü ” Í¡” Í¡
-” Í¡” Í¡”  Í¡”$ Í¡ ”% Í¡!”- Í¡)”. Í¡*”6 Í¡2”7 Í¡3”: Í¡6”< Í¡8”= Í¡9”? Í¡;”Ì@ Í¡<”ÌA Í¡=”ÌB Í¡>’” Í¢” Í¢˜” Í£” Í£” Í£” Í£”% Í£”( Í£"”) Í£#”* Í£$‘”	 Í¤‘” Í¤–” Í¥” Í¥” Í¥” Í¥” Í¥” Í¥‘”	 Í¦’” Í§” Í§’” Í©” Í©–” Íª
-”	 Íª”
- Íª” Íª#” Íª$”  Íª.—” Í«” Í«” Í«	” Í«” Í«” Í«” Í«”” Í¬” Í¬” Í¬” Í¬‘”	 Í­–” Í®” Í®
-” Í®” Í®”ÌF Í®ÌB”ÌG Í®ÌCÜ ” Í¯” Í¯
-” Í¯” Í¯”  Í¯”$ Í¯ ”% Í¯!”- Í¯)”. Í¯*”6 Í¯2”7 Í¯3”: Í¯6”< Í¯8”= Í¯9”? Í¯;”Ì@ Í¯<”ÌA Í¯=”ÌB Í¯>’” Í°” Í°˜” Í±” Í±” Í±” Í±”% Í±”( Í±"”) Í±#”* Í±$‘”	 Í²‘” Í²–” Í³” Í³” Í³” Í³” Í³” Í³‘”	 Í´’” Íµ” Íµ‘” Í·‘” Í¼–” Í½
-”	 Í½”
- Í½” Í½ ” Í½!”  Í½.—” Í¾” Í¾” Í¾	” Í¾” Í¾” Í¾” Í¾˜” Í¿” Í¿” Í¿” Í¿” Í¿”ÌJ Í¿ÌD”ÌK Í¿ÌE”ÌL Í¿ÌF‘”	 ÍÀ’” ÍÂ” ÍÂ’” ÍÃ” ÍÃ”” ÍÄ” ÍÄ” ÍÄ” ÍÄ’” ÍÉ” ÍÉÜ ” ÍË” ÍË” ÍË” ÍË”$ ÍË”( ÍË"”) ÍË#”1 ÍË+”2 ÍË,”: ÍË4”; ÍË5”> ÍË8”Ì@ ÍË:”ÌA ÍË;”ÌF ÍËÌ@”ÌH ÍËÌB”ÌM ÍËÌG”ÌN ÍËÌH”ÌO ÍËÌI”ÌP ÍËÌJ’” ÍÍ” ÍÍ
-˜” ÍÎ” ÍÎ”  ÍÎ”! ÍÎ”) ÍÎ!”, ÍÎ$”- ÍÎ%”. ÍÎ&‘” ÍÏ‘” ÍÏ’” ÍĞ” ÍĞ–” ÍÑ” ÍÑ” ÍÑ” ÍÑ”! ÍÑ”" ÍÑ‘” ÍÒ‘”	 ÍÓ”” ÍÓ” ÍÓ” ÍÓ” ÍÓ–” ÍÔ” ÍÔ” ÍÔ” ÍÔ” ÍÔ(” ÍÔ)Ü ” ÍÕ” ÍÕ” ÍÕ” ÍÕ” ÍÕ”ÌD ÍÕ>”ÌI ÍÕÌC”ÌJ ÍÕÌD”ÌN ÍÕÌH”Ì\ ÍÕÌV”Ìa ÍÕÌ[”Ìb ÍÕÌ\”Ìi ÍÕÌc”Ìk ÍÕÌe”Ìl ÍÕÌf”Ìm ÍÕÌgš” ÍÖ” ÍÖ” ÍÖ” ÍÖ” ÍÖ”$ ÍÖ”) ÍÖ#”+ ÍÖ%”, ÍÖ&”- ÍÖ&‘”	 Í×’” ÍØ” ÍØ•”  Ìw” Ìw” Ìw4” Ìw8”  Ìw9–”  ÍÚ ” ÍÚ”	 ÍÛ” ÍÛ” ÍÜ” ÍÜÔrH–§version¤file§sources®sourcesContent¥names¨mappingsÀ‘À‘ÀÜì‘”    ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”  	 ‘”  
- ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”    ‘”  ! ‘”  " ‘”  # ‘”  $ ‘”  % ‘”  & ‘”  ' ‘”  ( ‘”  ) ‘”  * ‘”  + ‘”  , ‘”  - ‘”  . ‘”  / ‘”  0 ‘”  1 ‘”  2 ‘”  3 ‘”  4 ‘”  5 ‘”  6 ‘”  7 ‘”  8 ‘”  9 ‘”  : ‘”  ; ‘”  < ‘”  = ‘”  > ‘”  ? ‘”  Ì@ ‘”  ÌA ‘”  ÌB ‘”  ÌC ‘”  ÌD ‘”  ÌE ‘”  ÌF ‘”  ÌG ‘”  ÌH ‘”  ÌI ‘”  ÌJ ‘”  ÌK ‘”  ÌL ‘”  ÌM ‘”  ÌN ‘”  ÌO ‘”  ÌP ‘”  ÌQ ‘”  ÌR ‘”  ÌS ‘”  ÌT ‘”  ÌU ‘”  ÌV ‘”  ÌW ‘”  ÌX ‘”  ÌY ‘”  ÌZ ‘”  Ì[ ‘”  Ì\ ‘”  Ì] ‘”  Ì^ ‘”  Ì_ ‘”  Ì` ‘”  Ìa ‘”  Ìb ‘”  Ìc ‘”  Ìd ‘”  Ìe ‘”  Ìf ‘”  Ìg ‘”  Ìh ‘”  Ìi ‘”  Ìj ‘”  Ìk ‘”  Ìl ‘”  Ìm ‘”  Ìn ‘”  Ìo ‘”  Ìp ‘”  Ìq ‘”  Ìr ‘”  Ìs ‘”  Ìt ‘”  Ìu ‘”  Ìv ‘”  Ìw ‘”  Ìx ‘”  Ìy ‘”  Ìz ‘”  Ì{ ‘”  Ì| ‘”  Ì} ‘”  Ì~ ‘”  Ì ‘”  Ì€ ‘”  Ì ‘”  Ì‚ ‘”  Ìƒ ‘”  Ì„ ‘”  Ì… ‘”  Ì† ‘”  Ì‡ ‘”  Ìˆ ‘”  Ì‰ ‘”  ÌŠ ‘”  Ì‹ ‘”  ÌŒ ‘”  Ì ‘”  Ì ‘”  Ì ‘”  Ì ‘”  Ì‘ ‘”  Ì’ ‘”  Ì“ ‘”  Ì” ‘”  Ì• ‘”  Ì– ‘”  Ì— ‘”  Ì˜ ‘”  Ì™ ‘”  Ìš ‘”  Ì› ‘”  Ìœ ‘”  Ì ‘”  Ì ‘”  ÌŸ ‘”  Ì  ‘”  Ì¡ ‘”  Ì¢ ‘”  Ì£ ‘”  Ì¤ ‘”  Ì¥ ‘”  Ì¦ ‘”  Ì§ ‘”  Ì¨ ‘”  Ì© ‘”  Ìª ‘”  Ì« ‘”  Ì¬ ‘”  Ì­ ‘”  Ì® ‘”  Ì¯ ‘”  Ì° ‘”  Ì± ‘”  Ì² ‘”  Ì³ ‘”  Ì´ ‘”  Ìµ ‘”  Ì¶ ‘”  Ì· ‘”  Ì¸ ‘”  Ì¹ ‘”  Ìº ‘”  Ì» ‘”  Ì¼ ‘”  Ì½ ‘”  Ì¾ ‘”  Ì¿ ‘”  ÌÀ ‘”  ÌÁ ‘”  ÌÂ ‘”  ÌÃ ‘”  ÌÄ ‘”  ÌÅ ‘”  ÌÆ ‘”  ÌÇ ‘”  ÌÈ ‘”  ÌÉ ‘”  ÌÊ ‘”  ÌË ‘”  ÌÌ ‘”  ÌÍ ‘”  ÌÎ ‘”  ÌÏ ‘”  ÌĞ ‘”  ÌÑ ‘”  ÌÒ ‘”  ÌÓ ‘”  ÌÔ ‘”  ÌÕ ‘”  ÌÖ ‘”  Ì× ‘”  ÌØ ‘”  ÌÙ ‘”  ÌÚ ‘”  ÌÛ ‘”  ÌÜ ‘”  Ìİ ‘”  ÌŞ ‘”  Ìß ‘”  Ìà ‘”  Ìá ‘”  Ìâ ‘”  Ìã ‘”  Ìä ‘”  Ìå ‘”  Ìæ ‘”  Ìç ‘”  Ìè ‘”  Ìé ‘”  Ìê ‘”  Ìë ‘”  Ìì ‘”  Ìí ‘”  Ìî ‘”  Ìï ‘”  Ìğ ‘”  Ìñ ‘”  Ìò ‘”  Ìó ‘”  Ìô ‘”  Ìõ ‘”  Ìö ‘”  Ì÷ ‘”  Ìø ‘”  Ìù ‘”  Ìú ‘”  Ìû ‘”  Ìü ‘”  Ìı ‘”  Ìş ‘”  Ìÿ ‘”  Í  ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í	 ‘”  Í
- ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í  ‘”  Í! ‘”  Í" ‘”  Í# ‘”  Í$ ‘”  Í% ‘”  Í& ‘”  Í' ‘”  Í( ‘”  Í) ‘”  Í* ‘”  Í+ ‘”  Í, ‘”  Í- ‘”  Í. ‘”  Í/ ‘”  Í0 ‘”  Í1 ‘”  Í2 ‘”  Í3 ‘”  Í4 ‘”  Í5 ‘”  Í6 ‘”  Í7 ‘”  Í8 ‘”  Í9 ‘”  Í: ‘”  Í; ‘”  Í< ‘”  Í= ‘”  Í> ‘”  Í? ‘”  Í@ ‘”  ÍA ‘”  ÍB ‘”  ÍC ‘”  ÍD ‘”  ÍE ‘”  ÍF ‘”  ÍG ‘”  ÍH ‘”  ÍI ‘”  ÍJ ‘”  ÍK ‘”  ÍL ‘”  ÍM ‘”  ÍN ‘”  ÍO ‘”  ÍP ‘”  ÍQ ‘”  ÍR ‘”  ÍS ‘”  ÍT ‘”  ÍU ‘”  ÍV ‘”  ÍW ‘”  ÍX ‘”  ÍY ‘”  ÍZ ‘”  Í[ ‘”  Í\ ‘”  Í] ‘”  Í^ ‘”  Í_ ‘”  Í` ‘”  Ía ‘”  Íb ‘”  Íc ‘”  Íd ‘”  Íe ‘”  Íf ‘”  Íg ‘”  Íh ‘”  Íi ‘”  Íj ‘”  Ík ‘”  Íl ‘”  Ím ‘”  Ín ‘”  Ío ‘”  Íp ‘”  Íq ‘”  Ír ‘”  Ís ‘”  Ít ‘”  Íu ‘”  Ív ‘”  Íw ‘”  Íx ‘”  Íy ‘”  Íz ‘”  Í{ ‘”  Í| ‘”  Í} ‘”  Í~ ‘”  Í ‘”  Í€ ‘”  Í ‘”  Í‚ ‘”  Íƒ ‘”  Í„ ‘”  Í… ‘”  Í† ‘”  Í‡ ‘”  Íˆ ‘”  Í‰ ‘”  ÍŠ ‘”  Í‹ ‘”  ÍŒ ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í‘ ‘”  Í’ ‘”  Í“ ‘”  Í” ‘”  Í• ‘”  Í– ‘”  Í— ‘”  Í˜ ‘”  Í™ ‘”  Íš ‘”  Í› ‘”  Íœ ‘”  Í ‘”  Í ‘”  ÍŸ ‘”  Í  ‘”  Í¡ ‘”  Í¢ ‘”  Í£ ‘”  Í¤ ‘”  Í¥ ‘”  Í¦ ‘”  Í§ ‘”  Í¨ ‘”  Í© ‘”  Íª ‘”  Í« ‘”  Í¬ ‘”  Í­ ‘”  Í® ‘”  Í¯ ‘”  Í° ‘”  Í± ‘”  Í² ‘”  Í³ ‘”  Í´ ‘”  Íµ ‘”  Í¶ ‘”  Í· ‘”  Í¸ ‘”  Í¹ ‘”  Íº ‘”  Í» ‘”  Í¼ ‘”  Í½ ‘”  Í¾ ‘”  Í¿ ‘”  ÍÀ ‘”  ÍÁ ‘”  ÍÂ ‘”  ÍÃ ‘”  ÍÄ ‘”  ÍÅ ‘”  ÍÆ ‘”  ÍÇ ‘”  ÍÈ ‘”  ÍÉ ‘”  ÍÊ ‘”  ÍË ‘”  ÍÌ ‘”  ÍÍ ‘”  ÍÎ ‘”  ÍÏ ‘”  ÍĞ ‘”  ÍÑ ‘”  ÍÒ ‘”  ÍÓ ‘”  ÍÔ ‘”  ÍÕ ‘”  ÍÖ ‘”  Í× ‘”  ÍØ ‘”  ÍÙ ‘”  ÍÚ ‘”  ÍÛ ‘”  ÍÜ ‘”  Íİ ‘”  ÍŞ ‘”  Íß ‘”  Íà ‘”  Íá ‘”  Íâ ‘”  Íã ‘”  Íä ‘”  Íå ‘”  Íæ ‘”  Íç ‘”  Íè ‘”  Íé ‘”  Íê ‘”  Íë ‘”  Íì ‘”  Íí ‘”  Íî ‘”  Íï ‘”  Íğ ‘”  Íñ ‘”  Íò ‘”  Íó ‘”  Íô ‘”  Íõ ‘”  Íö ‘”  Í÷ ‘”  Íø ‘”  Íù ‘”  Íú ‘”  Íû ‘”  Íü ‘”  Íı ‘”  Íş ‘”  Íÿ ‘”  Í  ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í	 ‘”  Í
- ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í  ‘”  Í! ‘”  Í" ‘”  Í# ‘”  Í$ ‘”  Í% ‘”  Í& ‘”  Í' ‘”  Í( ‘”  Í) ‘”  Í* ‘”  Í+ ‘”  Í, ‘”  Í- ‘”  Í. ‘”  Í/ ‘”  Í0 ‘”  Í1 ‘”  Í2 ‘”  Í3 ‘”  Í4 ‘”  Í5 ‘”  Í6 ‘”  Í7 ‘”  Í8 ‘”  Í9 ‘”  Í: ‘”  Í; ‘”  Í< ‘”  Í= ‘”  Í> ‘”  Í? ‘”  Í@ ‘”  ÍA ‘”  ÍB ‘”  ÍC ‘”  ÍD ‘”  ÍE ‘”  ÍF ‘”  ÍG ‘”  ÍH ‘”  ÍI ‘”  ÍJ ‘”  ÍK ‘”  ÍL ‘”  ÍM ‘”  ÍN ‘”  ÍO ‘”  ÍP ‘”  ÍQ ‘”  ÍR ‘”  ÍS ‘”  ÍT ‘”  ÍU ‘”  ÍV ‘”  ÍW ‘”  ÍX ‘”  ÍY ‘”  ÍZ ‘”  Í[ ‘”  Í\ ‘”  Í] ‘”  Í^ ‘”  Í_ ‘”  Í` ‘”  Ía ‘”  Íb ‘”  Íc ‘”  Íd ‘”  Íe ‘”  Íf ‘”  Íg ‘”  Íh ‘”  Íi ‘”  Íj ‘”  Ík ‘”  Íl ‘”  Ím ‘”  Ín ‘”  Ío ‘”  Íp ‘”  Íq ‘”  Ír ‘”  Ís ‘”  Ít ‘”  Íu ‘”  Ív ‘”  Íw ‘”  Íx ‘”  Íy ‘”  Íz ‘”  Í{ ‘”  Í| ‘”  Í} ‘”  Í~ ‘”  Í ‘”  Í€ ‘”  Í ‘”  Í‚ ‘”  Íƒ ‘”  Í„ ‘”  Í… ‘”  Í† ‘”  Í‡ ‘”  Íˆ ‘”  Í‰ ‘”  ÍŠ ‘”  Í‹ ‘”  ÍŒ ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í‘ ‘”  Í’ ‘”  Í“ ‘”  Í” ‘”  Í• ‘”  Í– ‘”  Í— ‘”  Í˜ ‘”  Í™ ‘”  Íš ‘”  Í› ‘”  Íœ ‘”  Í ‘”  Í ‘”  ÍŸ ‘”  Í  ‘”  Í¡ ‘”  Í¢ ‘”  Í£ ‘”  Í¤ ‘”  Í¥ ‘”  Í¦ ‘”  Í§ ‘”  Í¨ ‘”  Í© ‘”  Íª ‘”  Í« ‘”  Í¬ ‘”  Í­ ‘”  Í® ‘”  Í¯ ‘”  Í° ‘”  Í± ‘”  Í² ‘”  Í³ ‘”  Í´ ‘”  Íµ ‘”  Í¶ ‘”  Í· ‘”  Í¸ ‘”  Í¹ ‘”  Íº ‘”  Í» ‘”  Í¼ ‘”  Í½ ‘”  Í¾ ‘”  Í¿ ‘”  ÍÀ ‘”  ÍÁ ‘”  ÍÂ ‘”  ÍÃ ‘”  ÍÄ ‘”  ÍÅ ‘”  ÍÆ ‘”  ÍÇ ‘”  ÍÈ ‘”  ÍÉ ‘”  ÍÊ ‘”  ÍË ‘”  ÍÌ ‘”  ÍÍ ‘”  ÍÎ ‘”  ÍÏ ‘”  ÍĞ ‘”  ÍÑ ‘”  ÍÒ ‘”  ÍÓ ‘”  ÍÔ ‘”  ÍÕ ‘”  ÍÖ ‘”  Í× ‘”  ÍØ ‘”  ÍÙ ‘”  ÍÚ ‘”  ÍÛ ‘”  ÍÜ ‘”  Íİ ‘”  ÍŞ ‘”  Íß ‘”  Íà ‘”  Íá ‘”  Íâ ‘”  Íã ‘”  Íä ‘”  Íå ‘”  Íæ ‘”  Íç ‘”  Íè ‘”  Íé ‘”  Íê ‘”  Íë ‘”  Íì ‘”  Íí ‘”  Íî ‘”  Íï ‘”  Íğ ‘”  Íñ ‘”  Íò ‘”  Íó ‘”  Íô ‘”  Íõ ‘”  Íö ‘”  Í÷ ‘”  Íø ‘”  Íù ‘”  Íú ‘”  Íû ‘”  Íü ‘”  Íı ‘”  Íş ‘”  Íÿ ‘”  Í  ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í	 ‘”  Í
- ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í  ‘”  Í! ‘”  Í" ‘”  Í# ‘”  Í$ ‘”  Í% ‘”  Í& ‘”  Í' ‘”  Í( ‘”  Í) ‘”  Í* ‘”  Í+ ‘”  Í, ‘”  Í- ‘”  Í. ‘”  Í/ ‘”  Í0 ‘”  Í1 ‘”  Í2 ‘”  Í3 ‘”  Í4 ‘”  Í5 ‘”  Í6 ‘”  Í7 ‘”  Í8 ‘”  Í9 ‘”  Í: ‘”  Í; ‘”  Í< ‘”  Í= ‘”  Í> ‘”  Í? ‘”  Í@ ‘”  ÍA ‘”  ÍB ‘”  ÍC ‘”  ÍD ‘”  ÍE ‘”  ÍF ‘”  ÍG ‘”  ÍH ‘”  ÍI ‘”  ÍJ ‘”  ÍK ‘”  ÍL ‘”  ÍM ‘”  ÍN ‘”  ÍO ‘”  ÍP ‘”  ÍQ ‘”  ÍR ‘”  ÍS ‘”  ÍT ‘”  ÍU ‘”  ÍV ‘”  ÍW ‘”  ÍX ‘”  ÍY ‘”  ÍZ ‘”  Í[ ‘”  Í\ ‘”  Í] ‘”  Í^ ‘”  Í_ ‘”  Í` ‘”  Ía ‘”  Íb ‘”  Íc ‘”  Íd ‘”  Íe ‘”  Íf ‘”  Íg ‘”  Íh ‘”  Íi ‘”  Íj ‘”  Ík ‘”  Íl ‘”  Ím ‘”  Ín ‘”  Ío ‘”  Íp ‘”  Íq ‘”  Ír ‘”  Ís ‘”  Ít ‘”  Íu ‘”  Ív ‘”  Íw ‘”  Íx ‘”  Íy ‘”  Íz ‘”  Í{ ‘”  Í| ‘”  Í} ‘”  Í~ ‘”  Í ‘”  Í€ ‘”  Í ‘”  Í‚ ‘”  Íƒ ‘”  Í„ ‘”  Í… ‘”  Í† ‘”  Í‡ ‘”  Íˆ ‘”  Í‰ ‘”  ÍŠ ‘”  Í‹ ‘”  ÍŒ ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í‘ ‘”  Í’ ‘”  Í“ ‘”  Í” ‘”  Í• ‘”  Í– ‘”  Í— ‘”  Í˜ ‘”  Í™ ‘”  Íš ‘”  Í› ‘”  Íœ ‘”  Í ‘”  Í ‘”  ÍŸ ‘”  Í  ‘”  Í¡ ‘”  Í¢ ‘”  Í£ ‘”  Í¤ ‘”  Í¥ ‘”  Í¦ ‘”  Í§ ‘”  Í¨ ‘”  Í© ‘”  Íª ‘”  Í« ‘”  Í¬ ‘”  Í­ ‘”  Í® ‘”  Í¯ ‘”  Í° ‘”  Í± ‘”  Í² ‘”  Í³ ‘”  Í´ ‘”  Íµ ‘”  Í¶ ‘”  Í· ‘”  Í¸ ‘”  Í¹ ‘”  Íº ‘”  Í» ‘”  Í¼ ‘”  Í½ ‘”  Í¾ ‘”  Í¿ ‘”  ÍÀ ‘”  ÍÁ ‘”  ÍÂ ‘”  ÍÃ ‘”  ÍÄ ‘”  ÍÅ ‘”  ÍÆ ‘”  ÍÇ ‘”  ÍÈ ‘”  ÍÉ ‘”  ÍÊ ‘”  ÍË ‘”  ÍÌ ‘”  ÍÍ ‘”  ÍÎ ‘”  ÍÏ ‘”  ÍĞ ‘”  ÍÑ ‘”  ÍÒ ‘”  ÍÓ ‘”  ÍÔ ‘”  ÍÕ ‘”  ÍÖ ‘”  Í× ‘”  ÍØ ‘”  ÍÙ ‘”  ÍÚ ‘”  ÍÛ ‘”  ÍÜ ‘”  Íİ ‘”  ÍŞ ‘”  Íß ‘”  Íà ‘”  Íá ‘”  Íâ ‘”  Íã ‘”  Íä ‘”  Íå ‘”  Íæ ‘”  Íç ‘”  Íè ‘”  Íé ‘”  Íê ‘”  Íë ÔrI’§missing¦pluginÃ¦genAbcÂÔ  ÔrJ”²dynamicImportCache¹exportAllDeclarationCache»exportNamedDeclarationCache«importCache‘ÔrK–¤type¥start£end«declarationªspecifiers¦source¶ExportNamedDeclarationÍ–eÍ–€À‘ÔrL•¤type¥start£end¥local¨exported¯ExportSpecifierÍ–nÍ–}ÔrM”¤type¥start£end¤nameªIdentifierÍ–nÍ–}¯DatabaseManagerMªIdentifierÍ–nÍ–}¯DatabaseManagerÀ’ÔrN•¤type¥start£endªspecifiers¦source±ImportDeclaration 9‘ÔrO”¤type¥start£end¥local¶ImportDefaultSpecifierMªIdentifier¯relationalStoreÔrP•¤type¥start£end¥value£raw§Literal8º@ohos.data.relationalStore¼'@ohos.data.relationalStore'N±ImportDeclaration;Ì[‘O¶ImportDefaultSpecifierÌBÌGMªIdentifierÌBÌG¥hilogP§LiteralÌMÌZ«@ohos.hilog­"@ohos.hilog"

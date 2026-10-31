@@ -1,633 +1,0 @@
-Ôr@Ÿªassertions¤code´customTransformCache¬dependencies¢id¤meta±moduleSideEffects¬originalCode±originalSourcemap«resolvedIds®sourcemapChainµsyntheticNamedExportsµtransformDependencies®transformFiles¨cacheAstÔrAÚ&import fs from '@ohos.file.fs';
-import hiAppEvent from "@ohos.hiviewdfx.hiAppEvent";
-import hilog from "@ohos.hilog";
-import deviceInfo from "@ohos.deviceInfo";
-import bundleManager from "@ohos.bundle.bundleManager";
-import { Http } from './httpClient';
-const TAG = 'CrashReporter';
-const DOMAIN = 0x0010;
-/** ä¸ŠæŠ¥ç«¯ç‚¹ï¼šCloudflare Worker éƒ¨ç½²åå¡«å…¥ï¼ˆéƒ¨ç½²æ–¹æ³•è§ä»“åº“ cloudflare-worker/crash-mailer.js å¤´éƒ¨æ³¨é‡Šï¼‰ */
-const WORKER_URL = 'https://crash.ascii58.dpdns.org/crash';
-/** ä¸ Worker ç¯å¢ƒå˜é‡ CRASH_TOKEN ä¸€è‡´çš„å…±äº«å£ä»¤ */
-const CRASH_TOKEN = '549200ccc8254e17bf4d9e126b211f811b619f3e7d3542c6854868f28fa55d25';
-/** é‚®ä»¶æ­£æ–‡æºå¸¦çš„ hilog æ‘˜è¦è¡Œæ•°ä¸Šé™ */
-const HILOG_MAX_LINES = 20;
-/** NativeCrash æ‹¼æ¥çš„æ•…éšœçº¿ç¨‹è°ƒç”¨æ ˆæ¡æ•°ä¸Šé™ */
-const FRAMES_MAX_LINES = 30;
-/**
- * æŠŠé“¾è·¯çŠ¶æ€å†™å…¥ AppStorageï¼ˆDebug é¢æ¿å±•ç¤ºï¼Œä¾¿äºæ’æŸ¥æ–­ç‚¹ï¼‰
- */
-function setStatus(message) {
-    AppStorage.setOrCreate('crashReportStatus', `${new Date().toISOString().slice(11, 19)} ${message}`);
-}
-/**
- * æŠŠäº‹ä»¶ params é‡Œçš„ä»»æ„å­—æ®µå®‰å…¨è½¬æˆå­—ç¬¦ä¸²ï¼ˆå­—æ®µç¼ºå¤±/ç±»å‹å¼‚å¸¸æ—¶è¿”å›ç©ºä¸²ï¼‰
- */
-function safeStr(value) {
-    if (value === undefined || value === null) {
-        return '';
-    }
-    try {
-        const str = String(value);
-        return str === 'undefined' || str === 'null' ? '' : str;
-    }
-    catch (error) {
-        return '';
-    }
-}
-/**
- * NativeCrash çš„æ•…éšœçº¿ç¨‹è°ƒç”¨æ ˆï¼ˆframesï¼‰æ‹¼æ¥ä¸ºæ–‡æœ¬
- */
-function joinFrames(value) {
-    if (!Array.isArray(value)) {
-        return '';
-    }
-    const lines = [];
-    const arr = value;
-    const count = Math.min(arr.length, FRAMES_MAX_LINES);
-    for (let i = 0; i < count; i++) {
-        try {
-            const frame = arr[i];
-            lines.push(`#${i} ${safeStr(frame['symbol'])} (${safeStr(frame['file'])}+${safeStr(frame['offset'])}) pc=${safeStr(frame['pc'])}`);
-        }
-        catch (error) {
-            break;
-        }
-    }
-    return lines.join('\n');
-}
-/**
- * hilog æ‘˜è¦ï¼ˆstring[]ï¼‰æ‹¼æ¥ä¸ºæ–‡æœ¬
- */
-function joinHilog(value) {
-    if (!Array.isArray(value)) {
-        return '';
-    }
-    const arr = value;
-    const lines = [];
-    const count = Math.min(arr.length, HILOG_MAX_LINES);
-    for (let i = 0; i < count; i++) {
-        lines.push(safeStr(arr[i]));
-    }
-    return lines.join('\n');
-}
-/**
- * ä» exception å­—æ®µæå–å¼‚å¸¸å/åŸå› /è°ƒç”¨æ ˆï¼š
- * - JsErrorï¼šname / message / stack
- * - NativeCrashï¼šmessage / signal / thread_name / tid / framesï¼ˆstack ä¸ºç©ºæ—¶ç”¨ frames æ‹¼æ¥ï¼‰
- */
-function extractException(params) {
-    let name = '';
-    let message = '';
-    let stack = '';
-    const exception = params['exception'];
-    if (typeof exception !== 'object' || exception === null) {
-        return [name, message, stack];
-    }
-    const ex = exception;
-    name = safeStr(ex['name']);
-    message = safeStr(ex['message']);
-    const rawStack = safeStr(ex['stack']);
-    stack = rawStack !== '' ? rawStack : joinFrames(ex['frames']);
-    const signal = ex['signal'];
-    if (typeof signal === 'object' && signal !== null) {
-        const sig = signal;
-        message = `${message} (signal=${safeStr(sig['signo'])}/${safeStr(sig['code'])} addr=${safeStr(sig['address'])})`;
-    }
-    const threadName = safeStr(ex['thread_name']);
-    if (threadName !== '') {
-        message = `${message} [${threadName} tid=${safeStr(ex['tid'])}]`;
-    }
-    return [name, message, stack];
-}
-/**
- * æŠŠ AppEventInfo ç»„è£…æˆä¸ŠæŠ¥è´Ÿè½½
- */
-function assemblePayload(info) {
-    const params = info.params;
-    const exceptionParts = extractException(params);
-    let version = '';
-    try {
-        const bundleInfo = bundleManager.getBundleInfoForSelfSync(bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT);
-        version = `${bundleInfo.versionName}(${bundleInfo.versionCode})`;
-    }
-    catch (error) {
-        hilog.warn(DOMAIN, TAG, 'Get bundle info failed: %{public}s', error.message);
-    }
-    const timeMs = Number(params['time'] ?? 0);
-    const payload = {
-        app: safeStr(params['bundle_name']),
-        version: version,
-        crash_type: safeStr(params['crash_type']),
-        time: timeMs > 0 ? new Date(timeMs).toISOString() : '',
-        uuid: safeStr(params['uuid']),
-        foreground: safeStr(params['foreground']),
-        device: `${deviceInfo.marketName} ${deviceInfo.productModel}`,
-        os: deviceInfo.osFullName,
-        name: exceptionParts[0],
-        message: exceptionParts[1],
-        stack: exceptionParts[2],
-        hilog: joinHilog(params['hilog'])
-    };
-    return payload;
-}
-/**
- * ä¸ŠæŠ¥æˆåŠŸååˆ é™¤ç³»ç»Ÿè½ç›˜çš„æ•…éšœæ—¥å¿—æ–‡ä»¶ï¼ˆå®˜æ–¹å»ºè®®ï¼šä¸åˆ é™¤ä¼šé€æ¸åƒæ»¡ 5M ç›®å½•ä¸Šé™å¯¼è‡´æ–°æ—¥å¿—å†™å…¥å¤±è´¥ï¼‰
- */
-function removeFaultLogs(params) {
-    const logs = params['external_log'];
-    if (!Array.isArray(logs)) {
-        return;
-    }
-    const arr = logs;
-    for (let i = 0; i < arr.length; i++) {
-        const path = safeStr(arr[i]);
-        if (path === '') {
-            continue;
-        }
-        try {
-            fs.unlinkSync(path);
-        }
-        catch (error) {
-            hilog.warn(DOMAIN, TAG, 'Remove fault log failed: %{public}s', error.message);
-        }
-    }
-}
-/**
- * POST å•æ¡è´Ÿè½½åˆ° Workerï¼ˆçŠ¶æ€å†™å…¥ AppStorage ä¾› Debug é¢æ¿å±•ç¤ºï¼‰ï¼Œè¿”å›æ˜¯å¦æˆåŠŸ
- */
-async function sendPayload(payload) {
-    try {
-        const response = await Http.postJson(WORKER_URL, payload, { 'x-crash-token': CRASH_TOKEN });
-        if (response.code === 200) {
-            hilog.info(DOMAIN, TAG, 'Crash reported: %{public}s', payload.uuid);
-            setStatus(`ä¸ŠæŠ¥æˆåŠŸ ${payload.uuid.slice(0, 8)}`);
-            return true;
-        }
-        hilog.error(DOMAIN, TAG, 'Crash report rejected: HTTP %{public}d', response.code);
-        setStatus(`ä¸ŠæŠ¥å¤±è´¥ HTTP ${response.code}`);
-        return false;
-    }
-    catch (error) {
-        hilog.error(DOMAIN, TAG, 'Crash report failed: %{public}s', error.message);
-        setStatus(`ä¸ŠæŠ¥å¼‚å¸¸: ${error.message}`);
-        return false;
-    }
-}
-/**
- * ä¸ŠæŠ¥å•æ¡å´©æºƒäº‹ä»¶ï¼ˆfire-and-forgetï¼Œå¤±è´¥ä»…æ‰“æ—¥å¿—ï¼‰
- */
-async function reportCrash(info) {
-    let payload;
-    try {
-        payload = assemblePayload(info);
-    }
-    catch (error) {
-        hilog.error(DOMAIN, TAG, 'assemblePayload failed: %{public}s', error.message);
-        setStatus(`ç»„è£…è´Ÿè½½å¼‚å¸¸: ${error.message}`);
-        return;
-    }
-    const ok = await sendPayload(payload);
-    if (ok) {
-        removeFaultLogs(info.params);
-    }
-}
-/**
- * Debug é¢æ¿ã€Œå‘é€æµ‹è¯•æŠ¥å‘Šã€ï¼šä¸åˆ¶é€ å´©æºƒï¼Œç›´æ¥å‘é€ä¸€æ¡æµ‹è¯•è´Ÿè½½åˆ° Workerï¼Œ
- * ç‹¬ç«‹éªŒè¯ URL/å£ä»¤/JSON/é‚®ä»¶é“¾è·¯ï¼ˆä¸çœŸå®å´©æºƒä¸ŠæŠ¥èµ°å®Œå…¨ç›¸åŒçš„ POSTï¼‰ã€‚
- * å¤±è´¥æ—¶æŠ›å‡ºå¼‚å¸¸ï¼Œç”±è°ƒç”¨æ–¹å±•ç¤ºã€‚
- */
-export async function sendTestCrashReport() {
-    if (WORKER_URL.includes('REPLACE')) {
-        setStatus('WORKER_URL æœªé…ç½®ï¼Œä¸ŠæŠ¥å…³é—­');
-        throw new Error('WORKER_URL æœªé…ç½®ï¼Œä¸ŠæŠ¥å…³é—­');
-    }
-    const payload = {
-        app: 'link-test',
-        version: 'debug',
-        crash_type: 'JsError',
-        time: new Date().toISOString(),
-        uuid: `test-${Date.now()}`,
-        foreground: 'yes',
-        device: `${deviceInfo.marketName} ${deviceInfo.productModel}`,
-        os: deviceInfo.osFullName,
-        name: 'LinkTest',
-        message: 'Debug é¢æ¿å‘é€é“¾è·¯æµ‹è¯•ï¼ˆéçœŸå®å´©æºƒï¼‰',
-        stack: '',
-        hilog: ''
-    };
-    const ok = await sendPayload(payload);
-    if (!ok) {
-        throw new Error('å‘é€å¤±è´¥ï¼Œè¯¦è§å´©æºƒä¸ŠæŠ¥çŠ¶æ€è¡Œ');
-    }
-}
-/**
- * å´©æºƒé‚®ä»¶ä¸ŠæŠ¥ï¼š
- * é€šè¿‡ HiAppEvent è®¢é˜…ç³»ç»Ÿ APP_CRASH äº‹ä»¶ï¼ˆè¦†ç›– JsError ä¸ NativeCrashï¼‰ã€‚
- * å´©æºƒäº‹ä»¶ç”±ç³»ç»Ÿ faultlogger è½ç›˜ã€åœ¨ä¸‹æ¬¡å¯åŠ¨æ³¨å†Œ watcher åå›è°ƒï¼Œæ•…é‚®ä»¶åœ¨ç”¨æˆ·å†æ¬¡æ‰“å¼€åº”ç”¨æ—¶é€è¾¾ã€‚
- */
-export class CrashReporter {
-    static init() {
-        if (WORKER_URL.includes('REPLACE')) {
-            hilog.warn(DOMAIN, TAG, 'WORKER_URL not configured, crash reporting disabled');
-            setStatus('WORKER_URL æœªé…ç½®ï¼Œä¸ŠæŠ¥å…³é—­');
-            return;
-        }
-        try {
-            hiAppEvent.addWatcher({
-                name: 'crashMailWatcher',
-                appEventFilters: [
-                    { domain: hiAppEvent.domain.OS, names: [hiAppEvent.event.APP_CRASH] }
-                ],
-                onReceive: (domain, appEventGroups) => {
-                    let total = 0;
-                    for (let g = 0; g < appEventGroups.length; g++) {
-                        const group = appEventGroups[g];
-                        total += group.appEventInfos.length;
-                        for (let i = 0; i < group.appEventInfos.length; i++) {
-                            reportCrash(group.appEventInfos[i]);
-                        }
-                    }
-                    hilog.info(DOMAIN, TAG, 'onReceive fired: %{public}d events', total);
-                    setStatus(`æ”¶åˆ° ${total} æ¡å´©æºƒäº‹ä»¶ï¼Œä¸ŠæŠ¥ä¸­`);
-                }
-            });
-            hilog.info(DOMAIN, TAG, '%{public}s', 'Crash watcher registered');
-            setStatus('watcher å·²æ³¨å†Œï¼Œç­‰å¾…å´©æºƒäº‹ä»¶');
-        }
-        catch (error) {
-            hilog.error(DOMAIN, TAG, 'addWatcher failed: %{public}s', error.message);
-            setStatus(`watcher æ³¨å†Œå¤±è´¥: ${error.message}`);
-        }
-    }
-}
-//# sourceMappingURL=CrashReporter.js.mapÂ–Ù[ hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.file.fs.d.tsÙh hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.hiviewdfx.hiAppEvent.d.tsÙY hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.hilog.d.tsÙ^ hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.deviceInfo.d.tsÙh hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.bundle.bundleManager.d.tsÙWE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\httpClient.etsÙZE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\CrashReporter.etsÔrB›ªmoduleName±isLocalDependency¯isNodeEntryFile§pkgPath±belongProjectPath§pkgNameªpkgVersion±dependencyPkgInfo¯hostModulesInfo°belongModulePath¬shouldEmitJs¥entryÃÂÙ5E:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entryÙ/E:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT¥entry¥1.0.0Ô  ‘ÔrC’²hostDependencyName®hostModuleName¶../utils/CrashReporter¥entryÙ5E:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entryÃÃÚ%«import fs from '@ohos.file.fs';
-import { hiAppEvent, hilog } from '@kit.PerformanceAnalysisKit';
-import { deviceInfo } from '@kit.BasicServicesKit';
-import { bundleManager } from '@kit.AbilityKit';
-import { Http } from './httpClient';
-
-const TAG = 'CrashReporter';
-const DOMAIN = 0x0010;
-
-/** ä¸ŠæŠ¥ç«¯ç‚¹ï¼šCloudflare Worker éƒ¨ç½²åå¡«å…¥ï¼ˆéƒ¨ç½²æ–¹æ³•è§ä»“åº“ cloudflare-worker/crash-mailer.js å¤´éƒ¨æ³¨é‡Šï¼‰ */
-const WORKER_URL = 'https://crash.ascii58.dpdns.org/crash';
-/** ä¸ Worker ç¯å¢ƒå˜é‡ CRASH_TOKEN ä¸€è‡´çš„å…±äº«å£ä»¤ */
-const CRASH_TOKEN = '549200ccc8254e17bf4d9e126b211f811b619f3e7d3542c6854868f28fa55d25';
-
-/** é‚®ä»¶æ­£æ–‡æºå¸¦çš„ hilog æ‘˜è¦è¡Œæ•°ä¸Šé™ */
-const HILOG_MAX_LINES = 20;
-/** NativeCrash æ‹¼æ¥çš„æ•…éšœçº¿ç¨‹è°ƒç”¨æ ˆæ¡æ•°ä¸Šé™ */
-const FRAMES_MAX_LINES = 30;
-
-/** ä¸ŠæŠ¥è´Ÿè½½ï¼ˆæ‰å¹³ç»“æ„ï¼ŒWorker ç«¯ç›´æ¥æ•´ä½“æ¸²æŸ“è¿›é‚®ä»¶æ­£æ–‡ï¼‰ */
-interface CrashPayload {
-  app: string;
-  version: string;
-  crash_type: string;
-  time: string;
-  uuid: string;
-  foreground: string;
-  device: string;
-  os: string;
-  name: string;
-  message: string;
-  stack: string;
-  hilog: string;
-}
-
-/**
- * æŠŠé“¾è·¯çŠ¶æ€å†™å…¥ AppStorageï¼ˆDebug é¢æ¿å±•ç¤ºï¼Œä¾¿äºæ’æŸ¥æ–­ç‚¹ï¼‰
- */
-function setStatus(message: string): void {
-  AppStorage.setOrCreate('crashReportStatus', `${new Date().toISOString().slice(11, 19)} ${message}`);
-}
-
-/**
- * æŠŠäº‹ä»¶ params é‡Œçš„ä»»æ„å­—æ®µå®‰å…¨è½¬æˆå­—ç¬¦ä¸²ï¼ˆå­—æ®µç¼ºå¤±/ç±»å‹å¼‚å¸¸æ—¶è¿”å›ç©ºä¸²ï¼‰
- */
-function safeStr(value: Object): string {
-  if (value === undefined || value === null) {
-    return '';
-  }
-  try {
-    const str = String(value);
-    return str === 'undefined' || str === 'null' ? '' : str;
-  } catch (error) {
-    return '';
-  }
-}
-
-/**
- * NativeCrash çš„æ•…éšœçº¿ç¨‹è°ƒç”¨æ ˆï¼ˆframesï¼‰æ‹¼æ¥ä¸ºæ–‡æœ¬
- */
-function joinFrames(value: Object): string {
-  if (!Array.isArray(value)) {
-    return '';
-  }
-  const lines: string[] = [];
-  const arr = value as Array<Object>;
-  const count = Math.min(arr.length, FRAMES_MAX_LINES);
-  for (let i = 0; i < count; i++) {
-    try {
-      const frame = arr[i] as Record<string, Object>;
-      lines.push(`#${i} ${safeStr(frame['symbol'])} (${safeStr(frame['file'])}+${safeStr(frame['offset'])}) pc=${safeStr(frame['pc'])}`);
-    } catch (error) {
-      break;
-    }
-  }
-  return lines.join('\n');
-}
-
-/**
- * hilog æ‘˜è¦ï¼ˆstring[]ï¼‰æ‹¼æ¥ä¸ºæ–‡æœ¬
- */
-function joinHilog(value: Object): string {
-  if (!Array.isArray(value)) {
-    return '';
-  }
-  const arr = value as Array<Object>;
-  const lines: string[] = [];
-  const count = Math.min(arr.length, HILOG_MAX_LINES);
-  for (let i = 0; i < count; i++) {
-    lines.push(safeStr(arr[i]));
-  }
-  return lines.join('\n');
-}
-
-/**
- * ä» exception å­—æ®µæå–å¼‚å¸¸å/åŸå› /è°ƒç”¨æ ˆï¼š
- * - JsErrorï¼šname / message / stack
- * - NativeCrashï¼šmessage / signal / thread_name / tid / framesï¼ˆstack ä¸ºç©ºæ—¶ç”¨ frames æ‹¼æ¥ï¼‰
- */
-function extractException(params: Record<string, Object>): string[] {
-  let name = '';
-  let message = '';
-  let stack = '';
-  const exception = params['exception'];
-  if (typeof exception !== 'object' || exception === null) {
-    return [name, message, stack];
-  }
-  const ex = exception as Record<string, Object>;
-  name = safeStr(ex['name']);
-  message = safeStr(ex['message']);
-  const rawStack = safeStr(ex['stack']);
-  stack = rawStack !== '' ? rawStack : joinFrames(ex['frames']);
-  const signal = ex['signal'];
-  if (typeof signal === 'object' && signal !== null) {
-    const sig = signal as Record<string, Object>;
-    message = `${message} (signal=${safeStr(sig['signo'])}/${safeStr(sig['code'])} addr=${safeStr(sig['address'])})`;
-  }
-  const threadName = safeStr(ex['thread_name']);
-  if (threadName !== '') {
-    message = `${message} [${threadName} tid=${safeStr(ex['tid'])}]`;
-  }
-  return [name, message, stack];
-}
-
-/**
- * æŠŠ AppEventInfo ç»„è£…æˆä¸ŠæŠ¥è´Ÿè½½
- */
-function assemblePayload(info: hiAppEvent.AppEventInfo): CrashPayload {
-  const params = info.params as Record<string, Object>;
-  const exceptionParts = extractException(params);
-  let version = '';
-  try {
-    const bundleInfo = bundleManager.getBundleInfoForSelfSync(bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT);
-    version = `${bundleInfo.versionName}(${bundleInfo.versionCode})`;
-  } catch (error) {
-    hilog.warn(DOMAIN, TAG, 'Get bundle info failed: %{public}s', (error as Error).message);
-  }
-  const timeMs = Number(params['time'] ?? 0);
-  const payload: CrashPayload = {
-    app: safeStr(params['bundle_name']),
-    version: version,
-    crash_type: safeStr(params['crash_type']),
-    time: timeMs > 0 ? new Date(timeMs).toISOString() : '',
-    uuid: safeStr(params['uuid']),
-    foreground: safeStr(params['foreground']),
-    device: `${deviceInfo.marketName} ${deviceInfo.productModel}`,
-    os: deviceInfo.osFullName,
-    name: exceptionParts[0],
-    message: exceptionParts[1],
-    stack: exceptionParts[2],
-    hilog: joinHilog(params['hilog'])
-  };
-  return payload;
-}
-
-/**
- * ä¸ŠæŠ¥æˆåŠŸååˆ é™¤ç³»ç»Ÿè½ç›˜çš„æ•…éšœæ—¥å¿—æ–‡ä»¶ï¼ˆå®˜æ–¹å»ºè®®ï¼šä¸åˆ é™¤ä¼šé€æ¸åƒæ»¡ 5M ç›®å½•ä¸Šé™å¯¼è‡´æ–°æ—¥å¿—å†™å…¥å¤±è´¥ï¼‰
- */
-function removeFaultLogs(params: Record<string, Object>): void {
-  const logs = params['external_log'];
-  if (!Array.isArray(logs)) {
-    return;
-  }
-  const arr = logs as Array<Object>;
-  for (let i = 0; i < arr.length; i++) {
-    const path = safeStr(arr[i]);
-    if (path === '') {
-      continue;
-    }
-    try {
-      fs.unlinkSync(path);
-    } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'Remove fault log failed: %{public}s', (error as Error).message);
-    }
-  }
-}
-
-/**
- * POST å•æ¡è´Ÿè½½åˆ° Workerï¼ˆçŠ¶æ€å†™å…¥ AppStorage ä¾› Debug é¢æ¿å±•ç¤ºï¼‰ï¼Œè¿”å›æ˜¯å¦æˆåŠŸ
- */
-async function sendPayload(payload: CrashPayload): Promise<boolean> {
-  try {
-    const response = await Http.postJson(WORKER_URL, payload, { 'x-crash-token': CRASH_TOKEN });
-    if (response.code === 200) {
-      hilog.info(DOMAIN, TAG, 'Crash reported: %{public}s', payload.uuid);
-      setStatus(`ä¸ŠæŠ¥æˆåŠŸ ${payload.uuid.slice(0, 8)}`);
-      return true;
-    }
-    hilog.error(DOMAIN, TAG, 'Crash report rejected: HTTP %{public}d', response.code);
-    setStatus(`ä¸ŠæŠ¥å¤±è´¥ HTTP ${response.code}`);
-    return false;
-  } catch (error) {
-    hilog.error(DOMAIN, TAG, 'Crash report failed: %{public}s', (error as Error).message);
-    setStatus(`ä¸ŠæŠ¥å¼‚å¸¸: ${(error as Error).message}`);
-    return false;
-  }
-}
-
-/**
- * ä¸ŠæŠ¥å•æ¡å´©æºƒäº‹ä»¶ï¼ˆfire-and-forgetï¼Œå¤±è´¥ä»…æ‰“æ—¥å¿—ï¼‰
- */
-async function reportCrash(info: hiAppEvent.AppEventInfo): Promise<void> {
-  let payload: CrashPayload;
-  try {
-    payload = assemblePayload(info);
-  } catch (error) {
-    hilog.error(DOMAIN, TAG, 'assemblePayload failed: %{public}s', (error as Error).message);
-    setStatus(`ç»„è£…è´Ÿè½½å¼‚å¸¸: ${(error as Error).message}`);
-    return;
-  }
-  const ok = await sendPayload(payload);
-  if (ok) {
-    removeFaultLogs(info.params as Record<string, Object>);
-  }
-}
-
-/**
- * Debug é¢æ¿ã€Œå‘é€æµ‹è¯•æŠ¥å‘Šã€ï¼šä¸åˆ¶é€ å´©æºƒï¼Œç›´æ¥å‘é€ä¸€æ¡æµ‹è¯•è´Ÿè½½åˆ° Workerï¼Œ
- * ç‹¬ç«‹éªŒè¯ URL/å£ä»¤/JSON/é‚®ä»¶é“¾è·¯ï¼ˆä¸çœŸå®å´©æºƒä¸ŠæŠ¥èµ°å®Œå…¨ç›¸åŒçš„ POSTï¼‰ã€‚
- * å¤±è´¥æ—¶æŠ›å‡ºå¼‚å¸¸ï¼Œç”±è°ƒç”¨æ–¹å±•ç¤ºã€‚
- */
-export async function sendTestCrashReport(): Promise<void> {
-  if (WORKER_URL.includes('REPLACE')) {
-    setStatus('WORKER_URL æœªé…ç½®ï¼Œä¸ŠæŠ¥å…³é—­');
-    throw new Error('WORKER_URL æœªé…ç½®ï¼Œä¸ŠæŠ¥å…³é—­');
-  }
-  const payload: CrashPayload = {
-    app: 'link-test',
-    version: 'debug',
-    crash_type: 'JsError',
-    time: new Date().toISOString(),
-    uuid: `test-${Date.now()}`,
-    foreground: 'yes',
-    device: `${deviceInfo.marketName} ${deviceInfo.productModel}`,
-    os: deviceInfo.osFullName,
-    name: 'LinkTest',
-    message: 'Debug é¢æ¿å‘é€é“¾è·¯æµ‹è¯•ï¼ˆéçœŸå®å´©æºƒï¼‰',
-    stack: '',
-    hilog: ''
-  };
-  const ok = await sendPayload(payload);
-  if (!ok) {
-    throw new Error('å‘é€å¤±è´¥ï¼Œè¯¦è§å´©æºƒä¸ŠæŠ¥çŠ¶æ€è¡Œ');
-  }
-}
-
-/**
- * å´©æºƒé‚®ä»¶ä¸ŠæŠ¥ï¼š
- * é€šè¿‡ HiAppEvent è®¢é˜…ç³»ç»Ÿ APP_CRASH äº‹ä»¶ï¼ˆè¦†ç›– JsError ä¸ NativeCrashï¼‰ã€‚
- * å´©æºƒäº‹ä»¶ç”±ç³»ç»Ÿ faultlogger è½ç›˜ã€åœ¨ä¸‹æ¬¡å¯åŠ¨æ³¨å†Œ watcher åå›è°ƒï¼Œæ•…é‚®ä»¶åœ¨ç”¨æˆ·å†æ¬¡æ‰“å¼€åº”ç”¨æ—¶é€è¾¾ã€‚
- */
-export class CrashReporter {
-  static init(): void {
-    if (WORKER_URL.includes('REPLACE')) {
-      hilog.warn(DOMAIN, TAG, 'WORKER_URL not configured, crash reporting disabled');
-      setStatus('WORKER_URL æœªé…ç½®ï¼Œä¸ŠæŠ¥å…³é—­');
-      return;
-    }
-    try {
-      hiAppEvent.addWatcher({
-        name: 'crashMailWatcher',
-        appEventFilters: [
-          { domain: hiAppEvent.domain.OS, names: [hiAppEvent.event.APP_CRASH] }
-        ],
-        onReceive: (domain: string, appEventGroups: Array<hiAppEvent.AppEventGroup>) => {
-          let total = 0;
-          for (let g = 0; g < appEventGroups.length; g++) {
-            const group = appEventGroups[g];
-            total += group.appEventInfos.length;
-            for (let i = 0; i < group.appEventInfos.length; i++) {
-              reportCrash(group.appEventInfos[i]);
-            }
-          }
-          hilog.info(DOMAIN, TAG, 'onReceive fired: %{public}d events', total);
-          setStatus(`æ”¶åˆ° ${total} æ¡å´©æºƒäº‹ä»¶ï¼Œä¸ŠæŠ¥ä¸­`);
-        }
-      });
-      hilog.info(DOMAIN, TAG, '%{public}s', 'Crash watcher registered');
-      setStatus('watcher å·²æ³¨å†Œï¼Œç­‰å¾…å´©æºƒäº‹ä»¶');
-    } catch (error) {
-      hilog.error(DOMAIN, TAG, 'addWatcher failed: %{public}s', (error as Error).message);
-      setStatus(`watcher æ³¨å†Œå¤±è´¥: ${(error as Error).message}`);
-    }
-  }
-}
-ÀÔrD–­@ohos.file.fsº@ohos.hiviewdfx.hiAppEvent«@ohos.hilog°@ohos.deviceInfoº@ohos.bundle.bundleManager¬./httpClientÔrE—ªassertions¨external¢id¤meta±moduleSideEffectsªresolvedByµsyntheticNamedExportsAÃÙ[ hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.file.fs.d.tsÔrF‘¯hostModulesInfo‘C­@ohos.file.fs¥entryÃªoh-resolveÂEAÃÙh hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.hiviewdfx.hiAppEvent.d.tsF‘Cº@ohos.hiviewdfx.hiAppEvent¥entryÃªoh-resolveÂEAÃÙY hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.hilog.d.tsAÃªoh-resolveÂEAÃÙ^ hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.deviceInfo.d.tsAÃªoh-resolveÂEAÃÙh hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.bundle.bundleManager.d.tsAÃªoh-resolveÂEAÂÙWE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\httpClient.etsAÃªoh-resolveÂ“ÔrG–§version¤fileªsourceRoot§sources¥names¨mappings°CrashReporter.js ‘±CrashReporter.etsÜ–”    ”  ”	  	”  ”  ”  –”   ” 	” ” "”3 ?”4 Ì@–”   ” ” ” "” ?”  Ì@–”   ” 	” ” ”) 2”* 3–”   ” 	” ” ”6 /”7 0˜”   ” ”	 	” ” ” ”# #”$ $–”   ” ”	 	” ” ” –”   ” ” ” ” ” ’”  	 ”ÌS 	ÌS–”  
- ” 
-” 
-” 
-”: 
-:”; 
-;’”   ”( (–”   ” ” ” ”ÌV ÌV”ÌW ÌW’”   ” –”   ” ” ” ” ” ’”   ”! !–”   ” ” ” ” ” ‘”  # ‘” %•”  & ”	 &	” &” &” &"Ü ” '” '” '” '” '”. ',”0 '.”3 '1”7 '5”; '9”= ';”> '<”ÌI 'ÌG”ÌK 'ÌI”ÌL 'ÌJ”ÌQ 'ÌO”ÌR 'ÌP”ÌT 'ÌR”ÌV 'ÌT”ÌX 'ÌV”ÌY 'ÌW”Ì] 'Ì[”Ìd 'Ìb”Ìf 'Ìd”Ìg 'Ìe”Ìh 'Ìf’”  ( ” (‘”  * ‘” ,•”  - ”	 -	” -” -” -š” .” .” .” .” .” .”$ ."”) .'”- .+”/ .-”” /” /” /” /‘” 0’” 1” 1™” 2” 2
-” 2” 2” 2” 2”  2”! 2”" 2Ü ” 3” 3” 3” 3”" 3”& 3"”) 3%”. 3*”4 30”5 31”6 32”7 33”9 35”: 36”; 37”< 38”? 3;”Ì@ 3<‘” 4”” 4” 4” 4” 4”” 5” 5” 5” 5‘” 6’”  7 ” 7‘”  9 ‘” ;•”  < ”	 <	” <” <” <!š” =” =”	 =” =” =” =” =” =” =” =”” >” >” >” >‘” ?–” Ì@”
- Ì@” Ì@” Ì@” Ì@” Ì@–” ÌA”
- ÌA” ÌA” ÌA” ÌA$” ÌA%Ÿ” ÌB”
- ÌB” ÌB” ÌB” ÌB” ÌB” ÌB” ÌB” ÌB” ÌB”% ÌB#”' ÌB%”7 ÌB5”8 ÌB6”9 ÌB7” ÌC”	 ÌC” ÌC” ÌC” ÌC” ÌC” ÌC” ÌC” ÌC” ÌC” ÌC”  ÌC”" ÌC ”$ ÌC"’” ÌD” ÌD™” ÌE” ÌE” ÌE” ÌE” ÌE” ÌE” ÌE”  ÌE4”! ÌE5Ü *” ÌF” ÌF” ÌF” ÌF” ÌF” ÌF” ÌF”  ÌF”' ÌF!”( ÌF"”- ÌF'”. ÌF(”6 ÌF0”7 ÌF1”8 ÌF2”= ÌF7”ÌD ÌF>”ÌE ÌF?”ÌJ ÌFÌD”ÌK ÌFÌE”ÌQ ÌFÌK”ÌR ÌFÌL”ÌS ÌFÌM”ÌW ÌFÌQ”Ì^ ÌFÌX”Ì_ ÌFÌY”Ìd ÌFÌ^”Ìe ÌFÌ_”Ìm ÌFÌg”Ìn ÌFÌh”Ìo ÌFÌi”Ìw ÌFÌq”Ì~ ÌFÌx”Ì ÌFÌy”Ì„ ÌFÌ~”Ì… ÌFÌ”Ì‰ ÌFÌƒ”ÌŠ ÌFÌ„”Ì‹ ÌFÌ…”Ì ÌFÌ‡”Ì ÌFÌˆ”Ì ÌFÌ‰‘”	 ÌG”” ÌG” ÌG” ÌG” ÌG’” ÌH” ÌH‘”	 ÌI‘” ÌJ™” ÌK” ÌK	” ÌK” ÌK” ÌK” ÌK” ÌK” ÌK” ÌK’”  ÌL ” ÌL‘”  ÌN ‘” ÌP•”  ÌQ ”	 ÌQ	” ÌQ” ÌQ” ÌQ š” ÌR” ÌR”	 ÌR” ÌR” ÌR” ÌR” ÌR” ÌR” ÌR” ÌR”” ÌS” ÌS” ÌS” ÌS‘” ÌT–” ÌU”
- ÌU” ÌU” ÌU” ÌU$” ÌU%–” ÌV”
- ÌV” ÌV” ÌV” ÌV” ÌVŸ” ÌW”
- ÌW” ÌW” ÌW” ÌW” ÌW” ÌW” ÌW” ÌW” ÌW”% ÌW#”' ÌW%”6 ÌW4”7 ÌW5”8 ÌW6” ÌX”	 ÌX” ÌX” ÌX” ÌX” ÌX” ÌX” ÌX” ÌX” ÌX” ÌX”  ÌX”" ÌX ”$ ÌX"” ÌY” ÌY	” ÌY
-” ÌY” ÌY” ÌY” ÌY” ÌY” ÌY”  ÌY”! ÌY”" ÌY”# ÌY”$ ÌY ‘” ÌZ™” Ì[” Ì[	” Ì[” Ì[” Ì[” Ì[” Ì[” Ì[” Ì[’”  Ì\ ” Ì\‘”  Ì^ ‘” Ìb•”  Ìc ”	 Ìc	” Ìc” Ìc”  Ìc8–” Ìd” Ìd” Ìd
-” Ìd” Ìd” Ìd–” Ìe” Ìe” Ìe” Ìe” Ìe” Ìe–” Ìf” Ìf” Ìf” Ìf” Ìf” Ìf™” Ìg”
- Ìg” Ìg” Ìg” Ìg” Ìg”( Ìg&”) Ìg'”* Ìg(›” Ìh” Ìh” Ìh” Ìh” Ìh”% Ìh#”) Ìh'”2 Ìh0”7 Ìh5”; Ìh9”= Ìh;š” Ìi” Ìi” Ìi” Ìi” Ìi” Ìi” Ìi”$ Ìi ”% Ìi!”& Ìi"‘” Ìj–” Ìk”
- Ìk” Ìk
-” Ìk” Ìk0” Ìk1›” Ìl” Ìl” Ìl	” Ìl” Ìl” Ìl” Ìl” Ìl” Ìl” Ìl” Ìl›” Ìm” Ìm	” Ìm” Ìm” Ìm” Ìm” Ìm”" Ìm ”# Ìm!”$ Ìm"”% Ìm#œ” Ìn”
- Ìn” Ìn” Ìn” Ìn” Ìn” Ìn”  Ìn”' Ìn%”( Ìn&”) Ìn'”* Ìn(Ü ” Ìo”	 Ìo” Ìo
-” Ìo” Ìo” Ìo” Ìo” Ìo” Ìo”& Ìo$”' Ìo%”( Ìo&”) Ìo'”3 Ìo1”4 Ìo2”6 Ìo4”7 Ìo5”? Ìo=”Ì@ Ìo>”ÌA Ìo?”ÌB ÌoÌ@™” Ìp”
- Ìp” Ìp” Ìp” Ìp” Ìp” Ìp” Ìp”  Ìp›” Ìq” Ìq” Ìq” Ìq” Ìq”" Ìq ”& Ìq$”, Ìq*”1 Ìq/”5 Ìq3”7 Ìq5–” Ìr” Ìr
-” Ìr” Ìr” Ìr0” Ìr1Ü ” Ìs” Ìs” Ìs” Ìs” Ìs”( Ìs$”/ Ìs+”0 Ìs,”3 Ìs/”4 Ìs0”; Ìs7”< Ìs8”= Ìs9”ÌA Ìs=”ÌH ÌsÌD”ÌI ÌsÌE”ÌL ÌsÌH”ÌM ÌsÌI”ÌS ÌsÌO”ÌT ÌsÌP”ÌU ÌsÌQ”Ì^ ÌsÌZ”Ìe ÌsÌa”Ìf ÌsÌb”Ìi ÌsÌe”Ìj ÌsÌf”Ìs ÌsÌo”Ìt ÌsÌp”Ìu ÌsÌq”Ìx ÌsÌt”Ìy ÌsÌu‘” Ìtœ” Ìu”
- Ìu” Ìu” Ìu” Ìu” Ìu”! Ìu”" Ìu ”/ Ìu-”0 Ìu.”1 Ìu/”2 Ìu0–” Ìv” Ìv” Ìv” Ìv” Ìv” ÌvÜ ” Ìw” Ìw” Ìw” Ìw” Ìw”! Ìw”+ Ìw'”3 Ìw/”: Ìw6”; Ìw7”= Ìw9”> Ìw:”ÌC Ìw?”ÌD ÌwÌ@”ÌE ÌwÌA”ÌH ÌwÌD”ÌI ÌwÌE‘” Ìxš” Ìy” Ìy	” Ìy
-” Ìy” Ìy” Ìy” Ìy”  Ìy”! Ìy”" Ìy ’”  Ìz ” Ìz‘”  Ì| ‘” Ì~•”  Ì ”	 Ì	” Ì” Ì” Ì6˜” Ì€”
- Ì€” Ì€” Ì€” Ì€” Ì€” Ì€6” Ì€7™” Ì”
- Ì” Ì” Ì”+ Ì)”, Ì*”2 Ì0”3 Ì1”4 Ì2–” Ì‚” Ì‚” Ì‚” Ì‚” Ì‚” Ì‚’” Ìƒ” ÌƒŸ” Ì„” Ì„
-” Ì„” Ì„”( Ì„$”) Ì„%”ÌA Ì„=”ÌB Ì„>”ÌO Ì„ÌK”ÌP Ì„ÌL”ÌZ Ì„ÌV”Ì[ Ì„ÌW”Ìr Ì„Ìn”Ìs Ì„Ìo”Ìt Ì„Ìp” Ì…” Ì…” Ì…” Ì…” Ì…”  Ì…”+ Ì…'”/ Ì…+”9 Ì…5”: Ì…6”ÌE Ì…ÌA”ÌH Ì…ÌD”ÌI Ì…ÌE‘” Ì†”” Ì†” Ì†” Ì†” Ì†Ü ” Ì‡” Ì‡	” Ì‡
-” Ì‡” Ì‡” Ì‡” Ì‡” Ì‡”  Ì‡”ÌD Ì‡Ì@”ÌF Ì‡ÌC”ÌK Ì‡ÌR”ÌL Ì‡ÌS”ÌS Ì‡ÌZ”ÌT Ì‡Ì[”ÌU Ì‡Ì\‘” Ìˆ” Ì‰”
- Ì‰” Ì‰” Ì‰” Ì‰” Ì‰”  Ì‰”! Ì‰”' Ì‰%”( Ì‰&”, Ì‰*”- Ì‰+”. Ì‰,”/ Ì‰-”” ÌŠ”
- ÌŠ” ÌŠ” ÌŠ š” Ì‹” Ì‹” Ì‹	” Ì‹” Ì‹” Ì‹” Ì‹”) Ì‹%”* Ì‹&”+ Ì‹'”” ÌŒ” ÌŒ” ÌŒ” ÌŒš” Ì” Ì” Ì” Ì” Ì”" Ì”# Ì”/ Ì+”0 Ì,”1 Ì-Ü ” Ì” Ì” Ì
-” Ì” Ì” Ì” Ì” Ì” Ì” Ì”# Ì”$ Ì ”* Ì&”+ Ì'”, Ì(”7 Ì3”9 Ì5”: Ì6”; Ì7”< Ì8”> Ì:š” Ì” Ì” Ì
-” Ì” Ì” Ì” Ì”# Ì”$ Ì ”% Ì!š” Ì” Ì” Ì” Ì” Ì”" Ì”# Ì”/ Ì+”0 Ì,”1 Ì-œ” Ì‘” Ì‘
-” Ì‘” Ì‘” Ì‘” Ì‘”( Ì‘$”, Ì‘(”6 Ì‘2”7 Ì‘3”ÌC Ì‘?”ÌE Ì‘ÌA–” Ì’”
- Ì’” Ì’” Ì’” Ì’”! Ì’—” Ì“” Ì“” Ì“
-” Ì“” Ì“” Ì“” Ì“—” Ì”” Ì”” Ì”” Ì””  Ì””! Ì””" Ì”—” Ì•” Ì•	” Ì•” Ì•” Ì•” Ì•”  Ì•š” Ì–” Ì–	” Ì–” Ì–” Ì–” Ì–”  Ì–”' Ì–#”( Ì–$”) Ì–%’” Ì—” Ì—”” Ì˜” Ì˜	” Ì˜” Ì˜’”  Ì™ ” Ì™‘”  Ì› ‘” Ì•”  Ì ”	 Ì	” Ì” Ì” Ì7™” ÌŸ”
- ÌŸ” ÌŸ” ÌŸ” ÌŸ” ÌŸ”& ÌŸ$”' ÌŸ%”( ÌŸ&š” Ì ” Ì ”	 Ì ” Ì ” Ì ” Ì ” Ì ” Ì ” Ì ” Ì ’” Ì¡” Ì¡‘” Ì¢–” Ì£”
- Ì£” Ì£” Ì£” Ì£#” Ì£$Ü ” Ì¤”	 Ì¤” Ì¤” Ì¤” Ì¤” Ì¤” Ì¤” Ì¤” Ì¤” Ì¤” Ì¤”" Ì¤ ”$ Ì¤"”% Ì¤#”' Ì¤%”) Ì¤'œ” Ì¥” Ì¥
-” Ì¥” Ì¥” Ì¥” Ì¥”  Ì¥”! Ì¥”" Ì¥”# Ì¥”$ Ì¥ ”% Ì¥!–” Ì¦” Ì¦” Ì¦” Ì¦” Ì¦” Ì¦’” Ì§” Ì§‘”	 Ì¨’” Ì©” Ì©˜” Ìª” Ìª” Ìª	” Ìª” Ìª” Ìª” Ìª”  Ìª‘”	 Ì«”” Ì«” Ì«” Ì«” Ì«Ü ” Ì¬” Ì¬” Ì¬” Ì¬” Ì¬” Ì¬” Ì¬”" Ì¬”$ Ì¬”ÌI Ì¬ÌC”ÌK Ì¬ÌF”ÌP Ì¬ÌU”ÌQ Ì¬ÌV”ÌX Ì¬Ì]”ÌY Ì¬Ì^”ÌZ Ì¬Ì_‘”	 Ì­‘” Ì®’”  Ì¯ ” Ì¯‘”  Ì± ‘” Ì³–”  Ì´ ” Ì´” Ì´” Ì´” Ì´”" Ì´0’” Ìµ” ÌµÜ ” Ì¶” Ì¶
-” Ì¶” Ì¶” Ì¶”# Ì¶”$ Ì¶ ”, Ì¶(”- Ì¶)”7 Ì¶3”9 Ì¶5”Ì@ Ì¶<”ÌB Ì¶>”ÌD Ì¶Ì@”ÌS Ì¶ÌO”ÌU Ì¶ÌQ”Ì` Ì¶Ì\”Ìb Ì¶Ì^”Ìc Ì¶Ì_”Ìd Ì¶Ì`˜” Ì·” Ì·” Ì·” Ì·” Ì·” Ì·”! Ì·”# Ì·Ü ” Ì¸” Ì¸” Ì¸” Ì¸” Ì¸” Ì¸” Ì¸”" Ì¸”$ Ì¸”Ì@ Ì¸:”ÌB Ì¸<”ÌI Ì¸ÌC”ÌJ Ì¸ÌD”ÌN Ì¸ÌH”ÌO Ì¸ÌI”ÌP Ì¸ÌJÜ ” Ì¹” Ì¹” Ì¹” Ì¹”% Ì¹”& Ì¹ ”* Ì¹$”+ Ì¹%”0 Ì¹*”1 Ì¹+”2 Ì¹,”4 Ì¹.”5 Ì¹/”6 Ì¹0”8 Ì¹2”9 Ì¹3”: Ì¹4”” Ìº” Ìº” Ìº” Ìº‘”	 Ì»Ü ” Ì¼” Ì¼	” Ì¼
-” Ì¼” Ì¼” Ì¼” Ì¼” Ì¼”! Ì¼”ÌI Ì¼ÌE”ÌK Ì¼ÌG”ÌS Ì¼ÌO”ÌT Ì¼ÌP”ÌX Ì¼ÌT”ÌY Ì¼ÌU”ÌZ Ì¼ÌVš” Ì½” Ì½” Ì½” Ì½”' Ì½#”( Ì½$”, Ì½(”. Ì½*”/ Ì½+”0 Ì½,”” Ì¾” Ì¾” Ì¾” Ì¾‘” Ì¿”” Ì¿” Ì¿” Ì¿” Ì¿Ü ” ÌÀ” ÌÀ	” ÌÀ
-” ÌÀ” ÌÀ” ÌÀ” ÌÀ” ÌÀ”! ÌÀ”ÌB ÌÀ>”ÌD ÌÀÌA”ÌI ÌÀÌP”ÌJ ÌÀÌQ”ÌQ ÌÀÌX”ÌR ÌÀÌY”ÌS ÌÀÌZš” ÌÁ” ÌÁ” ÌÁ” ÌÁ”  ÌÁ'”! ÌÁ(”( ÌÁ/”* ÌÁ1”+ ÌÁ2”, ÌÁ3”” ÌÂ” ÌÂ” ÌÂ” ÌÂ‘” ÌÃ’”  ÌÄ ” ÌÄ‘”  ÌÆ ‘” ÌÈ–”  ÌÉ ” ÌÉ” ÌÉ” ÌÉ” ÌÉ” ÌÉ8”” ÌÊ” ÌÊ” ÌÊ” ÌÊ’” ÌË” ÌË˜” ÌÌ” ÌÌ” ÌÌ”! ÌÌ”" ÌÌ”& ÌÌ"”' ÌÌ#”( ÌÌ$‘” ÌÍ”” ÌÍ” ÌÍ” ÌÍ” ÌÍÜ ” ÌÎ” ÌÎ	” ÌÎ
-” ÌÎ” ÌÎ” ÌÎ” ÌÎ” ÌÎ”! ÌÎ”ÌE ÌÎÌA”ÌG ÌÎÌD”ÌL ÌÎÌS”ÌM ÌÎÌT”ÌT ÌÎÌ[”ÌU ÌÎÌ\”ÌV ÌÎÌ]š” ÌÏ” ÌÏ” ÌÏ” ÌÏ”" ÌÏ)”# ÌÏ*”* ÌÏ1”, ÌÏ3”- ÌÏ4”. ÌÏ5’” ÌĞ” ÌĞ‘” ÌÑš” ÌÒ”
- ÌÒ” ÌÒ
-” ÌÒ” ÌÒ”  ÌÒ”! ÌÒ”( ÌÒ&”) ÌÒ'”* ÌÒ(”” ÌÓ” ÌÓ”
- ÌÓ” ÌÓ
-˜” ÌÔ” ÌÔ” ÌÔ” ÌÔ” ÌÔ”# ÌÔ9”$ ÌÔ:”% ÌÔ;‘” ÌÕ’”  ÌÖ ” ÌÖ‘”  ÌØ ‘” ÌÜ–”  Ìİ ” Ìİ” Ìİ” Ìİ” Ìİ”) Ìİ)™” ÌŞ” ÌŞ” ÌŞ” ÌŞ” ÌŞ” ÌŞ”% ÌŞ#”& ÌŞ$”( ÌŞ&–” Ìß” Ìß” Ìß”' Ìß#”( Ìß$”) Ìß%˜” Ìà” Ìà
-” Ìà” Ìà” Ìà”- Ìà)”. Ìà*”/ Ìà+‘” Ìá”” Ìâ”
- Ìâ” Ìâ” Ìâ ”” Ìã” Ìã” Ìã	” Ìã”” Ìä” Ìä” Ìä” Ìä”” Ìå” Ìå” Ìå” Ìå™” Ìæ” Ìæ” Ìæ
-” Ìæ” Ìæ” Ìæ” Ìæ”$ Ìæ ”& Ìæ"™” Ìç” Ìç” Ìç
-” Ìç” Ìç” Ìç” Ìç”  Ìç”" Ìç”” Ìè” Ìè” Ìè” Ìèœ” Ìé” Ìé
-” Ìé” Ìé” Ìé” Ìé”( Ìé$”, Ìé(”6 Ìé2”7 Ìé3”ÌC Ìé?”ÌE ÌéÌA–” Ìê”
- Ìê” Ìê” Ìê” Ìê”! Ìê”” Ìë” Ìë” Ìë
-” Ìë”” Ìì” Ìì” Ìì”( Ìì$”” Ìí” Ìí	” Ìí” Ìí”” Ìî” Ìî	” Ìî” Ìî’” Ìï” Ìïš” Ìğ”
- Ìğ” Ìğ
-” Ìğ” Ìğ”  Ìğ”! Ìğ”( Ìğ&”) Ìğ'”* Ìğ(•” Ìñ” Ìñ”	 Ìñ” Ìñ	” Ìñ˜” Ìò” Ìò
-” Ìò” Ìò” Ìò”( Ìò$”) Ìò%”* Ìò&‘” Ìó’”  Ìô ” Ìô‘”  Ìö ‘” Ìú””  Ìû ” Ìû” Ìû” Ìû”” Ìü”
- Ìü” Ìü	” Ìü™” Ìı” Ìı” Ìı” Ìı” Ìı”  Ìı”) Ìı%”* Ìı&”, Ìı(œ” Ìş” Ìş” Ìş” Ìş” Ìş” Ìş” Ìş”" Ìş”$ Ìş”ÌY ÌşÌS”ÌZ ÌşÌT”Ì[ ÌşÌU–” Ìÿ” Ìÿ” Ìÿ”+ Ìÿ%”, Ìÿ&”- Ìÿ'’” Í ” Í ‘”	 Í’” Í” Í•” Í” Í” Í”! Í”" Í”” Í” Í” Í”( Í “” Í” Í”! ÍÜ ” Í
-” Í” Í” Í”( Í”) Í”/ Í%”0 Í&”2 Í(”4 Í*”9 Í/”; Í1”< Í2”ÌF Í<”ÌG Í=”ÌL ÍÌB”ÌM ÍÌC”ÌV ÍÌL”ÌW ÍÌM”ÌY ÍÌO‘” Í	™” Í” Í” Í” Í”" Í"”$ Í$”2 ÍÌS”4 ÍÌU”6 ÍÌW–” Í	
-” Í	” Í	”  Í	”! Í	”" Í	Ü ” Í
-
-” Í
-” Í
-” Í
-”! Í
-”" Í
-”$ Í
-”% Í
-”( Í
-”6 Í
-,”7 Í
--”= Í
-3”? Í
-5”Ì@ Í
-6”ÌB Í
-8”ÌD Í
-:™” Í” Í”# Í”& Í”4 Í(”5 Í)”6 Í*”7 Í+”8 Í,™” Í” Í”! Í”& Í”' Í”4 Í(”5 Í)”; Í/”< Í0Ü ” Í” Í”! Í”" Í”% Í”& Í”( Í”) Í”, Í ”1 Í%”2 Í&”? Í3”Ì@ Í4”ÌF Í:”ÌH Í<”ÌI Í=”ÌK Í?”ÌM ÍÌA›” Í”' Í”( Í”- Í”. Í ”; Í-”< Í.”= Í/”> Í0”? Í1”Ì@ Í2‘” Í‘” Í” Í
-” Í” Í” Í” Í”% Í”' Í”* Í ”, Í"”ÌP ÍÌF”ÌR ÍÌH”ÌW ÍÌM”ÌX ÍÌN”ÌY ÍÌO˜” Í
-” Í” Í”$ Í”) Í”5 Í+”6 Í,”7 Í-’” Í” Í	“” Í” Í” Í	” Í” Í” Í” Í” Í” Í” Í”" Í”$ Í”0 Í*”2 Í,”ÌL ÍÌF”ÌM ÍÌG”ÌN ÍÌH–” Í” Í” Í”* Í$”+ Í%”, Í&‘”	 Í”” Í” Í” Í” ÍÜ ” Í” Í” Í” Í” Í” Í”  Í”# Í”% Í”ÌD Í>”ÌF ÍÌA”ÌK ÍÌP”ÌL ÍÌQ”ÌS ÍÌX”ÌT ÍÌY”ÌU ÍÌZš” Í” Í” Í”' Í"”, Í1”- Í2”4 Í9”6 Í;”7 Í<”8 Í=‘”	 Í’” Í” Í‘” ÍÔrH–§version¤file§sources®sourcesContent¥names¨mappingsÀ‘À‘ÀÜ‘”    ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”  	 ‘”  
- ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”    ‘”  ! ‘”  " ‘”  # ‘”  $ ‘”  % ‘”  & ‘”  ' ‘”  ( ‘”  ) ‘”  * ‘”  + ‘”  , ‘”  - ‘”  . ‘”  / ‘”  0 ‘”  1 ‘”  2 ‘”  3 ‘”  4 ‘”  5 ‘”  6 ‘”  7 ‘”  8 ‘”  9 ‘”  : ‘”  ; ‘”  < ‘”  = ‘”  > ‘”  ? ‘”  Ì@ ‘”  ÌA ‘”  ÌB ‘”  ÌC ‘”  ÌD ‘”  ÌE ‘”  ÌF ‘”  ÌG ‘”  ÌH ‘”  ÌI ‘”  ÌJ ‘”  ÌK ‘”  ÌL ‘”  ÌM ‘”  ÌN ‘”  ÌO ‘”  ÌP ‘”  ÌQ ‘”  ÌR ‘”  ÌS ‘”  ÌT ‘”  ÌU ‘”  ÌV ‘”  ÌW ‘”  ÌX ‘”  ÌY ‘”  ÌZ ‘”  Ì[ ‘”  Ì\ ‘”  Ì] ‘”  Ì^ ‘”  Ì_ ‘”  Ì` ‘”  Ìa ‘”  Ìb ‘”  Ìc ‘”  Ìd ‘”  Ìe ‘”  Ìf ‘”  Ìg ‘”  Ìh ‘”  Ìi ‘”  Ìj ‘”  Ìk ‘”  Ìl ‘”  Ìm ‘”  Ìn ‘”  Ìo ‘”  Ìp ‘”  Ìq ‘”  Ìr ‘”  Ìs ‘”  Ìt ‘”  Ìu ‘”  Ìv ‘”  Ìw ‘”  Ìx ‘”  Ìy ‘”  Ìz ‘”  Ì{ ‘”  Ì| ‘”  Ì} ‘”  Ì~ ‘”  Ì ‘”  Ì€ ‘”  Ì ‘”  Ì‚ ‘”  Ìƒ ‘”  Ì„ ‘”  Ì… ‘”  Ì† ‘”  Ì‡ ‘”  Ìˆ ‘”  Ì‰ ‘”  ÌŠ ‘”  Ì‹ ‘”  ÌŒ ‘”  Ì ‘”  Ì ‘”  Ì ‘”  Ì ‘”  Ì‘ ‘”  Ì’ ‘”  Ì“ ‘”  Ì” ‘”  Ì• ‘”  Ì– ‘”  Ì— ‘”  Ì˜ ‘”  Ì™ ‘”  Ìš ‘”  Ì› ‘”  Ìœ ‘”  Ì ‘”  Ì ‘”  ÌŸ ‘”  Ì  ‘”  Ì¡ ‘”  Ì¢ ‘”  Ì£ ‘”  Ì¤ ‘”  Ì¥ ‘”  Ì¦ ‘”  Ì§ ‘”  Ì¨ ‘”  Ì© ‘”  Ìª ‘”  Ì« ‘”  Ì¬ ‘”  Ì­ ‘”  Ì® ‘”  Ì¯ ‘”  Ì° ‘”  Ì± ‘”  Ì² ‘”  Ì³ ‘”  Ì´ ‘”  Ìµ ‘”  Ì¶ ‘”  Ì· ‘”  Ì¸ ‘”  Ì¹ ‘”  Ìº ‘”  Ì» ‘”  Ì¼ ‘”  Ì½ ‘”  Ì¾ ‘”  Ì¿ ‘”  ÌÀ ‘”  ÌÁ ‘”  ÌÂ ‘”  ÌÃ ‘”  ÌÄ ‘”  ÌÅ ‘”  ÌÆ ‘”  ÌÇ ‘”  ÌÈ ‘”  ÌÉ ‘”  ÌÊ ‘”  ÌË ‘”  ÌÌ ‘”  ÌÍ ‘”  ÌÎ ‘”  ÌÏ ‘”  ÌĞ ‘”  ÌÑ ‘”  ÌÒ ‘”  ÌÓ ‘”  ÌÔ ‘”  ÌÕ ‘”  ÌÖ ‘”  Ì× ‘”  ÌØ ‘”  ÌÙ ‘”  ÌÚ ‘”  ÌÛ ‘”  ÌÜ ‘”  Ìİ ‘”  ÌŞ ‘”  Ìß ‘”  Ìà ‘”  Ìá ‘”  Ìâ ‘”  Ìã ‘”  Ìä ‘”  Ìå ‘”  Ìæ ‘”  Ìç ‘”  Ìè ‘”  Ìé ‘”  Ìê ‘”  Ìë ‘”  Ìì ‘”  Ìí ‘”  Ìî ‘”  Ìï ‘”  Ìğ ‘”  Ìñ ‘”  Ìò ‘”  Ìó ‘”  Ìô ‘”  Ìõ ‘”  Ìö ‘”  Ì÷ ‘”  Ìø ‘”  Ìù ‘”  Ìú ‘”  Ìû ‘”  Ìü ‘”  Ìı ‘”  Ìş ‘”  Ìÿ ‘”  Í  ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ÔrI’§missing¦pluginÃ¦genAbcÂÔ  ÔrJ”²dynamicImportCache¹exportAllDeclarationCache»exportNamedDeclarationCache«importCache’ÔrK–¤type¥start£end«declarationªspecifiers¦source¶ExportNamedDeclarationÍÇÍ¬ÔrL™¤type¥start£end¢idªexpression©generator¥async¦params¤body³FunctionDeclarationÍÎÍ¬ÔrM”¤type¥start£end¤nameªIdentifierÍİÍğ³sendTestCrashReportÂÂÃÔrN”¤type¥start£end¤body®BlockStatementÍóÍ¬”ÔrO–¤type¥start£end¤testªconsequent©alternate«IfStatementÍúÍ‚ÔrP–¤type¥start£end¦callee©arguments¨optional®CallExpressionÍşÍÔrQ—¤type¥start£end¦object¨property¨computed¨optional°MemberExpressionÍşÍMªIdentifierÍşÍªWORKER_URLMªIdentifierÍ	Í¨includesÂÂ‘ÔrR•¤type¥start£end¥value£raw§LiteralÍÍ§REPLACE©'REPLACE'ÂN®BlockStatementÍÍ‚’ÔrS”¤type¥start£endªexpression³ExpressionStatementÍ)ÍJP®CallExpressionÍ)ÍIMªIdentifierÍ)Í2©setStatus‘R§LiteralÍ3ÍHÙ#WORKER_URL æœªé…ç½®ï¼Œä¸ŠæŠ¥å…³é—­Ù%'WORKER_URL æœªé…ç½®ï¼Œä¸ŠæŠ¥å…³é—­'ÂÔrT”¤type¥start£end¨argument®ThrowStatementÍTÍ{ÔrU•¤type¥start£end¦callee©arguments­NewExpressionÍZÍzMªIdentifierÍ^Íc¥Error‘R§LiteralÍdÍyÙ#WORKER_URL æœªé…ç½®ï¼Œä¸ŠæŠ¥å…³é—­Ù%'WORKER_URL æœªé…ç½®ï¼Œä¸ŠæŠ¥å…³é—­'ÀÔrV•¤type¥start£end¬declarations¤kind³VariableDeclarationÍˆÍ:‘ÔrW•¤type¥start£end¢id¤init²VariableDeclaratorÍÍ9MªIdentifierÍÍ•§payloadÔrX”¤type¥start£endªproperties°ObjectExpressionÍ˜Í9œÔrY™¤type¥start£end¦method©shorthand¨computed£key¥value¤kind¨PropertyÍ£Í³ÂÂÂMªIdentifierÍ£Í¦£appR§LiteralÍ¨Í³©link-test«'link-test'¤initY¨PropertyÍ¾ÍÎÂÂÂMªIdentifierÍ¾ÍÅ§versionR§LiteralÍÇÍÎ¥debug§'debug'¤initY¨PropertyÍÙÍîÂÂÂMªIdentifierÍÙÍãªcrash_typeR§LiteralÍåÍî§JsError©'JsError'¤initY¨PropertyÍùÍÂÂÂMªIdentifierÍùÍı¤timeP®CallExpressionÍÿÍQ°MemberExpressionÍÿÍU­NewExpressionÍÿÍ	MªIdentifierÍÍ¤DateMªIdentifierÍ
-Í«toISOStringÂÂÂ¤initY¨PropertyÍ"Í<ÂÂÂMªIdentifierÍ"Í&¤uuidÔrZ•¤type¥start£end«expressions¦quasis¯TemplateLiteralÍ(Í<‘P®CallExpressionÍ0Í:Q°MemberExpressionÍ0Í8MªIdentifierÍ0Í4¤DateMªIdentifierÍ5Í8£nowÂÂÂ’Ôr[•¤type¥start£end¥value¤tail¯TemplateElementÍ)Í.Ôr\’£raw¦cooked¥test-¥test-Â[¯TemplateElementÍ;Í;\  Ã¤initY¨PropertyÍGÍXÂÂÂMªIdentifierÍGÍQªforegroundR§LiteralÍSÍX£yes¥'yes'¤initY¨PropertyÍcÍ ÂÂÂMªIdentifierÍcÍi¦deviceZ¯TemplateLiteralÍkÍ ’Q°MemberExpressionÍnÍƒMªIdentifierÍnÍxªdeviceInfoMªIdentifierÍyÍƒªmarketNameÂÂQ°MemberExpressionÍ‡ÍMªIdentifierÍ‡Í‘ªdeviceInfoMªIdentifierÍ’Í¬productModelÂÂ“[¯TemplateElementÍlÍl\  Â[¯TemplateElementÍ„Í…\¡ ¡ Â[¯TemplateElementÍŸÍŸ\  Ã¤initY¨PropertyÍ«ÍÄÂÂÂMªIdentifierÍ«Í­¢osQ°MemberExpressionÍ¯ÍÄMªIdentifierÍ¯Í¹ªdeviceInfoMªIdentifierÍºÍÄªosFullNameÂÂ¤initY¨PropertyÍÏÍßÂÂÂMªIdentifierÍÏÍÓ¤nameR§LiteralÍÕÍß¨LinkTestª'LinkTest'¤initY¨PropertyÍêÍ
-ÂÂÂMªIdentifierÍêÍñ§messageR§LiteralÍóÍ
-Ù3Debug é¢æ¿å‘é€é“¾è·¯æµ‹è¯•ï¼ˆéçœŸå®å´©æºƒï¼‰Ù5'Debug é¢æ¿å‘é€é“¾è·¯æµ‹è¯•ï¼ˆéçœŸå®å´©æºƒï¼‰'¤initY¨PropertyÍÍÂÂÂMªIdentifierÍÍ¥stackR§LiteralÍÍ ¢''¤initY¨PropertyÍ)Í2ÂÂÂMªIdentifierÍ)Í.¥hilogR§LiteralÍ0Í2 ¢''¤init¥constV³VariableDeclarationÍ@Íf‘W²VariableDeclaratorÍFÍeMªIdentifierÍFÍH¢okT¯AwaitExpressionÍKÍeP®CallExpressionÍQÍeMªIdentifierÍQÍ\«sendPayload‘MªIdentifierÍ]Íd§payloadÂ¥constO«IfStatementÍlÍ©Ôr]–¤type¥start£end¨operator¦prefix¨argument¯UnaryExpressionÍpÍs¡!ÃMªIdentifierÍqÍs¢okN®BlockStatementÍuÍ©‘T®ThrowStatementÍ€Í¢U­NewExpressionÍ†Í¡MªIdentifierÍŠÍ¥Error‘R§LiteralÍÍ Ù*å‘é€å¤±è´¥ï¼Œè¯¦è§å´©æºƒä¸ŠæŠ¥çŠ¶æ€è¡ŒÙ,'å‘é€å¤±è´¥ï¼Œè¯¦è§å´©æºƒä¸ŠæŠ¥çŠ¶æ€è¡Œ'ÀÀK¶ExportNamedDeclarationÍCÍ""Ôr^–¤type¥start£end¢idªsuperClass¤body°ClassDeclarationÍJÍ""MªIdentifierÍPÍ]­CrashReporterÀN©ClassBodyÍ^Í""‘Ôr_˜¤type¥start£end¦static¨computed£key¤kind¥value°MethodDefinitionÍeÍ"ÃÂMªIdentifierÍlÍp¤init¦methodL²FunctionExpressionÍpÍ"ÀÂÂÂN®BlockStatementÍsÍ"’O«IfStatementÍ~ÍOP®CallExpressionÍ‚Í Q°MemberExpressionÍ‚Í•MªIdentifierÍ‚ÍŒªWORKER_URLMªIdentifierÍÍ•¨includesÂÂ‘R§LiteralÍ–ÍŸ§REPLACE©'REPLACE'ÂN®BlockStatementÍ¢ÍO“S³ExpressionStatementÍ±Í P®CallExpressionÍ±ÍÿQ°MemberExpressionÍ±Í»MªIdentifierÍ±Í¶¥hilogMªIdentifierÍ·Í»¤warnÂÂ“MªIdentifierÍ¼ÍÂ¦DOMAINMªIdentifierÍÄÍÇ£TAGR§LiteralÍÉÍşÙ3WORKER_URL not configured, crash reporting disabledÙ5'WORKER_URL not configured, crash reporting disabled'ÂS³ExpressionStatementÍÍ/P®CallExpressionÍÍ.MªIdentifierÍÍ©setStatus‘R§LiteralÍÍ-Ù#WORKER_URL æœªé…ç½®ï¼Œä¸ŠæŠ¥å…³é—­Ù%'WORKER_URL æœªé…ç½®ï¼Œä¸ŠæŠ¥å…³é—­'ÂT¯ReturnStatementÍ=ÍDÀÀÔr`–¤type¥start£end¥block§handler©finalizer¬TryStatementÍYÍ"N®BlockStatementÍ]Í!c“S³ExpressionStatementÍlÍ ÚP®CallExpressionÍlÍ ÙQ°MemberExpressionÍlÍMªIdentifierÍlÍvªhiAppEventMªIdentifierÍwÍªaddWatcherÂÂ‘X°ObjectExpressionÍ‚Í Ø“Y¨PropertyÍ•Í­ÂÂÂMªIdentifierÍ•Í™¤nameR§LiteralÍ›Í­°crashMailWatcher²'crashMailWatcher'¤initY¨PropertyÍÀÍ@ÂÂÂMªIdentifierÍÀÍÏ¯appEventFiltersÔra”¤type¥start£end¨elements¯ArrayExpressionÍÑÍ@‘X°ObjectExpressionÍèÍ-’Y¨PropertyÍêÍÂÂÂMªIdentifierÍêÍğ¦domainQ°MemberExpressionÍòÍQ°MemberExpressionÍòÍMªIdentifierÍòÍüªhiAppEventMªIdentifierÍıÍ¦domainÂÂMªIdentifierÍÍ¢OSÂÂ¤initY¨PropertyÍÍ+ÂÂÂMªIdentifierÍÍ¥namesa¯ArrayExpressionÍÍ+‘Q°MemberExpressionÍÍ*Q°MemberExpressionÍÍ MªIdentifierÍÍªhiAppEventMªIdentifierÍÍ ¥eventÂÂMªIdentifierÍ!Í*©APP_CRASHÂÂ¤init¤initY¨PropertyÍSÍ ÉÂÂÂMªIdentifierÍSÍ\©onReceiveL·ArrowFunctionExpressionÍ^Í ÉÀÂÂÂ’MªIdentifierÍ_Íe¦domainMªIdentifierÍgÍu®appEventGroupsN®BlockStatementÍzÍ É”V³VariableDeclarationÍ‘ÍŸ‘W²VariableDeclaratorÍ•ÍMªIdentifierÍ•Íš¥totalR§LiteralÍÍ ¡0£letÔrb—¤type¥start£end¤init¤test¦update¤body¬ForStatementÍµÍ "V³VariableDeclarationÍºÍÃ‘W²VariableDeclaratorÍ¾ÍÃMªIdentifierÍ¾Í¿¡gR§LiteralÍÂÍÃ ¡0£letÔrc–¤type¥start£end¤left¨operator¥right°BinaryExpressionÍÅÍŞMªIdentifierÍÅÍÆ¡g¡<Q°MemberExpressionÍÉÍŞMªIdentifierÍÉÍ×®appEventGroupsMªIdentifierÍØÍŞ¦lengthÂÂ]°UpdateExpressionÍàÍã¢++ÂMªIdentifierÍàÍá¡gN®BlockStatementÍåÍ "“V³VariableDeclarationÍ Í ‘W²VariableDeclaratorÍÍMªIdentifierÍÍ¥groupQ°MemberExpressionÍÍMªIdentifierÍÍ®appEventGroupsMªIdentifierÍÍ¡gÃÂ¥constS³ExpressionStatementÍ:Í^Ôrd–¤type¥start£end¨operator¤left¥right´AssignmentExpressionÍ:Í]¢+=MªIdentifierÍ:Í?¥totalQ°MemberExpressionÍCÍ]Q°MemberExpressionÍCÍVMªIdentifierÍCÍH¥groupMªIdentifierÍIÍV­appEventInfosÂÂMªIdentifierÍWÍ]¦lengthÂÂb¬ForStatementÍxÍ V³VariableDeclarationÍ}Í†‘W²VariableDeclaratorÍÍ†MªIdentifierÍÍ‚¡iR§LiteralÍ…Í† ¡0£letc°BinaryExpressionÍˆÍ¦MªIdentifierÍˆÍ‰¡i¡<Q°MemberExpressionÍŒÍ¦Q°MemberExpressionÍŒÍŸMªIdentifierÍŒÍ‘¥groupMªIdentifierÍ’ÍŸ­appEventInfosÂÂMªIdentifierÍ Í¦¦lengthÂÂ]°UpdateExpressionÍ¨Í«¢++ÂMªIdentifierÍ¨Í©¡iN®BlockStatementÍ­Í ‘S³ExpressionStatementÍÌÍğP®CallExpressionÍÌÍïMªIdentifierÍÌÍ×«reportCrash‘Q°MemberExpressionÍØÍîQ°MemberExpressionÍØÍëMªIdentifierÍØÍİ¥groupMªIdentifierÍŞÍë­appEventInfosÂÂMªIdentifierÍìÍí¡iÃÂÂS³ExpressionStatementÍ 8Í }P®CallExpressionÍ 8Í |Q°MemberExpressionÍ 8Í BMªIdentifierÍ 8Í =¥hilogMªIdentifierÍ >Í B¤infoÂÂ”MªIdentifierÍ CÍ I¦DOMAINMªIdentifierÍ KÍ N£TAGR§LiteralÍ PÍ tÙ"onReceive fired: %{public}d eventsÙ$'onReceive fired: %{public}d events'MªIdentifierÍ vÍ {¥totalÂS³ExpressionStatementÍ “Í ¶P®CallExpressionÍ “Í µMªIdentifierÍ “Í œ©setStatus‘Z¯TemplateLiteralÍ Í ´‘MªIdentifierÍ £Í ¨¥total’[¯TemplateElementÍ Í ¡\§æ”¶åˆ° §æ”¶åˆ° Â[¯TemplateElementÍ ©Í ³\¼ æ¡å´©æºƒäº‹ä»¶ï¼Œä¸ŠæŠ¥ä¸­¼ æ¡å´©æºƒäº‹ä»¶ï¼Œä¸ŠæŠ¥ä¸­ÃÂ¤initÂS³ExpressionStatementÍ èÍ!*P®CallExpressionÍ èÍ!)Q°MemberExpressionÍ èÍ òMªIdentifierÍ èÍ í¥hilogMªIdentifierÍ îÍ ò¤infoÂÂ”MªIdentifierÍ óÍ ù¦DOMAINMªIdentifierÍ ûÍ ş£TAGR§LiteralÍ! Í!ª%{public}s¬'%{public}s'R§LiteralÍ!Í!(¸Crash watcher registeredº'Crash watcher registered'ÂS³ExpressionStatementÍ!8Í!XP®CallExpressionÍ!8Í!WMªIdentifierÍ!8Í!A©setStatus‘R§LiteralÍ!BÍ!VÙ&watcher å·²æ³¨å†Œï¼Œç­‰å¾…å´©æºƒäº‹ä»¶Ù('watcher å·²æ³¨å†Œï¼Œç­‰å¾…å´©æºƒäº‹ä»¶'ÂÔre•¤type¥start£end¥param¤body«CatchClauseÍ!mÍ"MªIdentifierÍ!tÍ!y¥errorN®BlockStatementÍ!{Í"’S³ExpressionStatementÍ!ŠÍ!ÓP®CallExpressionÍ!ŠÍ!ÒQ°MemberExpressionÍ!ŠÍ!•MªIdentifierÍ!ŠÍ!¥hilogMªIdentifierÍ!Í!•¥errorÂÂ”MªIdentifierÍ!–Í!œ¦DOMAINMªIdentifierÍ!Í!¡£TAGR§LiteralÍ!£Í!Â½addWatcher failed: %{public}s¿'addWatcher failed: %{public}s'Q°MemberExpressionÍ!ÄÍ!ÑMªIdentifierÍ!ÄÍ!É¥errorMªIdentifierÍ!ÊÍ!Ñ§messageÂÂÂS³ExpressionStatementÍ!áÍ"P®CallExpressionÍ!áÍ"MªIdentifierÍ!áÍ!ê©setStatus‘Z¯TemplateLiteralÍ!ëÍ"‘Q°MemberExpressionÍ!üÍ"	MªIdentifierÍ!üÍ"¥errorMªIdentifierÍ"Í"	§messageÂÂ’[¯TemplateElementÍ!ìÍ!ú\¶watcher æ³¨å†Œå¤±è´¥: ¶watcher æ³¨å†Œå¤±è´¥: Â[¯TemplateElementÍ"
-Í"
-\  ÃÂÀÀ–Ôrf•¤type¥start£endªspecifiers¦source±ImportDeclaration ‘Ôrg”¤type¥start£end¥local¶ImportDefaultSpecifier	MªIdentifier	¢fsR§Literal­@ohos.file.fs¯'@ohos.file.fs'f±ImportDeclaration!ÌU‘g¶ImportDefaultSpecifier(2MªIdentifier(2ªhiAppEventR§Literal8ÌTº@ohos.hiviewdfx.hiAppEvent¼"@ohos.hiviewdfx.hiAppEvent"f±ImportDeclarationÌWÌw‘g¶ImportDefaultSpecifierÌ^ÌcMªIdentifierÌ^Ìc¥hilogR§LiteralÌiÌv«@ohos.hilog­"@ohos.hilog"f±ImportDeclarationÌyÌ£‘g¶ImportDefaultSpecifierÌ€ÌŠMªIdentifierÌ€ÌŠªdeviceInfoR§LiteralÌÌ¢°@ohos.deviceInfo²"@ohos.deviceInfo"f±ImportDeclarationÌ¥ÌÜ‘g¶ImportDefaultSpecifierÌ¬Ì¹MªIdentifierÌ¬Ì¹­bundleManagerR§LiteralÌ¿ÌÛº@ohos.bundle.bundleManager¼"@ohos.bundle.bundleManager"f±ImportDeclarationÌŞÍ‘Ôrh•¤type¥start£end¨imported¥local¯ImportSpecifierÌçÌëMªIdentifierÌçÌë¤HttpMªIdentifierÌçÌë¤HttpR§LiteralÌóÍ¬./httpClient®'./httpClient'

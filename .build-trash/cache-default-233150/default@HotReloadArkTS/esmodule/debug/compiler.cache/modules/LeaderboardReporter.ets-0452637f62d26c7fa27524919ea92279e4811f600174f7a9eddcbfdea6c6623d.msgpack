@@ -1,651 +1,0 @@
-Ôr@Ÿªassertions¤code´customTransformCache¬dependencies¢id¤meta±moduleSideEffects¬originalCode±originalSourcemap«resolvedIds®sourcemapChainµsyntheticNamedExportsµtransformDependencies®transformFiles¨cacheAstÔrAÚ(ôimport hilog from "@ohos.hilog";
-import preferences from "@ohos.data.preferences";
-import { Http } from './httpClient';
-import { DatabaseManager } from './DataBase';
-import { loginFunction } from './Login';
-const TAG = 'LeaderboardReporter';
-const DOMAIN = 0x0010;
-/**
- * ä¸ŠæŠ¥ç«¯ç‚¹ï¼šCloudflare Worker éƒ¨ç½²åå¡«å…¥ï¼ˆéƒ¨ç½²æ–¹æ³•è§ä»“åº“ cloudflare-worker/leaderboard.js å¤´éƒ¨æ³¨é‡Šï¼‰ã€‚
- * åªå¡«åŸŸåæ ¹è·¯å¾„ï¼Œ/report ç”±æœ¬ç±»æ‹¼æ¥ï¼›å« REPLACE è§†ä¸ºæœªé…ç½®ï¼Œä¸ŠæŠ¥é™é»˜å…³é—­ã€‚
- */
-const WORKER_URL = 'https://crash.ascii58.dpdns.org';
-/** ä¸ Worker ç¯å¢ƒå˜é‡ LB_TOKEN ä¸€è‡´çš„å…±äº«å£ä»¤ */
-const LB_TOKEN = '549200ccc8254e17bf4d9e126b211f811b619f3e7d3542c6854868f28fa55d25';
-/** è‡ªåŠ¨è¡¥å½•æ°´ä½çº¿ï¼ˆæœ¬åœ°åå¥½é”®ï¼‰ï¼šåªä¸ŠæŠ¥è¯¥æ—¶é—´æˆ³ï¼ˆæ¯«ç§’ï¼‰ä¹‹åçš„è®°å½• */
-const PREF_LAST_SYNC_KEY = 'lb_last_sync_ms';
-/**
- * ç­¾åˆ°ä¿¡æ¯äº‘ä¸ŠæŠ¥ï¼ˆæ’è¡Œæ¦œï¼‰ï¼š
- * å¤ç”¨å´©æºƒä¸ŠæŠ¥çš„ Cloudflare Worker æ–¹æ¡ˆâ€”â€”ç­¾åˆ°è®°å½•è½åº“å fire-and-forget POST ä¸€æ¡æ‰å¹³ JSONï¼Œ
- * å¤±è´¥ä»…è®°æ—¥å¿—ï¼Œä¸å½±å“ç­¾åˆ°æµç¨‹ï¼›ã€ŒåŒè´¦å· + åŒæ´»åŠ¨ã€çš„é‡å¤ä¸ŠæŠ¥ç”± Worker ç«¯å”¯ä¸€ç´¢å¼•å»é‡ã€‚
- */
-export class LeaderboardReporter {
-    /**
-     * ä¸ŠæŠ¥å•æ¡ç­¾åˆ°è®°å½•ï¼ˆuid ä¼ è¶…æ˜Ÿ uidï¼Œè§£æå¤±è´¥æ—¶è·³è¿‡ä¸ä¸ŠæŠ¥ï¼‰
-     */
-    static report(record, uid) {
-        if (WORKER_URL.includes('REPLACE')) {
-            return;
-        }
-        // è®¾ç½®ã€Œäº‘ç«¯åŒæ­¥ã€å¼€å…³ï¼ˆé»˜è®¤å¼€å¯ï¼‰ï¼šå…³é—­åç­¾åˆ°ä¸å†å®æ—¶ä¸ŠæŠ¥
-        if (AppStorage.get('lbSyncEnabled') === false) {
-            return;
-        }
-        const uidNum = Number(uid);
-        if (!Number.isInteger(uidNum) || uidNum <= 0) {
-            hilog.warn(DOMAIN, TAG, 'Skip report: invalid uid %{public}s', uid);
-            return;
-        }
-        const payload = {
-            uid: uidNum,
-            name: record.uname,
-            activity_id: record.activityId,
-            activity_name: record.activityName,
-            sign_type: record.signType,
-            kind: record.kind,
-            action: record.action,
-            signed_at: Date.now()
-        };
-        LeaderboardReporter.send(payload).catch((e) => {
-            hilog.error(DOMAIN, TAG, `Report failed: ${e.message}`);
-        });
-    }
-    /**
-     * å†å²è®°å½• â†’ ä¸ŠæŠ¥è´Ÿè½½ï¼ˆsigned_at ç”¨æœ¬åœ°è½åº“æ—¶é—´ï¼Œè¡¥å½•åæ¦œå•çš„å¤©æ•°/è¿ç»­è®¡ç®—æ‰æ­£ç¡®ï¼‰
-     * @param name å±•ç¤ºåï¼šè®°å½•é‡Œæ˜¯çœŸå®æ˜µç§°æ—¶ç”¨æ˜µç§°ï¼›ã€Œä¸»ç”¨æˆ·/ç”¨æˆ·Nã€æ ‡ç­¾è¡¥å½•æ—¶ç”¨æ˜ å°„åˆ°çš„çœŸå®æ˜µç§°
-     */
-    static buildPayload(record, uid, name) {
-        return {
-            uid: uid,
-            name: name,
-            activity_id: record.activityId,
-            activity_name: record.activityName,
-            sign_type: record.signType,
-            kind: record.kind,
-            action: record.action,
-            signed_at: record.createTime
-        };
-    }
-    /**
-     * ä»ç­¾é€€è®°å½•çš„ã€Œä¸»ç”¨æˆ·/ç”¨æˆ·Nã€å±•ç¤ºæ ‡ç­¾è§£æç”¨æˆ· idï¼ˆä¸»ç”¨æˆ·=0ï¼Œå…¶ä»–ç”¨æˆ·=OtherUser è¡¨ idï¼‰
-     */
-    static labelToUserId(uname) {
-        if (uname === 'ä¸»ç”¨æˆ·') {
-            return 0;
-        }
-        if (uname.startsWith('ç”¨æˆ·')) {
-            const n = Number(uname.substring(2));
-            if (Number.isInteger(n) && n > 0) {
-                return n;
-            }
-        }
-        return -1;
-    }
-    /**
-     * æœ¬åœ°ç­¾åˆ°ç»Ÿè®¡å…¨é‡è¡¥å½•åˆ°äº‘ç«¯ï¼ˆåŒä¸€ uid+æ´»åŠ¨+æ“ä½œ+ç»“æœåªå‘ä¸€æ¬¡ï¼›
-     * è®¡åˆ†è®°å½•ç”± Worker å”¯ä¸€ç´¢å¼•äºŒæ¬¡å»é‡ï¼Œé‡å¤æ‰§è¡Œä¸ä¼šé‡å¤è®¡åˆ†ï¼‰
-     * æ˜µç§° â†’ uid é€šè¿‡å·²ç™»å½•ç”¨æˆ·çš„ getUserInfo å»ºç«‹ï¼ˆä¸ç­¾åˆ°æµç¨‹åŒæºï¼‰ï¼Œæ‹¿ä¸åˆ° uid çš„è®°å½•è·³è¿‡
-     */
-    static async syncHistoryToCloud() {
-        if (WORKER_URL.includes('REPLACE')) {
-            throw new Error('æœªé…ç½®ä¸ŠæŠ¥åœ°å€');
-        }
-        const records = await DatabaseManager.getInstance().getAllSignRecords();
-        return LeaderboardReporter.syncRecords(records);
-    }
-    /**
-     * åŒæ­¥æŒ‡å®šè®°å½•é›†ï¼šæ„å»º æ˜µç§°/æ ‡ç­¾ â†’ uid æ˜ å°„åé€æ¡ä¸ŠæŠ¥ï¼ˆæ‰‹åŠ¨å…¨é‡åŒæ­¥ä¸è‡ªåŠ¨å¢é‡è¡¥å½•å…±ç”¨ï¼‰
-     */
-    static async syncRecords(records) {
-        const db = DatabaseManager.getInstance();
-        const hostUsers = await db.getAllUsers(true);
-        const otherUsers = await db.getAllUsers();
-        // ç”¨æˆ·è¡¨ id â†’ uidï¼ˆç­¾é€€ã€Œä¸»ç”¨æˆ·/ç”¨æˆ·Nã€æ ‡ç­¾åæŸ¥ç”¨ï¼‰
-        const idToUid = new Map();
-        if (hostUsers.length > 0) {
-            idToUid.set(0, hostUsers[0].uid);
-        }
-        otherUsers.forEach((user) => {
-            idToUid.set(user.id, user.uid);
-        });
-        // çœŸå®æ˜µç§° â†’ uidï¼ŒåŠ uid â†’ æ˜µç§°ï¼ˆæ ‡ç­¾è®°å½•è¡¥å½•æ—¶è¿˜åŸå±•ç¤ºåï¼‰ï¼šèµ°ç­¾åˆ°æµç¨‹åŒæ¬¾ getUserInfo
-        const nameToUid = new Map();
-        const uidToName = new Map();
-        const allUsers = hostUsers.concat(otherUsers);
-        for (const user of allUsers) {
-            if (user.cookies.trim() === '') {
-                continue;
-            }
-            try {
-                const info = await loginFunction.getUserInfo(user.cookies);
-                const puidNum = Number(info.puid);
-                const uidNum = Number.isInteger(puidNum) && puidNum > 0 ? puidNum : user.uid;
-                if (info.uname !== '') {
-                    nameToUid.set(info.uname, uidNum);
-                    uidToName.set(uidNum, info.uname);
-                }
-            }
-            catch (e) {
-                hilog.warn(DOMAIN, TAG, `Resolve uname for uid %{public}d failed: %{public}s`, user.uid, e.message);
-            }
-        }
-        const outcome = { total: records.length, synced: 0, failed: 0, skipped: 0 };
-        const seen = new Set();
-        for (const record of records) {
-            // è®°å½• uname æ˜¯çœŸå®æ˜µç§°æ—¶ç›´æ¥å‘½ä¸­ï¼›å¦åˆ™æŒ‰ã€Œä¸»ç”¨æˆ·/ç”¨æˆ·Nã€æ ‡ç­¾åæŸ¥ï¼ˆæ­¤æ—¶éœ€è¿˜åŸå±•ç¤ºåï¼‰
-            const realNameHit = nameToUid.get(record.uname);
-            let uid = realNameHit;
-            if (uid === undefined) {
-                const userId = LeaderboardReporter.labelToUserId(record.uname);
-                uid = userId >= 0 ? idToUid.get(userId) : undefined;
-            }
-            // æ— åŒ¹é…è´¦å·æˆ–è®°å½•ç¼ºæ´»åŠ¨ idï¼ˆæ— æ³•è®¡åˆ†ï¼‰â†’ è·³è¿‡ï¼›åŒé”®åªå‘ä¸€æ¬¡ï¼Œé¿å…é‡å¤è¡¥å½•
-            if (uid === undefined || uid <= 0 || record.activityId.trim() === '' ||
-                seen.has(`${uid}|${record.activityId}|${record.action}|${record.kind}`)) {
-                outcome.skipped++;
-                continue;
-            }
-            seen.add(`${uid}|${record.activityId}|${record.action}|${record.kind}`);
-            const name = realNameHit !== undefined ? record.uname : (uidToName.get(uid) ?? record.uname);
-            try {
-                if (await LeaderboardReporter.send(LeaderboardReporter.buildPayload(record, uid, name))) {
-                    outcome.synced++;
-                }
-                else {
-                    outcome.failed++;
-                }
-            }
-            catch (e) {
-                outcome.failed++;
-                hilog.error(DOMAIN, TAG, `Sync record failed: %{public}s`, e.message);
-            }
-        }
-        hilog.info(DOMAIN, TAG, 'Cloud sync done: total %{public}d, synced %{public}d, failed %{public}d, skipped %{public}d', outcome.total, outcome.synced, outcome.failed, outcome.skipped);
-        return outcome;
-    }
-    /**
-     * å¯åŠ¨æ—¶è‡ªåŠ¨è¡¥å½•æ–°å¢ç­¾åˆ°è®°å½•ï¼ˆè®¾ç½®ã€Œäº‘ç«¯åŒæ­¥ã€å¼€å…³æ§åˆ¶ï¼Œé»˜è®¤å¼€å¯ï¼‰ï¼š
-     * åªä¸ŠæŠ¥ä¸Šæ¬¡æˆåŠŸåŒæ­¥æ°´ä½çº¿ä¹‹åçš„è®°å½•ï¼Œæœ¬æ‰¹å…¨éƒ¨æˆåŠŸæ‰æ¨è¿›æ°´ä½çº¿ï¼›
-     * æ˜ å°„æ•´ä½“å¤±è´¥ï¼ˆå¦‚ cookies å…¨éƒ¨è¿‡æœŸï¼‰æ—¶ synced ä¸º 0ï¼Œæ°´ä½çº¿ä¿æŒä¸åŠ¨ï¼Œ
-     * å¾… EntryAbility å¯åŠ¨åˆ·æ–° cookies åä¸‹æ¬¡å¯åŠ¨è‡ªåŠ¨é‡è¯•ã€‚fire-and-forgetï¼Œå¤±è´¥ä»…è®°æ—¥å¿—ã€‚
-     */
-    static async autoSyncNewRecords(context) {
-        if (AppStorage.get('lbSyncEnabled') === false) {
-            return;
-        }
-        try {
-            const pref = await preferences.getPreferences(context, 'settings');
-            const watermark = await pref.get(PREF_LAST_SYNC_KEY, 0);
-            const records = (await DatabaseManager.getInstance().getAllSignRecords())
-                .filter((record) => record.createTime > watermark);
-            if (records.length === 0) {
-                return;
-            }
-            const outcome = await LeaderboardReporter.syncRecords(records);
-            if (outcome.failed === 0 && outcome.synced > 0) {
-                // è®°å½•æŒ‰ createTime å‡åºï¼Œæœ«æ¡å³æœ¬æ‰¹æœ€å¤§æ°´ä½
-                await pref.put(PREF_LAST_SYNC_KEY, records[records.length - 1].createTime);
-                await pref.flush();
-            }
-            hilog.info(DOMAIN, TAG, 'Auto sync: total %{public}d, synced %{public}d, failed %{public}d, skipped %{public}d, watermark %{public}d', outcome.total, outcome.synced, outcome.failed, outcome.skipped, watermark);
-        }
-        catch (e) {
-            hilog.error(DOMAIN, TAG, `Auto sync failed: ${e.message}`);
-        }
-    }
-    /**
-     * POST å•æ¡è´Ÿè½½åˆ° Workerï¼Œè¿”å›æ˜¯å¦æˆåŠŸï¼ˆä»…è®°æ—¥å¿—ï¼ŒçŠ¶æ€ä¸è¿› UIï¼‰
-     */
-    static async send(payload) {
-        const response = await Http.postJson(`${WORKER_URL}/report`, payload, { 'x-lb-token': LB_TOKEN });
-        if (response.code === 200) {
-            hilog.info(DOMAIN, TAG, 'Sign reported: %{public}d %{public}s', payload.uid, payload.activity_id);
-            return true;
-        }
-        hilog.error(DOMAIN, TAG, 'Report rejected: HTTP %{public}d', response.code);
-        return false;
-    }
-    /**
-     * æ‹‰å–äº‘ç«¯æ’è¡Œæ¦œï¼ˆå…¬å¼€åªè¯»ï¼Œæ— éœ€ tokenï¼‰ï¼›å¤±è´¥æŠ›é”™ï¼Œç”±è°ƒç”¨æ–¹å†³å®š UI æç¤º
-     * @param limit æ¦œå•æ¡æ•°ä¸Šé™ï¼ˆWorker ç«¯æœ€å¤§ 200ï¼‰
-     */
-    static async fetchLeaderboard(limit) {
-        const response = await Http.get(`${WORKER_URL}/leaderboard?limit=${limit}`);
-        if (response.code !== 200) {
-            throw new Error(`HTTP ${response.code}`);
-        }
-        const data = JSON.parse(response.body);
-        if (!data.ok) {
-            throw new Error(data.error ?? 'unknown error');
-        }
-        return data.list;
-    }
-}
-//# sourceMappingURL=LeaderboardReporter.js.mapÂ•ÙY hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.hilog.d.tsÙd hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.data.preferences.d.tsÙWE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\httpClient.etsÙUE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\DataBase.etsÙRE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\Login.etsÙ`E:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\LeaderboardReporter.etsÔrB›ªmoduleName±isLocalDependency¯isNodeEntryFile§pkgPath±belongProjectPath§pkgNameªpkgVersion±dependencyPkgInfo¯hostModulesInfo°belongModulePath¬shouldEmitJs¥entryÃÂÙ5E:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entryÙ/E:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT¥entry¥1.0.0Ô  ‘ÔrC’²hostDependencyName®hostModuleName¼../utils/LeaderboardReporter¥entryÙ5E:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entryÃÃÚ*Yimport { hilog } from '@kit.PerformanceAnalysisKit';
-import { common } from '@kit.AbilityKit';
-import { preferences } from '@kit.ArkData';
-import { Http } from './httpClient';
-import { DatabaseManager, SignRecord, SignRecordData, UserDataAndId } from './DataBase';
-import { loginFunction } from './Login';
-
-const TAG = 'LeaderboardReporter';
-const DOMAIN = 0x0010;
-
-/**
- * ä¸ŠæŠ¥ç«¯ç‚¹ï¼šCloudflare Worker éƒ¨ç½²åå¡«å…¥ï¼ˆéƒ¨ç½²æ–¹æ³•è§ä»“åº“ cloudflare-worker/leaderboard.js å¤´éƒ¨æ³¨é‡Šï¼‰ã€‚
- * åªå¡«åŸŸåæ ¹è·¯å¾„ï¼Œ/report ç”±æœ¬ç±»æ‹¼æ¥ï¼›å« REPLACE è§†ä¸ºæœªé…ç½®ï¼Œä¸ŠæŠ¥é™é»˜å…³é—­ã€‚
- */
-const WORKER_URL = 'https://crash.ascii58.dpdns.org';
-/** ä¸ Worker ç¯å¢ƒå˜é‡ LB_TOKEN ä¸€è‡´çš„å…±äº«å£ä»¤ */
-const LB_TOKEN = '549200ccc8254e17bf4d9e126b211f811b619f3e7d3542c6854868f28fa55d25';
-/** è‡ªåŠ¨è¡¥å½•æ°´ä½çº¿ï¼ˆæœ¬åœ°åå¥½é”®ï¼‰ï¼šåªä¸ŠæŠ¥è¯¥æ—¶é—´æˆ³ï¼ˆæ¯«ç§’ï¼‰ä¹‹åçš„è®°å½• */
-const PREF_LAST_SYNC_KEY = 'lb_last_sync_ms';
-
-/** ä¸ŠæŠ¥è´Ÿè½½ï¼ˆæ‰å¹³ç»“æ„ï¼Œå­—æ®µåä¸ Worker ç«¯ normalizeReport å¯¹é½ï¼‰ */
-export interface LeaderboardPayload {
-  uid: number
-  name: string
-  activity_id: string
-  activity_name: string
-  sign_type: string
-  kind: string
-  action: string
-  signed_at: number
-}
-
-/** äº‘åŒæ­¥è¡¥å½•ç»“æœï¼ˆskipped = æ— æ³•åŒ¹é…è´¦å·æˆ–ç¼ºæ´»åŠ¨ id çš„è®°å½•æ•°ï¼‰ */
-export interface SyncOutcome {
-  total: number
-  synced: number
-  failed: number
-  skipped: number
-}
-
-/** æ¦œå•æ¡ç›®ï¼ˆå­—æ®µåä¸ Worker ç«¯ LEADERBOARD_SQL è¾“å‡ºåˆ—å¯¹é½ï¼Œå·²æŒ‰å½“å‰è¿ç»­å¤©æ•°é™åºï¼‰ */
-export interface LeaderboardEntry {
-  uid: number
-  display_name: string
-  total_signs: number
-  total_days: number
-  week_signs: number
-  streak_days: number
-  longest_streak: number
-  last_sign_date: string
-}
-
-/** /leaderboard å“åº”ï¼ˆå…¬å¼€åªè¯»ï¼Œæ— éœ€ tokenï¼‰ */
-interface LeaderboardResponse {
-  ok: boolean
-  list: LeaderboardEntry[]
-  error?: string
-}
-
-/**
- * ç­¾åˆ°ä¿¡æ¯äº‘ä¸ŠæŠ¥ï¼ˆæ’è¡Œæ¦œï¼‰ï¼š
- * å¤ç”¨å´©æºƒä¸ŠæŠ¥çš„ Cloudflare Worker æ–¹æ¡ˆâ€”â€”ç­¾åˆ°è®°å½•è½åº“å fire-and-forget POST ä¸€æ¡æ‰å¹³ JSONï¼Œ
- * å¤±è´¥ä»…è®°æ—¥å¿—ï¼Œä¸å½±å“ç­¾åˆ°æµç¨‹ï¼›ã€ŒåŒè´¦å· + åŒæ´»åŠ¨ã€çš„é‡å¤ä¸ŠæŠ¥ç”± Worker ç«¯å”¯ä¸€ç´¢å¼•å»é‡ã€‚
- */
-export class LeaderboardReporter {
-  /**
-   * ä¸ŠæŠ¥å•æ¡ç­¾åˆ°è®°å½•ï¼ˆuid ä¼ è¶…æ˜Ÿ uidï¼Œè§£æå¤±è´¥æ—¶è·³è¿‡ä¸ä¸ŠæŠ¥ï¼‰
-   */
-  static report(record: SignRecordData, uid: string): void {
-    if (WORKER_URL.includes('REPLACE')) {
-      return;
-    }
-    // è®¾ç½®ã€Œäº‘ç«¯åŒæ­¥ã€å¼€å…³ï¼ˆé»˜è®¤å¼€å¯ï¼‰ï¼šå…³é—­åç­¾åˆ°ä¸å†å®æ—¶ä¸ŠæŠ¥
-    if (AppStorage.get<boolean>('lbSyncEnabled') === false) {
-      return;
-    }
-    const uidNum = Number(uid);
-    if (!Number.isInteger(uidNum) || uidNum <= 0) {
-      hilog.warn(DOMAIN, TAG, 'Skip report: invalid uid %{public}s', uid);
-      return;
-    }
-    const payload: LeaderboardPayload = {
-      uid: uidNum,
-      name: record.uname,
-      activity_id: record.activityId,
-      activity_name: record.activityName,
-      sign_type: record.signType,
-      kind: record.kind,
-      action: record.action,
-      signed_at: Date.now()
-    };
-    LeaderboardReporter.send(payload).catch((e: Error) => {
-      hilog.error(DOMAIN, TAG, `Report failed: ${e.message}`);
-    });
-  }
-
-  /**
-   * å†å²è®°å½• â†’ ä¸ŠæŠ¥è´Ÿè½½ï¼ˆsigned_at ç”¨æœ¬åœ°è½åº“æ—¶é—´ï¼Œè¡¥å½•åæ¦œå•çš„å¤©æ•°/è¿ç»­è®¡ç®—æ‰æ­£ç¡®ï¼‰
-   * @param name å±•ç¤ºåï¼šè®°å½•é‡Œæ˜¯çœŸå®æ˜µç§°æ—¶ç”¨æ˜µç§°ï¼›ã€Œä¸»ç”¨æˆ·/ç”¨æˆ·Nã€æ ‡ç­¾è¡¥å½•æ—¶ç”¨æ˜ å°„åˆ°çš„çœŸå®æ˜µç§°
-   */
-  private static buildPayload(record: SignRecord, uid: number, name: string): LeaderboardPayload {
-    return {
-      uid: uid,
-      name: name,
-      activity_id: record.activityId,
-      activity_name: record.activityName,
-      sign_type: record.signType,
-      kind: record.kind,
-      action: record.action,
-      signed_at: record.createTime
-    };
-  }
-
-  /**
-   * ä»ç­¾é€€è®°å½•çš„ã€Œä¸»ç”¨æˆ·/ç”¨æˆ·Nã€å±•ç¤ºæ ‡ç­¾è§£æç”¨æˆ· idï¼ˆä¸»ç”¨æˆ·=0ï¼Œå…¶ä»–ç”¨æˆ·=OtherUser è¡¨ idï¼‰
-   */
-  private static labelToUserId(uname: string): number {
-    if (uname === 'ä¸»ç”¨æˆ·') {
-      return 0;
-    }
-    if (uname.startsWith('ç”¨æˆ·')) {
-      const n = Number(uname.substring(2));
-      if (Number.isInteger(n) && n > 0) {
-        return n;
-      }
-    }
-    return -1;
-  }
-
-  /**
-   * æœ¬åœ°ç­¾åˆ°ç»Ÿè®¡å…¨é‡è¡¥å½•åˆ°äº‘ç«¯ï¼ˆåŒä¸€ uid+æ´»åŠ¨+æ“ä½œ+ç»“æœåªå‘ä¸€æ¬¡ï¼›
-   * è®¡åˆ†è®°å½•ç”± Worker å”¯ä¸€ç´¢å¼•äºŒæ¬¡å»é‡ï¼Œé‡å¤æ‰§è¡Œä¸ä¼šé‡å¤è®¡åˆ†ï¼‰
-   * æ˜µç§° â†’ uid é€šè¿‡å·²ç™»å½•ç”¨æˆ·çš„ getUserInfo å»ºç«‹ï¼ˆä¸ç­¾åˆ°æµç¨‹åŒæºï¼‰ï¼Œæ‹¿ä¸åˆ° uid çš„è®°å½•è·³è¿‡
-   */
-  static async syncHistoryToCloud(): Promise<SyncOutcome> {
-    if (WORKER_URL.includes('REPLACE')) {
-      throw new Error('æœªé…ç½®ä¸ŠæŠ¥åœ°å€');
-    }
-    const records = await DatabaseManager.getInstance().getAllSignRecords();
-    return LeaderboardReporter.syncRecords(records);
-  }
-
-  /**
-   * åŒæ­¥æŒ‡å®šè®°å½•é›†ï¼šæ„å»º æ˜µç§°/æ ‡ç­¾ â†’ uid æ˜ å°„åé€æ¡ä¸ŠæŠ¥ï¼ˆæ‰‹åŠ¨å…¨é‡åŒæ­¥ä¸è‡ªåŠ¨å¢é‡è¡¥å½•å…±ç”¨ï¼‰
-   */
-  private static async syncRecords(records: SignRecord[]): Promise<SyncOutcome> {
-    const db = DatabaseManager.getInstance();
-    const hostUsers = await db.getAllUsers(true);
-    const otherUsers = await db.getAllUsers();
-
-    // ç”¨æˆ·è¡¨ id â†’ uidï¼ˆç­¾é€€ã€Œä¸»ç”¨æˆ·/ç”¨æˆ·Nã€æ ‡ç­¾åæŸ¥ç”¨ï¼‰
-    const idToUid = new Map<number, number>();
-    if (hostUsers.length > 0) {
-      idToUid.set(0, hostUsers[0].uid);
-    }
-    otherUsers.forEach((user: UserDataAndId) => {
-      idToUid.set(user.id, user.uid);
-    });
-
-    // çœŸå®æ˜µç§° â†’ uidï¼ŒåŠ uid â†’ æ˜µç§°ï¼ˆæ ‡ç­¾è®°å½•è¡¥å½•æ—¶è¿˜åŸå±•ç¤ºåï¼‰ï¼šèµ°ç­¾åˆ°æµç¨‹åŒæ¬¾ getUserInfo
-    const nameToUid = new Map<string, number>();
-    const uidToName = new Map<number, string>();
-    const allUsers = hostUsers.concat(otherUsers);
-    for (const user of allUsers) {
-      if (user.cookies.trim() === '') {
-        continue;
-      }
-      try {
-        const info = await loginFunction.getUserInfo(user.cookies);
-        const puidNum = Number(info.puid);
-        const uidNum = Number.isInteger(puidNum) && puidNum > 0 ? puidNum : user.uid;
-        if (info.uname !== '') {
-          nameToUid.set(info.uname, uidNum);
-          uidToName.set(uidNum, info.uname);
-        }
-      } catch (e) {
-        hilog.warn(DOMAIN, TAG, `Resolve uname for uid %{public}d failed: %{public}s`,
-          user.uid, (e as Error).message);
-      }
-    }
-
-    const outcome: SyncOutcome = { total: records.length, synced: 0, failed: 0, skipped: 0 };
-    const seen = new Set<string>();
-    for (const record of records) {
-      // è®°å½• uname æ˜¯çœŸå®æ˜µç§°æ—¶ç›´æ¥å‘½ä¸­ï¼›å¦åˆ™æŒ‰ã€Œä¸»ç”¨æˆ·/ç”¨æˆ·Nã€æ ‡ç­¾åæŸ¥ï¼ˆæ­¤æ—¶éœ€è¿˜åŸå±•ç¤ºåï¼‰
-      const realNameHit = nameToUid.get(record.uname);
-      let uid = realNameHit;
-      if (uid === undefined) {
-        const userId = LeaderboardReporter.labelToUserId(record.uname);
-        uid = userId >= 0 ? idToUid.get(userId) : undefined;
-      }
-      // æ— åŒ¹é…è´¦å·æˆ–è®°å½•ç¼ºæ´»åŠ¨ idï¼ˆæ— æ³•è®¡åˆ†ï¼‰â†’ è·³è¿‡ï¼›åŒé”®åªå‘ä¸€æ¬¡ï¼Œé¿å…é‡å¤è¡¥å½•
-      if (uid === undefined || uid <= 0 || record.activityId.trim() === '' ||
-        seen.has(`${uid}|${record.activityId}|${record.action}|${record.kind}`)) {
-        outcome.skipped++;
-        continue;
-      }
-      seen.add(`${uid}|${record.activityId}|${record.action}|${record.kind}`);
-      const name = realNameHit !== undefined ? record.uname : (uidToName.get(uid) ?? record.uname);
-      try {
-        if (await LeaderboardReporter.send(LeaderboardReporter.buildPayload(record, uid, name))) {
-          outcome.synced++;
-        } else {
-          outcome.failed++;
-        }
-      } catch (e) {
-        outcome.failed++;
-        hilog.error(DOMAIN, TAG, `Sync record failed: %{public}s`, (e as Error).message);
-      }
-    }
-    hilog.info(DOMAIN, TAG, 'Cloud sync done: total %{public}d, synced %{public}d, failed %{public}d, skipped %{public}d',
-      outcome.total, outcome.synced, outcome.failed, outcome.skipped);
-    return outcome;
-  }
-
-  /**
-   * å¯åŠ¨æ—¶è‡ªåŠ¨è¡¥å½•æ–°å¢ç­¾åˆ°è®°å½•ï¼ˆè®¾ç½®ã€Œäº‘ç«¯åŒæ­¥ã€å¼€å…³æ§åˆ¶ï¼Œé»˜è®¤å¼€å¯ï¼‰ï¼š
-   * åªä¸ŠæŠ¥ä¸Šæ¬¡æˆåŠŸåŒæ­¥æ°´ä½çº¿ä¹‹åçš„è®°å½•ï¼Œæœ¬æ‰¹å…¨éƒ¨æˆåŠŸæ‰æ¨è¿›æ°´ä½çº¿ï¼›
-   * æ˜ å°„æ•´ä½“å¤±è´¥ï¼ˆå¦‚ cookies å…¨éƒ¨è¿‡æœŸï¼‰æ—¶ synced ä¸º 0ï¼Œæ°´ä½çº¿ä¿æŒä¸åŠ¨ï¼Œ
-   * å¾… EntryAbility å¯åŠ¨åˆ·æ–° cookies åä¸‹æ¬¡å¯åŠ¨è‡ªåŠ¨é‡è¯•ã€‚fire-and-forgetï¼Œå¤±è´¥ä»…è®°æ—¥å¿—ã€‚
-   */
-  static async autoSyncNewRecords(context: common.UIAbilityContext): Promise<void> {
-    if (AppStorage.get<boolean>('lbSyncEnabled') === false) {
-      return;
-    }
-    try {
-      const pref = await preferences.getPreferences(context, 'settings');
-      const watermark = await pref.get(PREF_LAST_SYNC_KEY, 0) as number;
-      const records = (await DatabaseManager.getInstance().getAllSignRecords())
-        .filter((record: SignRecord) => record.createTime > watermark);
-      if (records.length === 0) {
-        return;
-      }
-      const outcome = await LeaderboardReporter.syncRecords(records);
-      if (outcome.failed === 0 && outcome.synced > 0) {
-        // è®°å½•æŒ‰ createTime å‡åºï¼Œæœ«æ¡å³æœ¬æ‰¹æœ€å¤§æ°´ä½
-        await pref.put(PREF_LAST_SYNC_KEY, records[records.length - 1].createTime);
-        await pref.flush();
-      }
-      hilog.info(DOMAIN, TAG,
-        'Auto sync: total %{public}d, synced %{public}d, failed %{public}d, skipped %{public}d, watermark %{public}d',
-        outcome.total, outcome.synced, outcome.failed, outcome.skipped, watermark);
-    } catch (e) {
-      hilog.error(DOMAIN, TAG, `Auto sync failed: ${(e as Error).message}`);
-    }
-  }
-
-  /**
-   * POST å•æ¡è´Ÿè½½åˆ° Workerï¼Œè¿”å›æ˜¯å¦æˆåŠŸï¼ˆä»…è®°æ—¥å¿—ï¼ŒçŠ¶æ€ä¸è¿› UIï¼‰
-   */
-  private static async send(payload: LeaderboardPayload): Promise<boolean> {
-    const response =
-      await Http.postJson(`${WORKER_URL}/report`, payload, { 'x-lb-token': LB_TOKEN });
-    if (response.code === 200) {
-      hilog.info(DOMAIN, TAG, 'Sign reported: %{public}d %{public}s', payload.uid, payload.activity_id);
-      return true;
-    }
-    hilog.error(DOMAIN, TAG, 'Report rejected: HTTP %{public}d', response.code);
-    return false;
-  }
-
-  /**
-   * æ‹‰å–äº‘ç«¯æ’è¡Œæ¦œï¼ˆå…¬å¼€åªè¯»ï¼Œæ— éœ€ tokenï¼‰ï¼›å¤±è´¥æŠ›é”™ï¼Œç”±è°ƒç”¨æ–¹å†³å®š UI æç¤º
-   * @param limit æ¦œå•æ¡æ•°ä¸Šé™ï¼ˆWorker ç«¯æœ€å¤§ 200ï¼‰
-   */
-  static async fetchLeaderboard(limit: number): Promise<LeaderboardEntry[]> {
-    const response = await Http.get(`${WORKER_URL}/leaderboard?limit=${limit}`);
-    if (response.code !== 200) {
-      throw new Error(`HTTP ${response.code}`);
-    }
-    const data = JSON.parse(response.body) as LeaderboardResponse;
-    if (!data.ok) {
-      throw new Error(data.error ?? 'unknown error');
-    }
-    return data.list;
-  }
-}
-ÀÔrD•«@ohos.hilog¶@ohos.data.preferences§./Loginª./DataBase¬./httpClientÔrE—ªassertions¨external¢id¤meta±moduleSideEffectsªresolvedByµsyntheticNamedExportsAÃÙY hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.hilog.d.tsAÃªoh-resolveÂEAÃÙd hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.data.preferences.d.tsAÃªoh-resolveÂEAÂÙRE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\Login.etsAÃªoh-resolveÂEAÂÙUE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\DataBase.etsAÃªoh-resolveÂEAÂÙWE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\httpClient.etsAÃªoh-resolveÂ“ÔrF–§version¤fileªsourceRoot§sources¥names¨mappings¶LeaderboardReporter.js ‘·LeaderboardReporter.etsÜ ß–”    ”  	”  ”  ”  3”   4–”   ” 	” ” ”0 *”1 +˜”   ” ”	 	” ” ” ”# #”$ $˜”   ” ”	 	” ” ÌE”  ÌK”, ÌW”- ÌX˜”   ” ”	 	” ” ” ”' '”( (–”   ” ”	 	” ”! !”" "–”   ” ” ” ” ” ‘”  
- ‘” –”   ” ” ” ”4 4”5 5’”   ”% %–”   ” ” ” ”ÌS ÌS”ÌT ÌT’”   ”& &–”   ” ” ” ”, ,”- -‘”  ; ‘” ?””  Ì@ ” Ì@” Ì@”  Ì@ ‘” ÌA‘” ÌC˜” ÌD”
- ÌD” ÌD	” ÌD” ÌD” ÌD&” ÌD(” ÌD3™” ÌE” ÌE” ÌE” ÌE” ÌE”  ÌE”) ÌE%”* ÌE&”, ÌE(’” ÌF” ÌF‘”	 ÌG’” ÌH”' ÌH#›” ÌI” ÌI” ÌI” ÌI” ÌI” ÌI ”* ÌI/”+ ÌI0”0 ÌI5”5 ÌI:”7 ÌI<’” ÌJ” ÌJ‘”	 ÌK™” ÌL” ÌL
-” ÌL” ÌL” ÌL” ÌL”! ÌL”" ÌL”# ÌL” ÌM” ÌM” ÌM	” ÌM” ÌM” ÌM” ÌM”$ ÌM ”% ÌM!”) ÌM%”/ ÌM+”3 ÌM/”4 ÌM0”6 ÌM2” ÌN” ÌN” ÌN” ÌN” ÌN” ÌN” ÌN”" ÌN”$ ÌN”ÌI ÌNÌC”ÌK ÌNÌE”ÌN ÌNÌH”ÌO ÌNÌI”ÌP ÌNÌJ’” ÌO” ÌO‘”	 ÌP”” ÌQ” ÌQ
-” ÌQ” ÌQ(”” ÌR” ÌR	” ÌR” ÌR–” ÌS” ÌS
-” ÌS” ÌS” ÌS” ÌS–” ÌT” ÌT” ÌT” ÌT”  ÌT”* ÌT$–” ÌU” ÌU” ÌU”! ÌU”" ÌU”. ÌU(–” ÌV” ÌV” ÌV” ÌV” ÌV”& ÌV –” ÌW” ÌW
-” ÌW” ÌW” ÌW” ÌW–” ÌX” ÌX” ÌX” ÌX” ÌX”! ÌX—” ÌY” ÌY” ÌY” ÌY” ÌY” ÌY”! ÌY’”	 ÌZ”
- ÌZ” Ì[” Ì[” Ì[”  Ì[”! Ì[”( Ì[$”) Ì[%”* Ì[&”/ Ì[+”0 Ì[,”1 Ì[-”2 Ì[5”4 Ì[7”6 Ì[9Ü ” Ì\” Ì\” Ì\” Ì\” Ì\” Ì\”  Ì\”# Ì\”% Ì\”7 Ì\1”8 Ì\2”9 Ì\3”Ì@ Ì\:”ÌB Ì\<”ÌC Ì\=”ÌD Ì\>”” Ì]”	 Ì]”
- Ì]” Ì]’” Ì^” Ì^‘” Ì`‘” Ìcš” Ìd
-”
- Ìd” Ìd” Ìd” Ìd” Ìd0”  Ìd2”# Ìd=”% Ìd?”) ÌdÌK’” Ìe” Ìe”” Ìf” Ìf	” Ìf” Ìf”” Ìg” Ìg
-” Ìg” Ìg–” Ìh” Ìh” Ìh” Ìh”  Ìh”* Ìh$–” Ìi” Ìi” Ìi”! Ìi”" Ìi”. Ìi(–” Ìj” Ìj” Ìj” Ìj” Ìj”& Ìj –” Ìk” Ìk
-” Ìk” Ìk” Ìk” Ìk–” Ìl” Ìl” Ìl” Ìl” Ìl”! Ìl–” Ìm” Ìm” Ìm” Ìm” Ìm”( Ìm"’”	 Ìn”
- Ìn’” Ìo” Ìo‘” Ìq‘” Ìs–” Ìt
-”
- Ìt” Ìt” Ìt” Ìt” Ìt,–” Ìu” Ìu” Ìu” Ìu” Ìu” Ìu”” Ìv” Ìv” Ìv” Ìv‘”	 Ìw™” Ìx” Ìx” Ìx” Ìx” Ìx” Ìx”! Ìx”" Ìx”$ Ìx ” Ìy” Ìy” Ìy” Ìy” Ìy” Ìy”" Ìy”# Ìy”, Ìy&”- Ìy'”. Ìy(”/ Ìy)”0 Ìy*”1 Ìy+” Ìz” Ìz
-” Ìz” Ìz”  Ìz”! Ìz”" Ìz”# Ìz”' Ìz!”( Ìz"”+ Ìz%”, Ìz&”. Ìz(”” Ì{” Ì{” Ì{” Ì{‘” Ì|‘”	 Ì}•” Ì~” Ì~” Ì~” Ì~” Ì~’” Ì” Ì‘” Ì‘” Ì…–” Ì†”
- Ì†” Ì†	” Ì†” Ì†”# Ì†!™” Ì‡” Ì‡” Ì‡” Ì‡” Ì‡”  Ì‡”) Ì‡%”* Ì‡&”, Ì‡(˜” Ìˆ” Ìˆ” Ìˆ” Ìˆ” Ìˆ”% Ìˆ”& Ìˆ ”' Ìˆ!‘”	 Ì‰” ÌŠ” ÌŠ
-” ÌŠ” ÌŠ” ÌŠ”- ÌŠ)”. ÌŠ*”9 ÌŠ5”; ÌŠ7”< ÌŠ8”ÌM ÌŠÌI”ÌO ÌŠÌK”ÌP ÌŠÌL™” Ì‹” Ì‹”" Ì‹”# Ì‹”. Ì‹*”/ Ì‹+”6 Ì‹2”7 Ì‹3”8 Ì‹4’” ÌŒ” ÌŒ‘” Ì‘” Ì˜” Ì‘
-”
- Ì‘” Ì‘” Ì‘” Ì‘” Ì‘"” Ì‘#”$ Ì‘8™” Ì’” Ì’
-” Ì’” Ì’”" Ì’”# Ì’”. Ì’*”0 Ì’,”1 Ì’-œ” Ì“” Ì“
-” Ì“” Ì“”  Ì“”" Ì“”# Ì“”. Ì“*”/ Ì“+”3 Ì“/”4 Ì“0”5 Ì“1š” Ì”” Ì”
-” Ì”” Ì””! Ì””# Ì””$ Ì” ”/ Ì”+”1 Ì”-”2 Ì”.’” Ì–”) Ì–%˜” Ì—” Ì—
-” Ì—” Ì—” Ì—” Ì—”! Ì—-”" Ì—.˜” Ì˜” Ì˜” Ì˜” Ì˜” Ì˜” Ì˜”  Ì˜”" Ì˜Ÿ” Ì™” Ì™” Ì™” Ì™” Ì™” Ì™” Ì™”$ Ì™”% Ì™”& Ì™ ”' Ì™!”( Ì™"”+ Ì™%”, Ì™&”- Ì™'‘”	 Ìš™” Ì›” Ì›” Ì›” Ì›” Ì›” Ì›”  Ì›+”" Ì›-”$ Ì›/” Ìœ” Ìœ” Ìœ” Ìœ” Ìœ” Ìœ” Ìœ” Ìœ”! Ìœ”% Ìœ”& Ìœ ”) Ìœ#”* Ìœ$”+ Ìœ%”” Ì”	 Ì”
- Ì” Ì’” ÌŸ”ÌB ÌŸ>˜” Ì ” Ì 
-” Ì ” Ì ” Ì ”! Ì ”# Ì /”$ Ì 0˜” Ì¡” Ì¡
-” Ì¡” Ì¡” Ì¡”! Ì¡”# Ì¡/”$ Ì¡0›” Ì¢” Ì¢
-” Ì¢” Ì¢”" Ì¢”# Ì¢”) Ì¢%”* Ì¢&”4 Ì¢0”5 Ì¢1”6 Ì¢2—” Ì£” Ì£	” Ì£” Ì£” Ì£”# Ì£”% Ì£!›” Ì¤” Ì¤
-” Ì¤” Ì¤” Ì¤” Ì¤”! Ì¤”# Ì¤”( Ì¤"”* Ì¤$”, Ì¤&’” Ì¥” Ì¥‘” Ì¦’” Ì§” Ì§
-” Ì¨” Ì¨” Ì¨” Ì¨”# Ì¨”0 Ì¨(”1 Ì¨)”< Ì¨4”= Ì¨5”ÌA Ì¨9”ÌB Ì¨:”ÌI Ì¨ÌA”ÌJ Ì¨ÌB”ÌK Ì¨ÌC›” Ì©” Ì©” Ì©”  Ì©”& Ì©”' Ì©”+ Ì©#”, Ì©$”0 Ì©(”1 Ì©)”2 Ì©*Ü ” Ìª” Ìª” Ìª” Ìª”% Ìª”& Ìª”/ Ìª'”0 Ìª(”7 Ìª/”8 Ìª0”< Ìª4”ÌC Ìª;”ÌF Ìª>”ÌG Ìª?”ÌH ÌªÌ@”ÌI ÌªÌA”ÌJ ÌªÌB”ÌQ ÌªÌI”ÌR ÌªÌJ”ÌS ÌªÌK”ÌT ÌªÌL”ÌX ÌªÌP”ÌY ÌªÌQ”Ì\ ÌªÌT”Ì] ÌªÌU˜” Ì«” Ì«” Ì«” Ì«” Ì«”# Ì«”% Ì«”' Ì«œ” Ì¬
-” Ì¬” Ì¬”! Ì¬”" Ì¬”& Ì¬”' Ì¬”, Ì¬"”. Ì¬$”4 Ì¬*”5 Ì¬+”6 Ì¬,œ” Ì­
-” Ì­” Ì­”! Ì­”" Ì­”( Ì­”* Ì­ ”. Ì­$”/ Ì­%”4 Ì­*”5 Ì­+”6 Ì­,‘” Ì®	‘” Ì¯”” Ì¯” Ì¯” Ì¯” Ì¯Ü ” Ì°” Ì°” Ì°” Ì°” Ì°”! Ì°”# Ì°”& Ì°”( Ì° ”Ì] Ì°ÌU”Ì_ Ì±
-”Ìc Ì±”Ìd Ì±”Ìg Ì±”Ìi Ì±”Ìj Ì± ”Ìk Ì±!”Ìr Ì±(”Ìs Ì±)”Ìt Ì±*‘” Ì²‘”	 Ì³Ü ” Ìµ” Ìµ
-” Ìµ” Ìµ!” Ìµ#” Ìµ(”! Ìµ*”( Ìµ1”) Ìµ2”/ Ìµ8”1 Ìµ:”7 ÌµÌ@”9 ÌµÌB”: ÌµÌC”< ÌµÌE”ÌB ÌµÌK”ÌD ÌµÌM”ÌE ÌµÌN”ÌG ÌµÌP”ÌN ÌµÌW”ÌP ÌµÌY”ÌQ ÌµÌZ”ÌS ÌµÌ\”ÌT ÌµÌ]˜” Ì¶” Ì¶
-” Ì¶” Ì¶” Ì¶” Ì¶” Ì¶"” Ì¶#—” Ì·” Ì·	” Ì·” Ì·” Ì·”$ Ì· ”& Ì·"’” Ì¸”= Ì¸7” Ì¹” Ì¹” Ì¹”  Ì¹”) Ì¹#”* Ì¹$”- Ì¹'”. Ì¹(”4 Ì¹.”5 Ì¹/”: Ì¹4”; Ì¹5”< Ì¹6–” Ìº” Ìº
-” Ìº” Ìº”! Ìº”" Ìº–” Ì»” Ì»
-” Ì»” Ì»”! Ì»”# Ì»” Ì¼” Ì¼” Ì¼” Ì¼”2 Ì¼*”3 Ì¼+”Ì@ Ì¼8”ÌA Ì¼9”ÌG Ì¼?”ÌH Ì¼Ì@”ÌM Ì¼ÌE”ÌN Ì¼ÌF”ÌO Ì¼ÌGÜ ” Ì½” Ì½” Ì½” Ì½”  Ì½”! Ì½”" Ì½”# Ì½”$ Ì½”+ Ì½#”, Ì½$”/ Ì½'”0 Ì½(”6 Ì½.”7 Ì½/”8 Ì½0”9 Ì½1”: Ì½2”ÌC Ì½;”ÌD Ì½<‘” Ì¾’” Ì¿”5 Ì¿/Ü ” ÌÀ” ÌÀ
-” ÌÀ” ÌÀ”! ÌÀ”% ÌÀ”( ÌÀ"”, ÌÀ&”- ÌÀ'”1 ÌÀ+”7 ÌÀ1”8 ÌÀ2”ÌB ÌÀ<”ÌC ÌÀ=”ÌG ÌÀÌA”ÌI ÌÀÌC”ÌN ÌÀÌH”ÌP ÌÀÌJÜ ” ÌÁ” ÌÁ” ÌÁ” ÌÁ” ÌÁ” ÌÁ” ÌÁ”# ÌÁ”) ÌÁ!”* ÌÁ"”4 ÌÁ,”8 ÌÁ0”> ÌÁ6”? ÌÁ7”ÌE ÌÁ=”ÌI ÌÁÌA”ÌO ÌÁÌG”ÌP ÌÁÌH”ÌT ÌÁÌL”ÌV ÌÁÌN”ÌW ÌÁÌO”ÌY ÌÁÌQ–” ÌÂ” ÌÂ” ÌÂ” ÌÂ”! ÌÂ”" ÌÂ’” ÌÃ” ÌÃ‘” ÌÄÜ ” ÌÅ” ÌÅ
-” ÌÅ” ÌÅ” ÌÅ” ÌÅ” ÌÅ” ÌÅ”% ÌÅ”& ÌÅ ”0 ÌÅ*”4 ÌÅ.”: ÌÅ4”; ÌÅ5”ÌA ÌÅ;”ÌE ÌÅ?”ÌK ÌÅÌE”ÌL ÌÅÌF”ÌP ÌÅÌJ”ÌR ÌÅÌL”ÌS ÌÅÌM”ÌT ÌÅÌNÜ ” ÌÆ” ÌÆ” ÌÆ” ÌÆ”$ ÌÆ”) ÌÆ#”2 ÌÆ,”3 ÌÆ-”4 ÌÆ.”5 ÌÆ/”; ÌÆ5”< ÌÆ6”ÌA ÌÆ;”ÌB ÌÆ<”ÌC ÌÆ=”ÌD ÌÆ>”ÌE ÌÆ?”ÌN ÌÆÌH”ÌO ÌÆÌI”ÌR ÌÆÌL”ÌS ÌÆÌM”ÌV ÌÆÌP”ÌW ÌÆÌQ”Ì[ ÌÆÌU”Ìa ÌÆÌ[”Ìb ÌÆÌ\”Ìg ÌÆÌa”Ìh ÌÆÌb”Ìi ÌÆÌc’” ÌÇ” ÌÇ
-Ü ” ÌÈ” ÌÈ” ÌÈ”- ÌÈ%”. ÌÈ&”2 ÌÈ*”3 ÌÈ+”ÌF ÌÈ>”ÌG ÌÈ?”ÌS ÌÈÌK”ÌT ÌÈÌL”ÌZ ÌÈÌR”Ì\ ÌÈÌT”Ì_ ÌÈÌW”Ìa ÌÈÌY”Ìe ÌÈÌ]”Ìf ÌÈÌ^”Ìg ÌÈÌ_”Ìi ÌÈÌa–” ÌÉ
-” ÌÉ” ÌÉ”" ÌÉ”$ ÌÉ”% ÌÉ‘” ÌÊ	‘” ÌÊ–” ÌË
-” ÌË” ÌË”" ÌË”$ ÌË”% ÌË‘” ÌÌ	‘” ÌÍ”” ÌÍ” ÌÍ” ÌÍ” ÌÍ–” ÌÎ” ÌÎ” ÌÎ” ÌÎ”  ÌÎ”! ÌÎÜ ” ÌÏ” ÌÏ” ÌÏ” ÌÏ” ÌÏ”" ÌÏ”$ ÌÏ”' ÌÏ”) ÌÏ!”ÌI ÌÏÌA”ÌK ÌÏÌD”ÌL ÌÏÌO”ÌM ÌÏÌP”ÌT ÌÏÌW”ÌU ÌÏÌX”ÌV ÌÏÌY‘” ÌĞ‘”	 ÌÑÜ ” ÌÒ” ÌÒ	” ÌÒ
-” ÌÒ” ÌÒ” ÌÒ” ÌÒ” ÌÒ”  ÌÒ”Ì} ÌÒÌy”Ì ÌÓ”Ì† ÌÓ”Ì‡ ÌÓ”ÌŒ ÌÓ”Ì ÌÓ”Ì• ÌÓ”Ì– ÌÓ”Ìœ ÌÓ#”Ì ÌÓ%”Ì¥ ÌÓ,”Ì¦ ÌÓ-”Ì¬ ÌÓ3”Ì® ÌÓ5”Ìµ ÌÓ<”Ì¶ ÌÓ=”Ì½ ÌÓÌD”Ì¾ ÌÓÌE”Ì¿ ÌÓÌF”” ÌÔ” ÌÔ” ÌÔ” ÌÔ’” ÌÕ” ÌÕ‘” Ì×‘” ÌÜ˜” Ìİ”
- Ìİ” Ìİ	” Ìİ” Ìİ”# Ìİ!”$ Ìİ"”+ ÌİÌB›” ÌŞ” ÌŞ” ÌŞ” ÌŞ” ÌŞ” ÌŞ ”* ÌŞ/”+ ÌŞ0”0 ÌŞ5”5 ÌŞ:”7 ÌŞ<’” Ìß” Ìß‘”	 Ìà’” Ìá” Ìá” Ìâ” Ìâ” Ìâ” Ìâ” Ìâ”* Ìâ$”+ Ìâ%”9 Ìâ3”: Ìâ4”ÌA Ìâ;”ÌC Ìâ=”ÌM ÌâÌG”ÌN ÌâÌH”ÌO ÌâÌI” Ìã” Ìã” Ìã” Ìã”$ Ìã”( Ìã"”) Ìã#”, Ìã&”- Ìã'”? Ìã9”ÌA Ìã;”ÌB Ìã<”ÌC ÌãÌG”ÌD ÌãÌH” Ìä” Ìä” Ìä” Ìä” Ìä”# Ìä”2 Ìä,”3 Ìä-”> Ìä8”Ì@ Ìä:”ÌA Ìä;”ÌR ÌäÌL”ÌT ÌäÌN”ÌU ÌäÌOŸ” Ìå	” Ìå” Ìå” Ìå” Ìå#”! Ìå%”# Ìå'”$ Ìå(”* Ìå.”+ Ìå/”5 Ìå9”8 Ìå<”ÌA ÌåÌE”ÌB ÌåÌF”ÌC ÌåÌG˜” Ìæ” Ìæ
-” Ìæ” Ìæ” Ìæ”# Ìæ”$ Ìæ”& Ìæ ’” Ìç” Ìç‘” Ìèœ” Ìé” Ìé” Ìé” Ìé”" Ìé”5 Ìé/”6 Ìé0”ÌA Ìé;”ÌB Ìé<”ÌI ÌéÌC”ÌJ ÌéÌD”ÌK ÌéÌE” Ìê” Ìê
-” Ìê” Ìê” Ìê”# Ìê”$ Ìê”( Ìê"”/ Ìê)”0 Ìê*”6 Ìê0”9 Ìê3”: Ìê4”< Ìê6’” Ìë”. Ìë&Ü ” Ìì” Ìì” Ìì” Ìì” Ìì” Ìì”1 Ìì)”3 Ìì+”: Ìì2”; Ìì3”ÌB Ìì:”ÌC Ìì;”ÌI ÌìÌA”ÌL ÌìÌD”ÌM ÌìÌE”ÌN ÌìÌF”ÌO ÌìÌG”ÌY ÌìÌQ”ÌZ ÌìÌR”Ì[ ÌìÌS—” Ìí” Ìí” Ìí” Ìí”  Ìí”" Ìí”# Ìí‘” ÌîÜ ” Ìï” Ìï” Ìï” Ìï” Ìï” Ìï” Ìï”" Ìï”$ Ìğ”Ì‘ ÌğÌu”Ì“ Ìñ”Ìš Ìñ”Ì› Ìñ”Ì  Ìñ”Ì¢ Ìñ”Ì© Ìñ”Ìª Ìñ”Ì° Ìñ%”Ì² Ìñ'”Ì¹ Ìñ.”Ìº Ìñ/”ÌÀ Ìñ5”ÌÂ Ìñ7”ÌÉ Ìñ>”ÌÊ Ìñ?”ÌÑ ÌñÌF”ÌÓ ÌñÌH”ÌÜ ÌñÌQ”Ìİ ÌñÌR”ÌŞ ÌñÌS‘”	 Ìò”” Ìò” Ìò” Ìò” ÌòÜ ” Ìó” Ìó” Ìó” Ìó” Ìó” Ìó”  Ìó”# Ìó”% Ìó”: Ìó5”; ÌóÌ@”< ÌóÌA”ÌC ÌóÌH”ÌE ÌóÌJ”ÌF ÌóÌK”ÌG ÌóÌL‘”	 Ìô’” Ìõ” Ìõ‘” Ì÷‘” Ìù˜” Ìú
-”
- Ìú” Ìú” Ìú” Ìú” Ìú” Ìú” Ìú7Ü ” Ìû” Ìû
-” Ìû” Ìü” Ìü”# Ìü”$ Ìü”, Ìü”- Ìü”0 Ìü”: Ìü'”ÌC Ìü0”ÌE Ìü2”ÌL Ìü9”ÌN Ìü;”ÌP Ìü=”Ì\ ÌüÌI”Ì^ ÌüÌK”Ìf ÌüÌS”Ìh ÌüÌU”Ìi ÌüÌV”Ìj ÌüÌW˜” Ìı” Ìı” Ìı” Ìı” Ìı” Ìı”! Ìı”# ÌıÜ ” Ìş” Ìş” Ìş” Ìş” Ìş” Ìş” Ìş”" Ìş”$ Ìş”ÌJ ÌşÌD”ÌL ÌşÌF”ÌS ÌşÌM”ÌT ÌşÌN”ÌW ÌşÌQ”ÌY ÌşÌS”Ì` ÌşÌZ”Ìa ÌşÌ[”Ìl ÌşÌf”Ìm ÌşÌg”Ìn ÌşÌh”” Ìÿ” Ìÿ” Ìÿ” Ìÿ‘”	 Í Ü ” Í” Í	” Í
-” Í” Í” Í” Í” Í”! Í”ÌC Í?”ÌE ÍÌA”ÌM ÍÌI”ÌN ÍÌJ”ÌR ÍÌN”ÌS ÍÌO”ÌT ÍÌP”” Í” Í” Í” Í’” Í” Í‘” Í‘” Í˜” Í	”
- Í	” Í		” Í	” Í	”! Í	”" Í	 ”' Í	-Ü ” Í
-” Í
-
-” Í
-” Í
-” Í
-”# Í
-”$ Í
- ”' Í
-#”( Í
-$”+ Í
-'”5 Í
-1”ÌK Í
-ÌG”ÌP Í
-ÌL”ÌR Í
-ÌN”ÌS Í
-ÌO”ÌT Í
-ÌP˜” Í” Í” Í” Í” Í” Í”! Í”# Íœ” Í” Í” Í” Í” Í”$ Í”, Í&”- Í'”1 Í+”3 Í-”4 Í.”5 Í/‘”	 Í” Í” Í
-” Í” Í” Í” Í” Í”  Í”( Í$”) Í%”- Í)”. ÍÌA”/ ÍÌB—” Í” Í” Í	” Í” Í” Í” Íœ” Í” Í” Í” Í” Í”  Í”! Í”& Í ”* Í$”9 Í3”: Í4”; Í5‘”	 Í–” Í” Í” Í” Í” Í” Í’” Í” Í‘” ÍÔrG–§version¤file§sources®sourcesContent¥names¨mappingsÀ‘À‘ÀÜ à‘”    ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”  	 ‘”  
- ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”    ‘”  ! ‘”  " ‘”  # ‘”  $ ‘”  % ‘”  & ‘”  ' ‘”  ( ‘”  ) ‘”  * ‘”  + ‘”  , ‘”  - ‘”  . ‘”  / ‘”  0 ‘”  1 ‘”  2 ‘”  3 ‘”  4 ‘”  5 ‘”  6 ‘”  7 ‘”  8 ‘”  9 ‘”  : ‘”  ; ‘”  < ‘”  = ‘”  > ‘”  ? ‘”  Ì@ ‘”  ÌA ‘”  ÌB ‘”  ÌC ‘”  ÌD ‘”  ÌE ‘”  ÌF ‘”  ÌG ‘”  ÌH ‘”  ÌI ‘”  ÌJ ‘”  ÌK ‘”  ÌL ‘”  ÌM ‘”  ÌN ‘”  ÌO ‘”  ÌP ‘”  ÌQ ‘”  ÌR ‘”  ÌS ‘”  ÌT ‘”  ÌU ‘”  ÌV ‘”  ÌW ‘”  ÌX ‘”  ÌY ‘”  ÌZ ‘”  Ì[ ‘”  Ì\ ‘”  Ì] ‘”  Ì^ ‘”  Ì_ ‘”  Ì` ‘”  Ìa ‘”  Ìb ‘”  Ìc ‘”  Ìd ‘”  Ìe ‘”  Ìf ‘”  Ìg ‘”  Ìh ‘”  Ìi ‘”  Ìj ‘”  Ìk ‘”  Ìl ‘”  Ìm ‘”  Ìn ‘”  Ìo ‘”  Ìp ‘”  Ìq ‘”  Ìr ‘”  Ìs ‘”  Ìt ‘”  Ìu ‘”  Ìv ‘”  Ìw ‘”  Ìx ‘”  Ìy ‘”  Ìz ‘”  Ì{ ‘”  Ì| ‘”  Ì} ‘”  Ì~ ‘”  Ì ‘”  Ì€ ‘”  Ì ‘”  Ì‚ ‘”  Ìƒ ‘”  Ì„ ‘”  Ì… ‘”  Ì† ‘”  Ì‡ ‘”  Ìˆ ‘”  Ì‰ ‘”  ÌŠ ‘”  Ì‹ ‘”  ÌŒ ‘”  Ì ‘”  Ì ‘”  Ì ‘”  Ì ‘”  Ì‘ ‘”  Ì’ ‘”  Ì“ ‘”  Ì” ‘”  Ì• ‘”  Ì– ‘”  Ì— ‘”  Ì˜ ‘”  Ì™ ‘”  Ìš ‘”  Ì› ‘”  Ìœ ‘”  Ì ‘”  Ì ‘”  ÌŸ ‘”  Ì  ‘”  Ì¡ ‘”  Ì¢ ‘”  Ì£ ‘”  Ì¤ ‘”  Ì¥ ‘”  Ì¦ ‘”  Ì§ ‘”  Ì¨ ‘”  Ì© ‘”  Ìª ‘”  Ì« ‘”  Ì¬ ‘”  Ì­ ‘”  Ì® ‘”  Ì¯ ‘”  Ì° ‘”  Ì± ‘”  Ì² ‘”  Ì³ ‘”  Ì´ ‘”  Ìµ ‘”  Ì¶ ‘”  Ì· ‘”  Ì¸ ‘”  Ì¹ ‘”  Ìº ‘”  Ì» ‘”  Ì¼ ‘”  Ì½ ‘”  Ì¾ ‘”  Ì¿ ‘”  ÌÀ ‘”  ÌÁ ‘”  ÌÂ ‘”  ÌÃ ‘”  ÌÄ ‘”  ÌÅ ‘”  ÌÆ ‘”  ÌÇ ‘”  ÌÈ ‘”  ÌÉ ‘”  ÌÊ ‘”  ÌË ‘”  ÌÌ ‘”  ÌÍ ‘”  ÌÎ ‘”  ÌÏ ‘”  ÌĞ ‘”  ÌÑ ‘”  ÌÒ ‘”  ÌÓ ‘”  ÌÔ ‘”  ÌÕ ‘”  ÌÖ ‘”  Ì× ‘”  ÌØ ‘”  ÌÙ ‘”  ÌÚ ‘”  ÌÛ ‘”  ÌÜ ‘”  Ìİ ‘”  ÌŞ ‘”  Ìß ÔrH’§missing¦pluginÃ¦genAbcÂÔ  ÔrI”²dynamicImportCache¹exportAllDeclarationCache»exportNamedDeclarationCache«importCache‘ÔrJ–¤type¥start£end«declarationªspecifiers¦source¶ExportNamedDeclarationÍCÍ"½ÔrK–¤type¥start£end¢idªsuperClass¤body°ClassDeclarationÍJÍ"½ÔrL”¤type¥start£end¤nameªIdentifierÍPÍc³LeaderboardReporterÀÔrM”¤type¥start£end¤body©ClassBodyÍdÍ"½˜ÔrN˜¤type¥start£end¦static¨computed£key¤kind¥value°MethodDefinitionÍ¦ÍHÃÂLªIdentifierÍ­Í³¦report¦methodÔrO™¤type¥start£end¢idªexpression©generator¥async¦params¤body²FunctionExpressionÍ³ÍHÀÂÂÂ’LªIdentifierÍ´Íº¦recordLªIdentifierÍ¼Í¿£uidM®BlockStatementÍÁÍH–ÔrP–¤type¥start£end¤testªconsequent©alternate«IfStatementÍÌÍÔrQ–¤type¥start£end¦callee©arguments¨optional®CallExpressionÍĞÍîÔrR—¤type¥start£end¦object¨property¨computed¨optional°MemberExpressionÍĞÍãLªIdentifierÍĞÍÚªWORKER_URLLªIdentifierÍÛÍã¨includesÂÂ‘ÔrS•¤type¥start£end¥value£raw§LiteralÍäÍí§REPLACE©'REPLACE'ÂM®BlockStatementÍğÍ‘ÔrT”¤type¥start£end¨argument¯ReturnStatementÍÿÍÀÀP«IfStatementÍDÍ”ÔrU–¤type¥start£end¤left¨operator¥right°BinaryExpressionÍHÍqQ®CallExpressionÍHÍgR°MemberExpressionÍHÍVLªIdentifierÍHÍRªAppStorageLªIdentifierÍSÍV£getÂÂ‘S§LiteralÍWÍf­lbSyncEnabled¯'lbSyncEnabled'Â£===S§LiteralÍlÍqÂ¥falseM®BlockStatementÍsÍ”‘T¯ReturnStatementÍ‚Í‰ÀÀÔrV•¤type¥start£end¬declarations¤kind³VariableDeclarationÍÍ¹‘ÔrW•¤type¥start£end¢id¤init²VariableDeclaratorÍ¤Í¸LªIdentifierÍ¤Íª¦uidNumQ®CallExpressionÍ­Í¸LªIdentifierÍ­Í³¦Number‘LªIdentifierÍ´Í·£uidÂ¥constP«IfStatementÍÃÍdU±LogicalExpressionÍÇÍïÔrX–¤type¥start£end¨operator¦prefix¨argument¯UnaryExpressionÍÇÍà¡!ÃQ®CallExpressionÍÈÍàR°MemberExpressionÍÈÍØLªIdentifierÍÈÍÎ¦NumberLªIdentifierÍÏÍØ©isIntegerÂÂ‘LªIdentifierÍÙÍß¦uidNumÂ¢||U°BinaryExpressionÍäÍïLªIdentifierÍäÍê¦uidNum¢<=S§LiteralÍîÍï ¡0M®BlockStatementÍñÍd’ÔrY”¤type¥start£endªexpression³ExpressionStatementÍ ÍDQ®CallExpressionÍ ÍCR°MemberExpressionÍ Í
-LªIdentifierÍ Í¥hilogLªIdentifierÍÍ
-¤warnÂÂ”LªIdentifierÍÍ¦DOMAINLªIdentifierÍÍ£TAGS§LiteralÍÍ=Ù#Skip report: invalid uid %{public}sÙ%'Skip report: invalid uid %{public}s'LªIdentifierÍ?ÍB£uidÂT¯ReturnStatementÍRÍYÀÀV³VariableDeclarationÍnÍ´‘W²VariableDeclaratorÍtÍ³LªIdentifierÍtÍ{§payloadÔrZ”¤type¥start£endªproperties°ObjectExpressionÍ~Í³˜Ôr[™¤type¥start£end¦method©shorthand¨computed£key¥value¤kind¨PropertyÍÍ˜ÂÂÂLªIdentifierÍÍ£uidLªIdentifierÍ’Í˜¦uidNum¤init[¨PropertyÍ§Í¹ÂÂÂLªIdentifierÍ§Í«¤nameR°MemberExpressionÍ­Í¹LªIdentifierÍ­Í³¦recordLªIdentifierÍ´Í¹¥unameÂÂ¤init[¨PropertyÍÈÍæÂÂÂLªIdentifierÍÈÍÓ«activity_idR°MemberExpressionÍÕÍæLªIdentifierÍÕÍÛ¦recordLªIdentifierÍÜÍæªactivityIdÂÂ¤init[¨PropertyÍõÍÂÂÂLªIdentifierÍõÍ­activity_nameR°MemberExpressionÍÍLªIdentifierÍÍ
-¦recordLªIdentifierÍÍ¬activityNameÂÂ¤init[¨PropertyÍ&Í@ÂÂÂLªIdentifierÍ&Í/©sign_typeR°MemberExpressionÍ1Í@LªIdentifierÍ1Í7¦recordLªIdentifierÍ8Í@¨signTypeÂÂ¤init[¨PropertyÍOÍ`ÂÂÂLªIdentifierÍOÍS¤kindR°MemberExpressionÍUÍ`LªIdentifierÍUÍ[¦recordLªIdentifierÍ\Í`¤kindÂÂ¤init[¨PropertyÍoÍ„ÂÂÂLªIdentifierÍoÍu¦actionR°MemberExpressionÍwÍ„LªIdentifierÍwÍ}¦recordLªIdentifierÍ~Í„¦actionÂÂ¤init[¨PropertyÍ“Í¨ÂÂÂLªIdentifierÍ“Íœ©signed_atQ®CallExpressionÍÍ¨R°MemberExpressionÍÍ¦LªIdentifierÍÍ¢¤DateLªIdentifierÍ£Í¦£nowÂÂÂ¤init¥constY³ExpressionStatementÍ¾ÍAQ®CallExpressionÍ¾Í@R°MemberExpressionÍ¾ÍåQ®CallExpressionÍ¾ÍßR°MemberExpressionÍ¾ÍÖLªIdentifierÍ¾ÍÑ³LeaderboardReporterLªIdentifierÍÒÍÖ¤sendÂÂ‘LªIdentifierÍ×ÍŞ§payloadÂLªIdentifierÍàÍå¥catchÂÂ‘O·ArrowFunctionExpressionÍæÍ?ÀÂÂÂ‘LªIdentifierÍçÍè¡eM®BlockStatementÍíÍ?‘Y³ExpressionStatementÍüÍ4Q®CallExpressionÍüÍ3R°MemberExpressionÍüÍLªIdentifierÍüÍ¥hilogLªIdentifierÍÍ¥errorÂÂ“LªIdentifierÍÍ¦DOMAINLªIdentifierÍÍ£TAGÔr\•¤type¥start£end«expressions¦quasis¯TemplateLiteralÍÍ2‘R°MemberExpressionÍ'Í0LªIdentifierÍ'Í(¡eLªIdentifierÍ)Í0§messageÂÂ’Ôr]•¤type¥start£end¥value¤tail¯TemplateElementÍÍ%Ôr^’£raw¦cooked¯Report failed: ¯Report failed: Â]¯TemplateElementÍ1Í1^  ÃÂÂN°MethodDefinitionÍÕÍ	GÃÂLªIdentifierÍÜÍè¬buildPayload¦methodO²FunctionExpressionÍèÍ	GÀÂÂÂ“LªIdentifierÍéÍï¦recordLªIdentifierÍñÍô£uidLªIdentifierÍöÍú¤nameM®BlockStatementÍüÍ	G‘T¯ReturnStatementÍÍ	@Z°ObjectExpressionÍÍ	?˜[¨PropertyÍÍ%ÂÂÂLªIdentifierÍÍ £uidLªIdentifierÍ"Í%£uid¤init[¨PropertyÍ4Í>ÂÂÂLªIdentifierÍ4Í8¤nameLªIdentifierÍ:Í>¤name¤init[¨PropertyÍMÍkÂÂÂLªIdentifierÍMÍX«activity_idR°MemberExpressionÍZÍkLªIdentifierÍZÍ`¦recordLªIdentifierÍaÍkªactivityIdÂÂ¤init[¨PropertyÍzÍœÂÂÂLªIdentifierÍzÍ‡­activity_nameR°MemberExpressionÍ‰ÍœLªIdentifierÍ‰Í¦recordLªIdentifierÍÍœ¬activityNameÂÂ¤init[¨PropertyÍ«ÍÅÂÂÂLªIdentifierÍ«Í´©sign_typeR°MemberExpressionÍ¶ÍÅLªIdentifierÍ¶Í¼¦recordLªIdentifierÍ½ÍÅ¨signTypeÂÂ¤init[¨PropertyÍÔÍåÂÂÂLªIdentifierÍÔÍØ¤kindR°MemberExpressionÍÚÍåLªIdentifierÍÚÍà¦recordLªIdentifierÍáÍå¤kindÂÂ¤init[¨PropertyÍôÍ		ÂÂÂLªIdentifierÍôÍú¦actionR°MemberExpressionÍüÍ		LªIdentifierÍüÍ	¦recordLªIdentifierÍ	Í		¦actionÂÂ¤init[¨PropertyÍ	Í	4ÂÂÂLªIdentifierÍ	Í	!©signed_atR°MemberExpressionÍ	#Í	4LªIdentifierÍ	#Í	)¦recordLªIdentifierÍ	*Í	4ªcreateTimeÂÂ¤initN°MethodDefinitionÍ	Í
-×ÃÂLªIdentifierÍ	¤Í	±­labelToUserId¦methodO²FunctionExpressionÍ	±Í
-×ÀÂÂÂ‘LªIdentifierÍ	²Í	·¥unameM®BlockStatementÍ	¹Í
-×“P«IfStatementÍ	ÄÍ	üU°BinaryExpressionÍ	ÈÍ	×LªIdentifierÍ	ÈÍ	Í¥uname£===S§LiteralÍ	ÒÍ	×©ä¸»ç”¨æˆ·«'ä¸»ç”¨æˆ·'M®BlockStatementÍ	ÙÍ	ü‘T¯ReturnStatementÍ	èÍ	ñS§LiteralÍ	ïÍ	ğ ¡0ÀP«IfStatementÍ
-Í
-¼Q®CallExpressionÍ
-
-Í
- R°MemberExpressionÍ
-
-Í
-LªIdentifierÍ
-
-Í
-¥unameLªIdentifierÍ
-Í
-ªstartsWithÂÂ‘S§LiteralÍ
-Í
-¦ç”¨æˆ·¨'ç”¨æˆ·'ÂM®BlockStatementÍ
-"Í
-¼’V³VariableDeclarationÍ
-1Í
-V‘W²VariableDeclaratorÍ
-7Í
-ULªIdentifierÍ
-7Í
-8¡nQ®CallExpressionÍ
-;Í
-ULªIdentifierÍ
-;Í
-A¦Number‘Q®CallExpressionÍ
-BÍ
-TR°MemberExpressionÍ
-BÍ
-QLªIdentifierÍ
-BÍ
-G¥unameLªIdentifierÍ
-HÍ
-Q©substringÂÂ‘S§LiteralÍ
-RÍ
-S¡2ÂÂ¥constP«IfStatementÍ
-dÍ
-±U±LogicalExpressionÍ
-hÍ
-„Q®CallExpressionÍ
-hÍ
-{R°MemberExpressionÍ
-hÍ
-xLªIdentifierÍ
-hÍ
-n¦NumberLªIdentifierÍ
-oÍ
-x©isIntegerÂÂ‘LªIdentifierÍ
-yÍ
-z¡nÂ¢&&U°BinaryExpressionÍ
-Í
-„LªIdentifierÍ
-Í
-€¡n¡>S§LiteralÍ
-ƒÍ
-„ ¡0M®BlockStatementÍ
-†Í
-±‘T¯ReturnStatementÍ
-™Í
-¢LªIdentifierÍ
- Í
-¡¡nÀÀT¯ReturnStatementÍ
-ÆÍ
-ĞX¯UnaryExpressionÍ
-ÍÍ
-Ï¡-ÃS§LiteralÍ
-ÎÍ
-Ï¡1N°MethodDefinitionÍ„ÍÃÂLªIdentifierÍ‘Í£²syncHistoryToCloud¦methodO²FunctionExpressionÍ£ÍÀÂÂÃM®BlockStatementÍ¦Í“P«IfStatementÍ±Í
-Q®CallExpressionÍµÍÓR°MemberExpressionÍµÍÈLªIdentifierÍµÍ¿ªWORKER_URLLªIdentifierÍÀÍÈ¨includesÂÂ‘S§LiteralÍÉÍÒ§REPLACE©'REPLACE'ÂM®BlockStatementÍÕÍ
-‘T®ThrowStatementÍäÍÿÔr_•¤type¥start£end¦callee©arguments­NewExpressionÍêÍşLªIdentifierÍîÍó¥Error‘S§LiteralÍôÍıµæœªé…ç½®ä¸ŠæŠ¥åœ°å€·'æœªé…ç½®ä¸ŠæŠ¥åœ°å€'ÀV³VariableDeclarationÍÍ\‘W²VariableDeclaratorÍÍ[LªIdentifierÍÍ!§recordsT¯AwaitExpressionÍ$Í[Q®CallExpressionÍ*Í[R°MemberExpressionÍ*ÍYQ®CallExpressionÍ*ÍGR°MemberExpressionÍ*ÍELªIdentifierÍ*Í9¯DatabaseManagerLªIdentifierÍ:ÍE«getInstanceÂÂÂLªIdentifierÍHÍY±getAllSignRecordsÂÂÂ¥constT¯ReturnStatementÍfÍ–Q®CallExpressionÍmÍ•R°MemberExpressionÍmÍŒLªIdentifierÍmÍ€³LeaderboardReporterLªIdentifierÍÍŒ«syncRecordsÂÂ‘LªIdentifierÍÍ”§recordsÂN°MethodDefinitionÍíÍÃÂLªIdentifierÍúÍ«syncRecords¦methodO²FunctionExpressionÍÍÀÂÂÃ‘LªIdentifierÍÍ§recordsM®BlockStatementÍÍŸV³VariableDeclarationÍÍC‘W²VariableDeclaratorÍ ÍBLªIdentifierÍ Í"¢dbQ®CallExpressionÍ%ÍBR°MemberExpressionÍ%Í@LªIdentifierÍ%Í4¯DatabaseManagerLªIdentifierÍ5Í@«getInstanceÂÂÂ¥constV³VariableDeclarationÍMÍz‘W²VariableDeclaratorÍSÍyLªIdentifierÍSÍ\©hostUsersT¯AwaitExpressionÍ_ÍyQ®CallExpressionÍeÍyR°MemberExpressionÍeÍsLªIdentifierÍeÍg¢dbLªIdentifierÍhÍs«getAllUsersÂÂ‘S§LiteralÍtÍxÃ¤trueÂ¥constV³VariableDeclarationÍ„Í®‘W²VariableDeclaratorÍŠÍ­LªIdentifierÍŠÍ”ªotherUsersT¯AwaitExpressionÍ—Í­Q®CallExpressionÍÍ­R°MemberExpressionÍÍ«LªIdentifierÍÍŸ¢dbLªIdentifierÍ Í««getAllUsersÂÂÂ¥constV³VariableDeclarationÍãÍı‘W²VariableDeclaratorÍéÍüLªIdentifierÍéÍğ§idToUid_­NewExpressionÍóÍüLªIdentifierÍ÷Íú£Map¥constP«IfStatementÍÍ\U°BinaryExpressionÍÍR°MemberExpressionÍÍLªIdentifierÍÍ©hostUsersLªIdentifierÍÍ¦lengthÂÂ¡>S§LiteralÍÍ ¡0M®BlockStatementÍ!Í\‘Y³ExpressionStatementÍ0ÍQQ®CallExpressionÍ0ÍPR°MemberExpressionÍ0Í;LªIdentifierÍ0Í7§idToUidLªIdentifierÍ8Í;£setÂÂ’S§LiteralÍ<Í= ¡0R°MemberExpressionÍ?ÍOR°MemberExpressionÍ?ÍKLªIdentifierÍ?ÍH©hostUsersS§LiteralÍIÍJ ¡0ÃÂLªIdentifierÍLÍO£uidÂÂÂÀY³ExpressionStatementÍfÍ¾Q®CallExpressionÍfÍ½R°MemberExpressionÍfÍxLªIdentifierÍfÍpªotherUsersLªIdentifierÍqÍx§forEachÂÂ‘O·ArrowFunctionExpressionÍyÍ¼ÀÂÂÂ‘LªIdentifierÍzÍ~¤userM®BlockStatementÍƒÍ¼‘Y³ExpressionStatementÍ’Í±Q®CallExpressionÍ’Í°R°MemberExpressionÍ’ÍLªIdentifierÍ’Í™§idToUidLªIdentifierÍšÍ£setÂÂ’R°MemberExpressionÍÍ¥LªIdentifierÍÍ¢¤userLªIdentifierÍ£Í¥¢idÂÂR°MemberExpressionÍ§Í¯LªIdentifierÍ§Í«¤userLªIdentifierÍ¬Í¯£uidÂÂÂÂV³VariableDeclarationÍÍ(‘W²VariableDeclaratorÍÍ'LªIdentifierÍÍ©nameToUid_­NewExpressionÍÍ'LªIdentifierÍ"Í%£Map¥constV³VariableDeclarationÍ2ÍN‘W²VariableDeclaratorÍ8ÍMLªIdentifierÍ8ÍA©uidToName_­NewExpressionÍDÍMLªIdentifierÍHÍK£Map¥constV³VariableDeclarationÍXÍ†‘W²VariableDeclaratorÍ^Í…LªIdentifierÍ^Íf¨allUsersQ®CallExpressionÍiÍ…R°MemberExpressionÍiÍyLªIdentifierÍiÍr©hostUsersLªIdentifierÍsÍy¦concatÂÂ‘LªIdentifierÍzÍ„ªotherUsersÂ¥constÔr`—¤type¥start£end¥await¤left¥right¤body®ForOfStatementÍÍ_ÂV³VariableDeclarationÍ•ÍŸ‘W²VariableDeclaratorÍ›ÍŸLªIdentifierÍ›ÍŸ¤userÀ¥constLªIdentifierÍ£Í«¨allUsersM®BlockStatementÍ­Í_’P«IfStatementÍ¼ÍU°BinaryExpressionÍÀÍÚQ®CallExpressionÍÀÍÓR°MemberExpressionÍÀÍÑR°MemberExpressionÍÀÍÌLªIdentifierÍÀÍÄ¤userLªIdentifierÍÅÍÌ§cookiesÂÂLªIdentifierÍÍÍÑ¤trimÂÂÂ£===S§LiteralÍØÍÚ ¢''M®BlockStatementÍÜÍ‘Ôra”¤type¥start£end¥label±ContinueStatementÍïÍøÀÀÔrb–¤type¥start£end¥block§handler©finalizer¬TryStatementÍÍTM®BlockStatementÍÍ¶”V³VariableDeclarationÍ,Íg‘W²VariableDeclaratorÍ2ÍfLªIdentifierÍ2Í6¤infoT¯AwaitExpressionÍ9ÍfQ®CallExpressionÍ?ÍfR°MemberExpressionÍ?ÍXLªIdentifierÍ?ÍL­loginFunctionLªIdentifierÍMÍX«getUserInfoÂÂ‘R°MemberExpressionÍYÍeLªIdentifierÍYÍ]¤userLªIdentifierÍ^Íe§cookiesÂÂÂ¥constV³VariableDeclarationÍyÍ›‘W²VariableDeclaratorÍÍšLªIdentifierÍÍ†§puidNumQ®CallExpressionÍ‰ÍšLªIdentifierÍ‰Í¦Number‘R°MemberExpressionÍÍ™LªIdentifierÍÍ”¤infoLªIdentifierÍ•Í™¤puidÂÂÂ¥constV³VariableDeclarationÍ­Íú‘W²VariableDeclaratorÍ³ÍùLªIdentifierÍ³Í¹¦uidNumPµConditionalExpressionÍ¼ÍùU±LogicalExpressionÍ¼ÍäQ®CallExpressionÍ¼ÍÕR°MemberExpressionÍ¼ÍÌLªIdentifierÍ¼ÍÂ¦NumberLªIdentifierÍÃÍÌ©isIntegerÂÂ‘LªIdentifierÍÍÍÔ§puidNumÂ¢&&U°BinaryExpressionÍÙÍäLªIdentifierÍÙÍà§puidNum¡>S§LiteralÍãÍä ¡0LªIdentifierÍçÍî§puidNumR°MemberExpressionÍñÍùLªIdentifierÍñÍõ¤userLªIdentifierÍöÍù£uidÂÂ¥constP«IfStatementÍÍ§U°BinaryExpressionÍÍ!R°MemberExpressionÍÍLªIdentifierÍÍ¤infoLªIdentifierÍÍ¥unameÂÂ£!==S§LiteralÍÍ! ¢''M®BlockStatementÍ#Í§’Y³ExpressionStatementÍ:Í\Q®CallExpressionÍ:Í[R°MemberExpressionÍ:ÍGLªIdentifierÍ:ÍC©nameToUidLªIdentifierÍDÍG£setÂÂ’R°MemberExpressionÍHÍRLªIdentifierÍHÍL¤infoLªIdentifierÍMÍR¥unameÂÂLªIdentifierÍTÍZ¦uidNumÂY³ExpressionStatementÍrÍ”Q®CallExpressionÍrÍ“R°MemberExpressionÍrÍLªIdentifierÍrÍ{©uidToNameLªIdentifierÍ|Í£setÂÂ’LªIdentifierÍ€Í†¦uidNumR°MemberExpressionÍˆÍ’LªIdentifierÍˆÍŒ¤infoLªIdentifierÍÍ’¥unameÂÂÂÀÔrc•¤type¥start£end¥param¤body«CatchClauseÍÄÍTLªIdentifierÍËÍÌ¡eM®BlockStatementÍÎÍT‘Y³ExpressionStatementÍáÍEQ®CallExpressionÍáÍDR°MemberExpressionÍáÍëLªIdentifierÍáÍæ¥hilogLªIdentifierÍçÍë¤warnÂÂ•LªIdentifierÍìÍò¦DOMAINLªIdentifierÍôÍ÷£TAG\¯TemplateLiteralÍùÍ.‘]¯TemplateElementÍúÍ-^Ù3Resolve uname for uid %{public}d failed: %{public}sÙ3Resolve uname for uid %{public}d failed: %{public}sÃR°MemberExpressionÍ0Í8LªIdentifierÍ0Í4¤userLªIdentifierÍ5Í8£uidÂÂR°MemberExpressionÍ:ÍCLªIdentifierÍ:Í;¡eLªIdentifierÍ<ÍC§messageÂÂÂÀV³VariableDeclarationÍiÍµ‘W²VariableDeclaratorÍoÍ´LªIdentifierÍoÍv§outcomeZ°ObjectExpressionÍyÍ´”[¨PropertyÍ{ÍÂÂÂLªIdentifierÍ{Í€¥totalR°MemberExpressionÍ‚ÍLªIdentifierÍ‚Í‰§recordsLªIdentifierÍŠÍ¦lengthÂÂ¤init[¨PropertyÍ’Í›ÂÂÂLªIdentifierÍ’Í˜¦syncedS§LiteralÍšÍ› ¡0¤init[¨PropertyÍÍ¦ÂÂÂLªIdentifierÍÍ£¦failedS§LiteralÍ¥Í¦ ¡0¤init[¨PropertyÍ¨Í²ÂÂÂLªIdentifierÍ¨Í¯§skippedS§LiteralÍ±Í² ¡0¤init¥constV³VariableDeclarationÍ¿ÍÖ‘W²VariableDeclaratorÍÅÍÕLªIdentifierÍÅÍÉ¤seen_­NewExpressionÍÌÍÕLªIdentifierÍĞÍÓ£Set¥const`®ForOfStatementÍàÍ+ÂV³VariableDeclarationÍåÍñ‘W²VariableDeclaratorÍëÍñLªIdentifierÍëÍñ¦recordÀ¥constLªIdentifierÍõÍü§recordsM®BlockStatementÍşÍ+—V³VariableDeclarationÍLÍ|‘W²VariableDeclaratorÍRÍ{LªIdentifierÍRÍ]«realNameHitQ®CallExpressionÍ`Í{R°MemberExpressionÍ`ÍmLªIdentifierÍ`Íi©nameToUidLªIdentifierÍjÍm£getÂÂ‘R°MemberExpressionÍnÍzLªIdentifierÍnÍt¦recordLªIdentifierÍuÍz¥unameÂÂÂ¥constV³VariableDeclarationÍŠÍ ‘W²VariableDeclaratorÍÍŸLªIdentifierÍÍ‘£uidLªIdentifierÍ”ÍŸ«realNameHit£letP«IfStatementÍ®ÍlU°BinaryExpressionÍ²ÍÃLªIdentifierÍ²Íµ£uid£===LªIdentifierÍºÍÃ©undefinedM®BlockStatementÍÅÍl’V³VariableDeclarationÍØÍ‘W²VariableDeclaratorÍŞÍLªIdentifierÍŞÍä¦userIdQ®CallExpressionÍçÍR°MemberExpressionÍçÍLªIdentifierÍçÍú³LeaderboardReporterLªIdentifierÍûÍ­labelToUserIdÂÂ‘R°MemberExpressionÍ	ÍLªIdentifierÍ	Í¦recordLªIdentifierÍÍ¥unameÂÂÂ¥constY³ExpressionStatementÍ)Í]Ôrd–¤type¥start£end¨operator¤left¥right´AssignmentExpressionÍ)Í\¡=LªIdentifierÍ)Í,£uidPµConditionalExpressionÍ/Í\U°BinaryExpressionÍ/Í:LªIdentifierÍ/Í5¦userId¢>=S§LiteralÍ9Í: ¡0Q®CallExpressionÍ=ÍPR°MemberExpressionÍ=ÍHLªIdentifierÍ=ÍD§idToUidLªIdentifierÍEÍH£getÂÂ‘LªIdentifierÍIÍO¦userIdÂLªIdentifierÍSÍ\©undefinedÀP«IfStatementÍ±Í¢U±LogicalExpressionÍµÍQU±LogicalExpressionÍµÍõU±LogicalExpressionÍµÍÒU°BinaryExpressionÍµÍÆLªIdentifierÍµÍ¸£uid£===LªIdentifierÍ½ÍÆ©undefined¢||U°BinaryExpressionÍÊÍÒLªIdentifierÍÊÍÍ£uid¢<=S§LiteralÍÑÍÒ ¡0¢||U°BinaryExpressionÍÖÍõQ®CallExpressionÍÖÍîR°MemberExpressionÍÖÍìR°MemberExpressionÍÖÍçLªIdentifierÍÖÍÜ¦recordLªIdentifierÍİÍçªactivityIdÂÂLªIdentifierÍèÍì¤trimÂÂÂ£===S§LiteralÍóÍõ ¢''¢||Q®CallExpressionÍ
-ÍQR°MemberExpressionÍ
-ÍLªIdentifierÍ
-Í¤seenLªIdentifierÍÍ£hasÂÂ‘\¯TemplateLiteralÍÍP”LªIdentifierÍÍ£uidR°MemberExpressionÍÍ.LªIdentifierÍÍ#¦recordLªIdentifierÍ$Í.ªactivityIdÂÂR°MemberExpressionÍ2Í?LªIdentifierÍ2Í8¦recordLªIdentifierÍ9Í?¦actionÂÂR°MemberExpressionÍCÍNLªIdentifierÍCÍI¦recordLªIdentifierÍJÍN¤kindÂÂ•]¯TemplateElementÍÍ^  Â]¯TemplateElementÍÍ^¡|¡|Â]¯TemplateElementÍ/Í0^¡|¡|Â]¯TemplateElementÍ@ÍA^¡|¡|Â]¯TemplateElementÍOÍO^  ÃÂM®BlockStatementÍSÍ¢’Y³ExpressionStatementÍfÍxX°UpdateExpressionÍfÍw¢++ÂR°MemberExpressionÍfÍuLªIdentifierÍfÍm§outcomeLªIdentifierÍnÍu§skippedÂÂa±ContinueStatementÍŠÍ“ÀÀY³ExpressionStatementÍ°ÍøQ®CallExpressionÍ°Í÷R°MemberExpressionÍ°Í¸LªIdentifierÍ°Í´¤seenLªIdentifierÍµÍ¸£addÂÂ‘\¯TemplateLiteralÍ¹Íö”LªIdentifierÍ¼Í¿£uidR°MemberExpressionÍÃÍÔLªIdentifierÍÃÍÉ¦recordLªIdentifierÍÊÍÔªactivityIdÂÂR°MemberExpressionÍØÍåLªIdentifierÍØÍŞ¦recordLªIdentifierÍßÍå¦actionÂÂR°MemberExpressionÍéÍôLªIdentifierÍéÍï¦recordLªIdentifierÍğÍô¤kindÂÂ•]¯TemplateElementÍºÍº^  Â]¯TemplateElementÍÀÍÁ^¡|¡|Â]¯TemplateElementÍÕÍÖ^¡|¡|Â]¯TemplateElementÍæÍç^¡|¡|Â]¯TemplateElementÍõÍõ^  ÃÂV³VariableDeclarationÍÍc‘W²VariableDeclaratorÍÍbLªIdentifierÍÍ¤namePµConditionalExpressionÍÍbU°BinaryExpressionÍÍ,LªIdentifierÍÍ«realNameHit£!==LªIdentifierÍ#Í,©undefinedR°MemberExpressionÍ/Í;LªIdentifierÍ/Í5¦recordLªIdentifierÍ6Í;¥unameÂÂU±LogicalExpressionÍ?ÍaQ®CallExpressionÍ?ÍQR°MemberExpressionÍ?ÍLLªIdentifierÍ?ÍH©uidToNameLªIdentifierÍIÍL£getÂÂ‘LªIdentifierÍMÍP£uidÂ¢??R°MemberExpressionÍUÍaLªIdentifierÍUÍ[¦recordLªIdentifierÍ\Ía¥unameÂÂ¥constb¬TryStatementÍqÍ M®BlockStatementÍuÍ}‘P«IfStatementÍˆÍnT¯AwaitExpressionÍŒÍßQ®CallExpressionÍ’ÍßR°MemberExpressionÍ’ÍªLªIdentifierÍ’Í¥³LeaderboardReporterLªIdentifierÍ¦Íª¤sendÂÂ‘Q®CallExpressionÍ«ÍŞR°MemberExpressionÍ«ÍËLªIdentifierÍ«Í¾³LeaderboardReporterLªIdentifierÍ¿ÍË¬buildPayloadÂÂ“LªIdentifierÍÌÍÒ¦recordLªIdentifierÍÔÍ×£uidLªIdentifierÍÙÍİ¤nameÂÂM®BlockStatementÍáÍ‘Y³ExpressionStatementÍøÍ	X°UpdateExpressionÍøÍ¢++ÂR°MemberExpressionÍøÍLªIdentifierÍøÍÿ§outcomeLªIdentifierÍ Í¦syncedÂÂM®BlockStatementÍ3Ín‘Y³ExpressionStatementÍJÍ[X°UpdateExpressionÍJÍZ¢++ÂR°MemberExpressionÍJÍXLªIdentifierÍJÍQ§outcomeLªIdentifierÍRÍX¦failedÂÂc«CatchClauseÍ‹Í LªIdentifierÍ’Í“¡eM®BlockStatementÍ•Í ’Y³ExpressionStatementÍ¨Í¹X°UpdateExpressionÍ¨Í¸¢++ÂR°MemberExpressionÍ¨Í¶LªIdentifierÍ¨Í¯§outcomeLªIdentifierÍ°Í¶¦failedÂÂY³ExpressionStatementÍËÍQ®CallExpressionÍËÍR°MemberExpressionÍËÍÖLªIdentifierÍËÍĞ¥hilogLªIdentifierÍÑÍÖ¥errorÂÂ”LªIdentifierÍ×Íİ¦DOMAINLªIdentifierÍßÍâ£TAG\¯TemplateLiteralÍäÍ‘]¯TemplateElementÍåÍ^¾Sync record failed: %{public}s¾Sync record failed: %{public}sÃR°MemberExpressionÍÍLªIdentifierÍÍ¡eLªIdentifierÍÍ§messageÂÂÂÀY³ExpressionStatementÍ5ÍìQ®CallExpressionÍ5ÍëR°MemberExpressionÍ5Í?LªIdentifierÍ5Í:¥hilogLªIdentifierÍ;Í?¤infoÂÂ—LªIdentifierÍ@ÍF¦DOMAINLªIdentifierÍHÍK£TAGS§LiteralÍMÍªÙ[Cloud sync done: total %{public}d, synced %{public}d, failed %{public}d, skipped %{public}dÙ]'Cloud sync done: total %{public}d, synced %{public}d, failed %{public}d, skipped %{public}d'R°MemberExpressionÍ¬Í¹LªIdentifierÍ¬Í³§outcomeLªIdentifierÍ´Í¹¥totalÂÂR°MemberExpressionÍ»ÍÉLªIdentifierÍ»ÍÂ§outcomeLªIdentifierÍÃÍÉ¦syncedÂÂR°MemberExpressionÍËÍÙLªIdentifierÍËÍÒ§outcomeLªIdentifierÍÓÍÙ¦failedÂÂR°MemberExpressionÍÛÍêLªIdentifierÍÛÍâ§outcomeLªIdentifierÍãÍê§skippedÂÂÂT¯ReturnStatementÍöÍLªIdentifierÍıÍ§outcomeN°MethodDefinitionÍğÍ¯ÃÂLªIdentifierÍıÍ²autoSyncNewRecords¦methodO²FunctionExpressionÍÍ¯ÀÂÂÃ‘LªIdentifierÍÍ§contextM®BlockStatementÍÍ¯’P«IfStatementÍ$ÍtU°BinaryExpressionÍ(ÍQQ®CallExpressionÍ(ÍGR°MemberExpressionÍ(Í6LªIdentifierÍ(Í2ªAppStorageLªIdentifierÍ3Í6£getÂÂ‘S§LiteralÍ7ÍF­lbSyncEnabled¯'lbSyncEnabled'Â£===S§LiteralÍLÍQÂ¥falseM®BlockStatementÍSÍt‘T¯ReturnStatementÍbÍiÀÀb¬TryStatementÍ~Í¨M®BlockStatementÍ‚Í?—V³VariableDeclarationÍ‘ÍÔ‘W²VariableDeclaratorÍ—ÍÓLªIdentifierÍ—Í›¤prefT¯AwaitExpressionÍÍÓQ®CallExpressionÍ¤ÍÓR°MemberExpressionÍ¤Í¾LªIdentifierÍ¤Í¯«preferencesLªIdentifierÍ°Í¾®getPreferencesÂÂ’LªIdentifierÍ¿ÍÆ§contextS§LiteralÍÈÍÒ¨settingsª'settings'Â¥constV³VariableDeclarationÍâÍ‘W²VariableDeclaratorÍèÍLªIdentifierÍèÍñ©watermarkT¯AwaitExpressionÍôÍQ®CallExpressionÍúÍR°MemberExpressionÍúÍLªIdentifierÍúÍş¤prefLªIdentifierÍÿÍ£getÂÂ’LªIdentifierÍÍ²PREF_LAST_SYNC_KEYS§LiteralÍÍ ¡0Â¥constV³VariableDeclarationÍ(Í¶‘W²VariableDeclaratorÍ.ÍµLªIdentifierÍ.Í5§recordsQ®CallExpressionÍ8ÍµR°MemberExpressionÍ8ÍŠT¯AwaitExpressionÍ9ÍpQ®CallExpressionÍ?ÍpR°MemberExpressionÍ?ÍnQ®CallExpressionÍ?Í\R°MemberExpressionÍ?ÍZLªIdentifierÍ?ÍN¯DatabaseManagerLªIdentifierÍOÍZ«getInstanceÂÂÂLªIdentifierÍ]Ín±getAllSignRecordsÂÂÂLªIdentifierÍ„ÍŠ¦filterÂÂ‘O·ArrowFunctionExpressionÍ‹Í´ÀÃÂÂ‘LªIdentifierÍŒÍ’¦recordU°BinaryExpressionÍ—Í´R°MemberExpressionÍ—Í¨LªIdentifierÍ—Í¦recordLªIdentifierÍÍ¨ªcreateTimeÂÂ¡>LªIdentifierÍ«Í´©watermarkÂ¥constP«IfStatementÍÄÍU°BinaryExpressionÍÈÍÜR°MemberExpressionÍÈÍÖLªIdentifierÍÈÍÏ§recordsLªIdentifierÍĞÍÖ¦lengthÂÂ£===S§LiteralÍÛÍÜ ¡0M®BlockStatementÍŞÍ‘T¯ReturnStatementÍñÍøÀÀV³VariableDeclarationÍÍT‘W²VariableDeclaratorÍÍSLªIdentifierÍÍ"§outcomeT¯AwaitExpressionÍ%ÍSQ®CallExpressionÍ+ÍSR°MemberExpressionÍ+ÍJLªIdentifierÍ+Í>³LeaderboardReporterLªIdentifierÍ?ÍJ«syncRecordsÂÂ‘LªIdentifierÍKÍR§recordsÂ¥constP«IfStatementÍbÍTU±LogicalExpressionÍfÍU°BinaryExpressionÍfÍzR°MemberExpressionÍfÍtLªIdentifierÍfÍm§outcomeLªIdentifierÍnÍt¦failedÂÂ£===S§LiteralÍyÍz ¡0¢&&U°BinaryExpressionÍ~ÍR°MemberExpressionÍ~ÍŒLªIdentifierÍ~Í…§outcomeLªIdentifierÍ†ÍŒ¦syncedÂÂ¡>S§LiteralÍÍ ¡0M®BlockStatementÍ’ÍT’Y³ExpressionStatementÍÕÍ T¯AwaitExpressionÍÕÍQ®CallExpressionÍÛÍR°MemberExpressionÍÛÍãLªIdentifierÍÛÍß¤prefLªIdentifierÍàÍã£putÂÂ’LªIdentifierÍäÍö²PREF_LAST_SYNC_KEYR°MemberExpressionÍøÍR°MemberExpressionÍøÍLªIdentifierÍøÍÿ§recordsU°BinaryExpressionÍ ÍR°MemberExpressionÍ ÍLªIdentifierÍ Í§recordsLªIdentifierÍÍ¦lengthÂÂ¡-S§LiteralÍÍ¡1ÃÂLªIdentifierÍÍªcreateTimeÂÂÂY³ExpressionStatementÍ2ÍET¯AwaitExpressionÍ2ÍDQ®CallExpressionÍ8ÍDR°MemberExpressionÍ8ÍBLªIdentifierÍ8Í<¤prefLªIdentifierÍ=ÍB¥flushÂÂÂÀY³ExpressionStatementÍbÍ4Q®CallExpressionÍbÍ3R°MemberExpressionÍbÍlLªIdentifierÍbÍg¥hilogLªIdentifierÍhÍl¤infoÂÂ˜LªIdentifierÍmÍs¦DOMAINLªIdentifierÍuÍx£TAGS§LiteralÍzÍçÙkAuto sync: total %{public}d, synced %{public}d, failed %{public}d, skipped %{public}d, watermark %{public}dÙm'Auto sync: total %{public}d, synced %{public}d, failed %{public}d, skipped %{public}d, watermark %{public}d'R°MemberExpressionÍéÍöLªIdentifierÍéÍğ§outcomeLªIdentifierÍñÍö¥totalÂÂR°MemberExpressionÍøÍLªIdentifierÍøÍÿ§outcomeLªIdentifierÍ Í¦syncedÂÂR°MemberExpressionÍÍLªIdentifierÍÍ§outcomeLªIdentifierÍÍ¦failedÂÂR°MemberExpressionÍÍ'LªIdentifierÍÍ§outcomeLªIdentifierÍ Í'§skippedÂÂLªIdentifierÍ)Í2©watermarkÂc«CatchClauseÍIÍ¨LªIdentifierÍPÍQ¡eM®BlockStatementÍSÍ¨‘Y³ExpressionStatementÍbÍQ®CallExpressionÍbÍœR°MemberExpressionÍbÍmLªIdentifierÍbÍg¥hilogLªIdentifierÍhÍm¥errorÂÂ“LªIdentifierÍnÍt¦DOMAINLªIdentifierÍvÍy£TAG\¯TemplateLiteralÍ{Í›‘R°MemberExpressionÍÍ™LªIdentifierÍÍ‘¡eLªIdentifierÍ’Í™§messageÂÂ’]¯TemplateElementÍ|Í^²Auto sync failed: ²Auto sync failed: Â]¯TemplateElementÍšÍš^  ÃÂÀN°MethodDefinitionÍöÍ ­ÃÂLªIdentifierÍÍ¤send¦methodO²FunctionExpressionÍÍ ­ÀÂÂÃ‘LªIdentifierÍÍ§payloadM®BlockStatementÍÍ ­”V³VariableDeclarationÍÍ~‘W²VariableDeclaratorÍ"Í}LªIdentifierÍ"Í*¨responseT¯AwaitExpressionÍ-Í}Q®CallExpressionÍ3Í}R°MemberExpressionÍ3Í@LªIdentifierÍ3Í7¤HttpLªIdentifierÍ8Í@¨postJsonÂÂ“\¯TemplateLiteralÍAÍW‘LªIdentifierÍDÍNªWORKER_URL’]¯TemplateElementÍBÍB^  Â]¯TemplateElementÍOÍV^§/report§/reportÃLªIdentifierÍYÍ`§payloadZ°ObjectExpressionÍbÍ|‘[¨PropertyÍdÍzÂÂÂS§LiteralÍdÍpªx-lb-token¬'x-lb-token'LªIdentifierÍrÍz¨LB_TOKEN¤initÂ¥constP«IfStatementÍˆÍ 9U°BinaryExpressionÍŒÍ¡R°MemberExpressionÍŒÍ™LªIdentifierÍŒÍ”¨responseLªIdentifierÍ•Í™¤codeÂÂ£===S§LiteralÍÍ¡ÌÈ£200M®BlockStatementÍ£Í 9’Y³ExpressionStatementÍ²Í Q®CallExpressionÍ²Í R°MemberExpressionÍ²Í¼LªIdentifierÍ²Í·¥hilogLªIdentifierÍ¸Í¼¤infoÂÂ•LªIdentifierÍ½ÍÃ¦DOMAINLªIdentifierÍÅÍÈ£TAGS§LiteralÍÊÍğÙ$Sign reported: %{public}d %{public}sÙ&'Sign reported: %{public}d %{public}s'R°MemberExpressionÍòÍıLªIdentifierÍòÍù§payloadLªIdentifierÍúÍı£uidÂÂR°MemberExpressionÍÿÍ LªIdentifierÍÿÍ §payloadLªIdentifierÍ Í «activity_idÂÂÂT¯ReturnStatementÍ "Í .S§LiteralÍ )Í -Ã¤trueÀY³ExpressionStatementÍ CÍ Q®CallExpressionÍ CÍ R°MemberExpressionÍ CÍ NLªIdentifierÍ CÍ H¥hilogLªIdentifierÍ IÍ N¥errorÂÂ”LªIdentifierÍ OÍ U¦DOMAINLªIdentifierÍ WÍ Z£TAGS§LiteralÍ \Í ~Ù Report rejected: HTTP %{public}dÙ"'Report rejected: HTTP %{public}d'R°MemberExpressionÍ €Í LªIdentifierÍ €Í ˆ¨responseLªIdentifierÍ ‰Í ¤codeÂÂÂT¯ReturnStatementÍ ™Í ¦S§LiteralÍ  Í ¥Â¥falseN°MethodDefinitionÍ!"Í"ºÃÂLªIdentifierÍ!/Í!?°fetchLeaderboard¦methodO²FunctionExpressionÍ!?Í"ºÀÂÂÃ‘LªIdentifierÍ!@Í!E¥limitM®BlockStatementÍ!GÍ"º•V³VariableDeclarationÍ!RÍ!‘W²VariableDeclaratorÍ!XÍ!LªIdentifierÍ!XÍ!`¨responseT¯AwaitExpressionÍ!cÍ!Q®CallExpressionÍ!iÍ!R°MemberExpressionÍ!iÍ!qLªIdentifierÍ!iÍ!m¤HttpLªIdentifierÍ!nÍ!q£getÂÂ‘\¯TemplateLiteralÍ!rÍ!œ’LªIdentifierÍ!uÍ!ªWORKER_URLLªIdentifierÍ!•Í!š¥limit“]¯TemplateElementÍ!sÍ!s^  Â]¯TemplateElementÍ!€Í!“^³/leaderboard?limit=³/leaderboard?limit=Â]¯TemplateElementÍ!›Í!›^  ÃÂ¥constP«IfStatementÍ!¨Í"U°BinaryExpressionÍ!¬Í!ÁR°MemberExpressionÍ!¬Í!¹LªIdentifierÍ!¬Í!´¨responseLªIdentifierÍ!µÍ!¹¤codeÂÂ£!==S§LiteralÍ!¾Í!ÁÌÈ£200M®BlockStatementÍ!ÃÍ"‘T®ThrowStatementÍ!ÒÍ!û_­NewExpressionÍ!ØÍ!úLªIdentifierÍ!ÜÍ!á¥Error‘\¯TemplateLiteralÍ!âÍ!ù‘R°MemberExpressionÍ!êÍ!÷LªIdentifierÍ!êÍ!ò¨responseLªIdentifierÍ!óÍ!÷¤codeÂÂ’]¯TemplateElementÍ!ãÍ!è^¥HTTP ¥HTTP Â]¯TemplateElementÍ!øÍ!ø^  ÃÀV³VariableDeclarationÍ"Í"7‘W²VariableDeclaratorÍ"Í"6LªIdentifierÍ"Í"¤dataQ®CallExpressionÍ"Í"6R°MemberExpressionÍ"Í"'LªIdentifierÍ"Í"!¤JSONLªIdentifierÍ""Í"'¥parseÂÂ‘R°MemberExpressionÍ"(Í"5LªIdentifierÍ"(Í"0¨responseLªIdentifierÍ"1Í"5¤bodyÂÂÂ¥constP«IfStatementÍ"AÍ"˜X¯UnaryExpressionÍ"EÍ"M¡!ÃR°MemberExpressionÍ"FÍ"MLªIdentifierÍ"FÍ"J¤dataLªIdentifierÍ"KÍ"M¢okÂÂM®BlockStatementÍ"OÍ"˜‘T®ThrowStatementÍ"^Í"_­NewExpressionÍ"dÍ"ŒLªIdentifierÍ"hÍ"m¥Error‘U±LogicalExpressionÍ"nÍ"‹R°MemberExpressionÍ"nÍ"xLªIdentifierÍ"nÍ"r¤dataLªIdentifierÍ"sÍ"x¥errorÂÂ¢??S§LiteralÍ"|Í"‹­unknown error¯'unknown error'ÀT¯ReturnStatementÍ"¢Í"³R°MemberExpressionÍ"©Í"²LªIdentifierÍ"©Í"­¤dataLªIdentifierÍ"®Í"²¤listÂÂÀ•Ôre•¤type¥start£endªspecifiers¦source±ImportDeclaration  ‘Ôrf”¤type¥start£end¥local¶ImportDefaultSpecifierLªIdentifier¥hilogS§Literal«@ohos.hilog­"@ohos.hilog"e±ImportDeclaration"ÌS‘f¶ImportDefaultSpecifier)4LªIdentifier)4«preferencesS§Literal:ÌR¶@ohos.data.preferences¸"@ohos.data.preferences"e±ImportDeclarationÌUÌy‘Ôrg•¤type¥start£end¨imported¥local¯ImportSpecifierÌ^ÌbLªIdentifierÌ^Ìb¤HttpLªIdentifierÌ^Ìb¤HttpS§LiteralÌjÌx¬./httpClient®'./httpClient'e±ImportDeclarationÌ{Ì¨‘g¯ImportSpecifierÌ„Ì“LªIdentifierÌ„Ì“¯DatabaseManagerLªIdentifierÌ„Ì“¯DatabaseManagerS§LiteralÌ›Ì§ª./DataBase¬'./DataBase'e±ImportDeclarationÌªÌÒ‘g¯ImportSpecifierÌ³ÌÀLªIdentifierÌ³ÌÀ­loginFunctionLªIdentifierÌ³ÌÀ­loginFunctionS§LiteralÌÈÌÑ§./Login©'./Login'

@@ -31,6 +31,12 @@ export function initSignInfo(name: string, activityInfo: ActivityInfo) {
   SignPage({ activityInfo: activityInfo })
 }
 
+/** 单次扫码结果：ok = 取得 enc；format = 扫码内容缺少 enc；cancel = 用户取消或扫码器错误 */
+interface QrScanOutcome {
+  status: string;
+  enc: string;
+}
+
 /**
  * 签到详情页：统一编排所有签到类型的执行流程
  * （组件只负责输入与准备，真正的签到/签退全部走 executeSignFlow / executeSignOutFlow）
@@ -907,57 +913,10 @@ export struct SignPage {
         this.commonQueryParams.location = ''
       }
 
-      let options: scanBarcode.ScanOptions = {
-        scanTypes: [scanCore.ScanType.ALL],
-        enableMultiMode: true,
-        enableAlbum: true
-      };
-      try {
-        if (canIUse("SystemCapability.Multimedia.Scan.ScanBarcode")) {
-          scanBarcode.startScanForResult(this.getUIContext().getHostContext(), options)
-            .then(async (result: scanBarcode.ScanResult) => {
-              try {
-                const parse = UrlTools.parseUrlParams(result.originalValue)
-
-                if (!parse || !parse['enc']) {
-                  promptAction.showToast({ message: '二维码格式错误' });
-                  this.canSign = true;
-                  return;
-                }
-
-                const enc = parse['enc']
-                hilog.info(DOMAIN, TAG, `Scan successful, enc: ${enc}`);
-
-                // 扫码成功后，执行统一签到流程
-                await this.executeSignFlow('', enc)
-              } catch (error) {
-                const errorMsg = error instanceof Error ? error.message : String(error);
-                hilog.error(DOMAIN, TAG, `Failed to process scan result: ${errorMsg}`);
-                promptAction.showToast({ message: '处理扫码结果失败' });
-                this.canSign = true;
-              }
-            })
-            .catch((error: BusinessError) => {
-              hilog.error(DOMAIN, TAG,
-                `Failed to get ScanResult. Code:${error.code}, message: ${error.message}`);
-              promptAction.showToast({ message: '扫码失败或已取消' });
-              this.canSign = true;
-            });
-          // 扫码签到需要等待扫码结果，直接返回
-          return;
-        } else {
-          promptAction.showToast({ message: '不支持扫码功能' });
-          this.canSign = true;
-          return;
-        }
-      } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : String(error);
-        hilog.error(DOMAIN, TAG,
-          `Failed to start the scanning service: ${errorMsg}`);
-        promptAction.showToast({ message: '启动扫码失败' });
-        this.canSign = true;
-        return;
-      }
+      // enc 由 executeSignFlow 逐用户拉起扫码器现取现用：每位用户独立扫码，
+      // 避免串行复用同一 enc 时尾部用户撞上二维码过期
+      await this.executeSignFlow('', '')
+      return;
     }
 
     // 非扫码签到：统一签到流程
@@ -972,16 +931,41 @@ export struct SignPage {
   /**
    * 统一签到流程：所有签到类型共用同一条执行路径
    * 逐个用户签到（间隔 200ms，对齐上游），支持验证码与人脸，二维码过期中断剩余用户
+   * 二维码签到：每位用户签到前独立拉起扫码器现取 enc（串行 await 确保上一次扫码页
+   * 已关闭后再拉起下一次，startScanForResult 无并发限制，文档要求在页面生命周期内调用）
    */
   private async executeSignFlow(signCode: string, enc: string): Promise<void> {
     const hashTable = new Map<string, string[]>()
-    const baseParams = this.buildBaseParams(signCode, enc)
     // 快照勾选列表，避免签到过程中修改勾选导致错位
     const targetIds = this.signIdArray.slice()
+    const isQrScan = this.activityInfo?.signType === SignType.QRCODE
 
     for (let i = 0; i < targetIds.length; i++) {
+      let encForUser = enc
+      if (isQrScan) {
+        const label = targetIds[i] === 0 ? '主用户' : `用户${targetIds[i]}`
+        const menu = this.otherUser.find(u => u.id === targetIds[i])
+        const scan = await this.scanQrEnc(menu ? menu.uname : label)
+        if (scan.status === 'cancel') {
+          // 用户取消或扫码器不可用：为当前及剩余用户补记结果后中断，避免结果对话框静默缺人
+          for (let j = i; j < targetIds.length; j++) {
+            const restLabel = targetIds[j] === 0 ? '主用户' : `用户${targetIds[j]}`
+            this.recordOutcome(hashTable,
+              { kind: 'skipped', message: '已取消扫码，未签到', needCaptcha: false }, restLabel, 'sign')
+          }
+          break
+        }
+        if (scan.status === 'format') {
+          promptAction.showToast({ message: '二维码内容缺少 enc，已跳过该用户', duration: 2000 })
+          this.recordOutcome(hashTable,
+            { kind: 'error', message: '二维码内容缺少 enc', needCaptcha: false }, label, 'sign')
+          continue
+        }
+        encForUser = scan.enc
+      }
       try {
         const userInfo = await this.requireUser(targetIds[i])
+        const baseParams = this.buildBaseParams(signCode, encForUser)
         const outcome =
           await this.signSingleUser(userInfo, this.objectidArr[i] || '', this.faceObjectIdArr[i] || '',
             baseParams, hashTable)
@@ -1005,6 +989,51 @@ export struct SignPage {
     this.showSignResult(hashTable);
     await this.refreshUserPermissions()
     this.canSign = true
+  }
+
+  /**
+   * 拉起系统扫码器获取二维码签到 enc（每位用户一次，现取现用）
+   * startScanForResult 仅三种错误：401 参数错误、1000500001 内部错误、1000500002 用户取消；
+   * 取消与内部错误统一按 cancel 处理（中断本轮），Promise 永不 reject 以简化调用方
+   */
+  private scanQrEnc(uname: string): Promise<QrScanOutcome> {
+    return new Promise<QrScanOutcome>((resolve) => {
+      const fail: QrScanOutcome = { status: 'cancel', enc: '' };
+      promptAction.showToast({ message: `即将为 ${uname} 扫码`, duration: 2000 })
+      try {
+        if (!canIUse('SystemCapability.Multimedia.Scan.ScanBarcode')) {
+          promptAction.showToast({ message: '设备不支持扫码功能' });
+          resolve(fail)
+          return;
+        }
+        const options: scanBarcode.ScanOptions = {
+          scanTypes: [scanCore.ScanType.ALL],
+          enableMultiMode: true,
+          enableAlbum: true
+        };
+        scanBarcode.startScanForResult(this.getUIContext().getHostContext(), options)
+          .then((result: scanBarcode.ScanResult) => {
+            const parse = UrlTools.parseUrlParams(result.originalValue)
+            if (!parse || !parse['enc']) {
+              resolve({ status: 'format', enc: '' })
+              return;
+            }
+            hilog.info(DOMAIN, TAG, `Scan successful, enc: ${parse['enc']}`);
+            resolve({ status: 'ok', enc: parse['enc'] })
+          })
+          .catch((error: BusinessError) => {
+            hilog.info(DOMAIN, TAG,
+              `Scan cancelled or failed. Code:${error.code}, message: ${error.message}`);
+            if (error.code !== 1000500002) {
+              promptAction.showToast({ message: '扫码失败，请重试' });
+            }
+            resolve(fail)
+          });
+      } catch (error) {
+        hilog.error(DOMAIN, TAG, `Failed to start the scanning service: ${(error as Error).message}`);
+        resolve(fail)
+      }
+    })
   }
 
   /**
