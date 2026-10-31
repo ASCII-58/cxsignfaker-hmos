@@ -1,0 +1,721 @@
+Ôr@Ÿªassertions¤code´customTransformCache¬dependencies¢id¤meta±moduleSideEffects¬originalCode±originalSourcemap«resolvedIds®sourcemapChainµsyntheticNamedExportsµtransformDependencies®transformFiles¨cacheAstÔrAÚ+¬import image from "@ohos.multimedia.image";
+import http from '@ohos.net.http';
+import { ChaoxingUtils } from './utils';
+import JSON from "@ohos.util.json";
+import { ChaoXingApi } from './PublicAPI';
+import { DatabaseManager } from './DataBase';
+import hilog from "@ohos.hilog";
+import urlTools from './urlTools';
+import CryptoJS from '@ohos/crypto-js';
+const TAG = 'LoginService';
+const DOMAIN = 0x0001;
+// å¸¸é‡å®šä¹‰
+const HTTP_TIMEOUT_MS = 60000; // 60ç§’è¶…æ—¶
+const ERROR_MAX_REDIRECTS = 'Number of redirects hit maximum amount';
+const HTTP_SUCCESS_CODE = 200;
+const USER_INFO_CACHE_TTL_MS = 300000; // 5 minutes cache TTL
+// Simple in-memory cache for user info (uses hashed key for efficiency and security)
+const userInfoCache = new Map();
+/**
+ * Generate a short hash key from cookies string for cache lookup
+ * This is more efficient and secure than using the full cookies string
+ */
+function generateCacheKey(cookies) {
+    return CryptoJS.MD5(cookies).toString().substring(0, 16);
+}
+export class loginFunction {
+    /**
+     * Clear the user info cache
+     */
+    static clearUserInfoCache() {
+        userInfoCache.clear();
+        hilog.debug(DOMAIN, TAG, 'User info cache cleared');
+    }
+    /**
+     * ç™»å½•å­¦ä¹ é€šï¼Œè·å–set-cookie
+     * @param {string} LoginString éœ€è¦åŠ å¯†çš„æ¶ˆæ¯
+     * @returns {Promise<string>} æ±‚åˆ°çš„cookie,å¼‚å¸¸ä¸ºç©º
+     */
+    static async LoginChaoXing(LoginString) {
+        hilog.debug(DOMAIN, TAG, 'Attempting login');
+        const httpRequest = http.createHttp();
+        const url = ChaoXingApi.URL_LOGIN;
+        const PostBody = LoginString;
+        try {
+            const result = await httpRequest.request(url, {
+                method: http.RequestMethod.POST,
+                extraData: PostBody,
+                header: {
+                    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                connectTimeout: HTTP_TIMEOUT_MS,
+                readTimeout: HTTP_TIMEOUT_MS,
+            });
+            // å¤„ç†å“åº”
+            if (result.responseCode === HTTP_SUCCESS_CODE) {
+                const ResultBody = JSON.parse(result.result.toString());
+                hilog.debug(DOMAIN, TAG, `Login response status: ${ResultBody?.['status']}`);
+                if (ResultBody?.['status'] === true) {
+                    const set_cookies = result.header['set-cookie'];
+                    hilog.info(DOMAIN, TAG, 'Login successful');
+                    return {
+                        ok: true,
+                        message: 'ç™»å½•æˆåŠŸ',
+                        cookies: ChaoxingUtils.processSetCookieHeaders(set_cookies)
+                    };
+                }
+                else {
+                    hilog.error(DOMAIN, TAG, 'Login failed: Invalid username or password');
+                    return {
+                        ok: false,
+                        message: 'è´¦å·æˆ–å¯†ç é”™è¯¯'
+                    };
+                }
+            }
+            else {
+                hilog.error(DOMAIN, TAG, `Login failed: Network error (${result.responseCode})`);
+                return {
+                    ok: false,
+                    message: `ç½‘ç»œé”™è¯¯(${result.responseCode})`
+                };
+            }
+        }
+        catch (error) {
+            hilog.error(DOMAIN, TAG, `Login exception: ${error.message}`);
+            if (error.message === ERROR_MAX_REDIRECTS) {
+                return {
+                    ok: false,
+                    message: 'æœåŠ¡å™¨é”™è¯¯ï¼Œè¯·ç¨åé‡è¯•'
+                };
+            }
+            return {
+                ok: false,
+                message: 'ç™»å½•å¤±è´¥ï¼Œè¯·ç¨åé‡è¯•'
+            };
+        }
+        finally {
+            // æ— è®ºæˆåŠŸæˆ–å¤±è´¥ï¼Œéƒ½å¿…é¡»é”€æ¯è¯·æ±‚å¯¹è±¡
+            httpRequest.destroy();
+        }
+    }
+    /**
+     * è·å–ç”¨æˆ·çš„ç”¨æˆ·åå’Œå¤´åƒ
+     * @param {string} cookies ç”¨æˆ·å¯¹åº”çš„cookie
+     * @param {boolean} useCache æ˜¯å¦ä½¿ç”¨ç¼“å­˜ï¼Œé»˜è®¤ä¸ºtrue
+     * @returns {Promise<UserInfo>} msg : è¯·æ±‚æ˜¯å¦æˆåŠŸ, uname: ç”¨æˆ·å, pic: å¤´åƒurlåœ°å€, uid: ç”¨æˆ·uid, fid: å­¦æ ¡id
+     */
+    static async getUserInfo(cookies, useCache = true) {
+        // Generate a hash-based cache key for efficiency and security
+        const cacheKey = generateCacheKey(cookies);
+        // Check cache first if caching is enabled
+        if (useCache) {
+            const cachedEntry = userInfoCache.get(cacheKey);
+            if (cachedEntry && (Date.now() - cachedEntry.timestamp < USER_INFO_CACHE_TTL_MS)) {
+                hilog.debug(DOMAIN, TAG, 'Returning cached user info');
+                return cachedEntry.data;
+            }
+        }
+        const httpRequest = http.createHttp();
+        const url = ChaoXingApi.URL_GET_USER_INFO;
+        try {
+            const result = await httpRequest.request(url, {
+                method: http.RequestMethod.GET,
+                header: {
+                    "Cookie": cookies
+                }
+            });
+            if (result.responseCode >= 300 || result.responseCode < 200) {
+                hilog.error(DOMAIN, TAG, `Get user info failed: Server error (${result.responseCode})`);
+                return {
+                    'msg': 'service error',
+                    'uname': '',
+                    'pic': '',
+                    'uid': 0,
+                    'fid': '',
+                    'puid': '',
+                    'clientId': ''
+                };
+            }
+            else {
+                const JsonResult = JSON.parse(result.result);
+                const Json = JsonResult?.['msg'];
+                const uname = Json?.['name'] || '';
+                const pic = Json?.['pic'] || '';
+                const uid = Json?.['uid'] || 0;
+                const fid = Json?.['fid'] || '';
+                // æ¥å£å®é™…è¿”å›æ•°å€¼å‹ puidï¼Œrequest ä¸Šä¼  data[].value è¦æ±‚å­—ç¬¦ä¸²ï¼Œå¿…é¡»æ˜¾å¼è½¬æ¢
+                const puid = String(Json?.['puid'] || '');
+                const clientId = Json?.['clientId'] || '';
+                const userInfo = {
+                    'msg': (uname && pic) ? 'successful' : 'fetch error',
+                    'uname': uname,
+                    'pic': pic,
+                    'uid': uid,
+                    'fid': fid,
+                    'puid': puid,
+                    'clientId': clientId
+                };
+                // Cache the successful result using hashed key
+                if (userInfo.msg === 'successful') {
+                    userInfoCache.set(cacheKey, {
+                        data: userInfo,
+                        timestamp: Date.now()
+                    });
+                    hilog.debug(DOMAIN, TAG, 'User info cached');
+                }
+                return userInfo;
+            }
+        }
+        catch (error) {
+            hilog.error(DOMAIN, TAG, `Get user info failed: ${error.message}`);
+            return {
+                'msg': 'service error',
+                'uname': '',
+                'pic': '',
+                uid: 0,
+                fid: '',
+                puid: '',
+                clientId: ''
+            };
+        }
+        finally {
+            httpRequest.destroy();
+        }
+    }
+    /**
+     * é€šè¿‡urlæ·»åŠ å…¶ä»–ç”¨æˆ·
+     * @param stringURL
+     */
+    static async LoginByURL(stringURL) {
+        // è¾“å…¥éªŒè¯
+        if (!stringURL || stringURL.trim().length === 0) {
+            hilog.error(DOMAIN, TAG, 'LoginByURL: Empty URL provided');
+            return 'è¯·æä¾›æœ‰æ•ˆçš„URL';
+        }
+        try {
+            let urlParse = urlTools.parseUrlParams(stringURL);
+            let phone = urlParse['phone'];
+            let pwd = urlParse['pwd'];
+            // éªŒè¯å¿…éœ€å‚æ•°
+            if (!phone || !pwd) {
+                hilog.error(DOMAIN, TAG, 'LoginByURL: Missing phone or password in URL');
+                return 'URLæ ¼å¼é”™è¯¯ï¼šç¼ºå°‘å¿…éœ€å‚æ•°';
+            }
+            hilog.debug(DOMAIN, TAG, `Parsing login URL for phone: ${phone?.substring(0, 3)}***`);
+            let AESPhone = ChaoxingUtils.encryptByAES(phone);
+            let body = ChaoxingUtils.getLoginBody(AESPhone, pwd);
+            const loginResult = await loginFunction.LoginChaoXing(body);
+            if (!loginResult.ok || !loginResult.cookies) {
+                hilog.error(DOMAIN, TAG, 'LoginByURL: Failed to get cookie');
+                return loginResult.message;
+            }
+            const cookie = loginResult.cookies;
+            let userInfo = await loginFunction.getUserInfo(cookie);
+            if (userInfo.msg !== 'successful') {
+                hilog.error(DOMAIN, TAG, 'LoginByURL: Failed to get user info');
+                return 'è·å–ç”¨æˆ·ä¿¡æ¯å¤±è´¥';
+            }
+            const dbManager = DatabaseManager.getInstance();
+            const insertResult = await dbManager.insertUser({
+                phone: phone,
+                pwd: pwd,
+                uid: userInfo.uid,
+                cookies: cookie
+            });
+            if (insertResult === 1) {
+                hilog.info(DOMAIN, TAG, 'User added successfully via URL');
+                return 'æ·»åŠ æˆåŠŸ';
+            }
+            else {
+                hilog.error(DOMAIN, TAG, 'Failed to add user: Invalid credentials or already logged in');
+                return 'é“¾æ¥çš„æ‰‹æœºå·æˆ–å¯†ç æœ‰è¯¯æˆ–å·²ç»ç™»å½•';
+            }
+        }
+        catch (error) {
+            hilog.error(DOMAIN, TAG, `Login by URL failed: ${error.message}`);
+            return 'è¯·ä½¿ç”¨æ­£ç¡®çš„url';
+        }
+    }
+    /**
+     * è·å–å›¾ç‰‡æ•°æ®
+     * @param {string} url å¤´åƒurl
+     * @returns {Promise<image.PixelMap>} å¤´åƒæ•°æ®
+     * */
+    static async GetPic(url) {
+        const httpRequest = http.createHttp();
+        try {
+            const result = await httpRequest.request(url, {
+                method: http.RequestMethod.GET,
+                header: { 'User-Agent': ChaoXingApi.UA },
+                readTimeout: HTTP_TIMEOUT_MS,
+                connectTimeout: HTTP_TIMEOUT_MS
+            });
+            if (result.responseCode === HTTP_SUCCESS_CODE) {
+                const RawData = result.result;
+                // åˆ›å»ºå›¾åƒæº
+                let imageSource = image.createImageSource(RawData);
+                // åˆ›å»ºPixelMap
+                let pixelMap = await imageSource.createPixelMap();
+                return pixelMap;
+            }
+            else {
+                hilog.error(DOMAIN, TAG, `Failed to fetch image: ${result.responseCode}`);
+                return null;
+            }
+        }
+        catch (error) {
+            hilog.error(DOMAIN, TAG, `Error fetching image: ${error.message}`);
+            return null;
+        }
+        finally {
+            httpRequest.destroy();
+        }
+    }
+}
+//# sourceMappingURL=Login.js.mapÂ™Ùd hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.multimedia.image.d.tsÙ\ hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.net.http.d.tsÙQE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\utils.tsÙ] hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.util.json.d.tsÙUE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\PublicAPI.tsÙUE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\DataBase.etsÙY hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.hilog.d.tsÙTE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\urlTools.tsÙzE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\oh_modules\.ohpm\@ohos+crypto-js@2.0.5\oh_modules\@ohos\crypto-js\index.tsÙRE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\Login.etsÔrB›ªmoduleName±isLocalDependency¯isNodeEntryFile§pkgPath±belongProjectPath§pkgNameªpkgVersion±dependencyPkgInfo¯hostModulesInfo°belongModulePath¬shouldEmitJs¥entryÃÂÙ5E:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entryÙ/E:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT¥entry¥1.0.0Ô  ’ÔrC’²hostDependencyName®hostModuleName®../utils/Login¥entryC§./Login¥entryÙ5E:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entryÃÃÚ(Íimport { image } from '@kit.ImageKit';
+import http from '@ohos.net.http';
+import { ChaoxingUtils } from './utils';
+import { JSON, url } from '@kit.ArkTS';
+import { ChaoXingApi } from './PublicAPI';
+import { DatabaseManager } from './DataBase';
+import { common, StartupTask } from '@kit.AbilityKit';
+import { BusinessError, request } from '@kit.BasicServicesKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+import urlTools from './urlTools'
+import CryptoJS from '@ohos/crypto-js';
+
+const TAG = 'LoginService';
+const DOMAIN = 0x0001;
+
+// å¸¸é‡å®šä¹‰
+const HTTP_TIMEOUT_MS = 60000; // 60ç§’è¶…æ—¶
+const ERROR_MAX_REDIRECTS = 'Number of redirects hit maximum amount';
+const HTTP_SUCCESS_CODE = 200;
+const USER_INFO_CACHE_TTL_MS = 300000; // 5 minutes cache TTL
+
+export interface UserInfo {
+  msg: string,
+  uname: string,
+  pic: string,
+  uid: number,
+  fid: string,
+  puid:string,
+  clientId: string
+}
+
+export interface LoginResult {
+  ok: boolean
+  message: string
+  cookies?: string
+}
+
+// Cache entry interface for user info
+interface UserInfoCacheEntry {
+  data: UserInfo;
+  timestamp: number;
+}
+
+// Simple in-memory cache for user info (uses hashed key for efficiency and security)
+const userInfoCache: Map<string, UserInfoCacheEntry> = new Map();
+
+/**
+ * Generate a short hash key from cookies string for cache lookup
+ * This is more efficient and secure than using the full cookies string
+ */
+function generateCacheKey(cookies: string): string {
+  return CryptoJS.MD5(cookies).toString().substring(0, 16);
+}
+
+export class loginFunction {
+  /**
+   * Clear the user info cache
+   */
+  static clearUserInfoCache(): void {
+    userInfoCache.clear();
+    hilog.debug(DOMAIN, TAG, 'User info cache cleared');
+  }
+
+  /**
+   * ç™»å½•å­¦ä¹ é€šï¼Œè·å–set-cookie
+   * @param {string} LoginString éœ€è¦åŠ å¯†çš„æ¶ˆæ¯
+   * @returns {Promise<string>} æ±‚åˆ°çš„cookie,å¼‚å¸¸ä¸ºç©º
+   */
+  static async LoginChaoXing(LoginString: string): Promise<LoginResult> {
+    hilog.debug(DOMAIN, TAG, 'Attempting login');
+    const httpRequest = http.createHttp();
+    const url = ChaoXingApi.URL_LOGIN;
+    const PostBody = LoginString;
+    try {
+      const result = await httpRequest.request(url, {
+        method: http.RequestMethod.POST,
+        extraData: PostBody,
+        header: {
+          'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+          'X-Requested-With': 'XMLHttpRequest'
+        },
+        connectTimeout: HTTP_TIMEOUT_MS,
+        readTimeout: HTTP_TIMEOUT_MS,
+      });
+      // å¤„ç†å“åº”
+      if (result.responseCode === HTTP_SUCCESS_CODE) {
+        const ResultBody = JSON.parse(result.result.toString()) as object;
+        hilog.debug(DOMAIN, TAG, `Login response status: ${ResultBody?.['status']}`);
+        if (ResultBody?.['status'] === true) {
+          const set_cookies: string[] = result.header['set-cookie']
+          hilog.info(DOMAIN, TAG, 'Login successful');
+          return {
+            ok: true,
+            message: 'ç™»å½•æˆåŠŸ',
+            cookies: ChaoxingUtils.processSetCookieHeaders(set_cookies)
+          };
+        } else {
+          hilog.error(DOMAIN, TAG, 'Login failed: Invalid username or password');
+          return {
+            ok: false,
+            message: 'è´¦å·æˆ–å¯†ç é”™è¯¯'
+          };
+        }
+      } else {
+        hilog.error(DOMAIN, TAG, `Login failed: Network error (${result.responseCode})`);
+        return {
+          ok: false,
+          message: `ç½‘ç»œé”™è¯¯(${result.responseCode})`
+        };
+      }
+    } catch (error) {
+      hilog.error(DOMAIN, TAG, `Login exception: ${error.message}`);
+      if (error.message === ERROR_MAX_REDIRECTS) {
+        return {
+          ok: false,
+          message: 'æœåŠ¡å™¨é”™è¯¯ï¼Œè¯·ç¨åé‡è¯•'
+        };
+      }
+      return {
+        ok: false,
+        message: 'ç™»å½•å¤±è´¥ï¼Œè¯·ç¨åé‡è¯•'
+      };
+    } finally {
+      // æ— è®ºæˆåŠŸæˆ–å¤±è´¥ï¼Œéƒ½å¿…é¡»é”€æ¯è¯·æ±‚å¯¹è±¡
+      httpRequest.destroy();
+    }
+  }
+
+  /**
+   * è·å–ç”¨æˆ·çš„ç”¨æˆ·åå’Œå¤´åƒ
+   * @param {string} cookies ç”¨æˆ·å¯¹åº”çš„cookie
+   * @param {boolean} useCache æ˜¯å¦ä½¿ç”¨ç¼“å­˜ï¼Œé»˜è®¤ä¸ºtrue
+   * @returns {Promise<UserInfo>} msg : è¯·æ±‚æ˜¯å¦æˆåŠŸ, uname: ç”¨æˆ·å, pic: å¤´åƒurlåœ°å€, uid: ç”¨æˆ·uid, fid: å­¦æ ¡id
+   */
+  static async getUserInfo(cookies: string, useCache: boolean = true): Promise<UserInfo> {
+    // Generate a hash-based cache key for efficiency and security
+    const cacheKey = generateCacheKey(cookies);
+
+    // Check cache first if caching is enabled
+    if (useCache) {
+      const cachedEntry = userInfoCache.get(cacheKey);
+      if (cachedEntry && (Date.now() - cachedEntry.timestamp < USER_INFO_CACHE_TTL_MS)) {
+        hilog.debug(DOMAIN, TAG, 'Returning cached user info');
+        return cachedEntry.data;
+      }
+    }
+
+    const httpRequest = http.createHttp();
+    const url = ChaoXingApi.URL_GET_USER_INFO
+    try {
+      const result = await httpRequest.request(url, {
+        method: http.RequestMethod.GET,
+        header: {
+          "Cookie": cookies
+        }
+      })
+      if (result.responseCode >= 300 || result.responseCode < 200) {
+        hilog.error(DOMAIN, TAG, `Get user info failed: Server error (${result.responseCode})`);
+        return {
+          'msg': 'service error',
+          'uname': '',
+          'pic': '',
+          'uid': 0,
+          'fid': '',
+          'puid':'',
+          'clientId': ''
+        }
+      } else {
+        const JsonResult = JSON.parse(result.result as string) as object;
+        const Json = (JsonResult as object)?.['msg'] as object
+        const uname: string = (Json as object)?.['name'] || ''
+        const pic: string = (Json as object)?.['pic'] || ''
+        const uid: number = (Json as object)?.['uid'] || 0
+        const fid: string = (Json as object)?.['fid'] || ''
+        // æ¥å£å®é™…è¿”å›æ•°å€¼å‹ puidï¼Œrequest ä¸Šä¼  data[].value è¦æ±‚å­—ç¬¦ä¸²ï¼Œå¿…é¡»æ˜¾å¼è½¬æ¢
+        const puid: string = String((Json as object)?.['puid'] || '')
+        const clientId: string = (Json as object)?.['clientId'] || ''
+        const userInfo: UserInfo = {
+          'msg': (uname && pic) ? 'successful' : 'fetch error',
+          'uname': uname,
+          'pic': pic,
+          'uid': uid,
+          'fid': fid,
+          'puid':puid,
+          'clientId': clientId
+        }
+
+        // Cache the successful result using hashed key
+        if (userInfo.msg === 'successful') {
+          userInfoCache.set(cacheKey, {
+            data: userInfo,
+            timestamp: Date.now()
+          });
+          hilog.debug(DOMAIN, TAG, 'User info cached');
+        }
+
+        return userInfo;
+      }
+    } catch (error) {
+      hilog.error(DOMAIN, TAG, `Get user info failed: ${error.message}`);
+      return {
+        'msg': 'service error',
+        'uname': '',
+        'pic': '',
+        uid: 0,
+        fid: '',
+        puid:'',
+        clientId: ''
+      }
+    } finally {
+      httpRequest.destroy()
+    }
+  }
+
+  /**
+   * é€šè¿‡urlæ·»åŠ å…¶ä»–ç”¨æˆ·
+   * @param stringURL
+   */
+  static async LoginByURL(stringURL: string): Promise<string> {
+    // è¾“å…¥éªŒè¯
+    if (!stringURL || stringURL.trim().length === 0) {
+      hilog.error(DOMAIN, TAG, 'LoginByURL: Empty URL provided');
+      return 'è¯·æä¾›æœ‰æ•ˆçš„URL'
+    }
+    
+    try {
+      let urlParse = urlTools.parseUrlParams(stringURL)
+      let phone = urlParse['phone']
+      let pwd = urlParse['pwd']
+      
+      // éªŒè¯å¿…éœ€å‚æ•°
+      if (!phone || !pwd) {
+        hilog.error(DOMAIN, TAG, 'LoginByURL: Missing phone or password in URL');
+        return 'URLæ ¼å¼é”™è¯¯ï¼šç¼ºå°‘å¿…éœ€å‚æ•°'
+      }
+      
+      hilog.debug(DOMAIN, TAG, `Parsing login URL for phone: ${phone?.substring(0, 3)}***`);
+      let AESPhone = ChaoxingUtils.encryptByAES(phone)
+      let body = ChaoxingUtils.getLoginBody(AESPhone, pwd);
+      const loginResult = await loginFunction.LoginChaoXing(body)
+      
+      if (!loginResult.ok || !loginResult.cookies) {
+        hilog.error(DOMAIN, TAG, 'LoginByURL: Failed to get cookie');
+        return loginResult.message
+      }
+      
+      const cookie = loginResult.cookies
+      let userInfo = await loginFunction.getUserInfo(cookie)
+      
+      if (userInfo.msg !== 'successful') {
+        hilog.error(DOMAIN, TAG, 'LoginByURL: Failed to get user info');
+        return 'è·å–ç”¨æˆ·ä¿¡æ¯å¤±è´¥'
+      }
+      
+      const dbManager = DatabaseManager.getInstance()
+      const insertResult = await dbManager.insertUser({
+        phone: phone,
+        pwd: pwd,
+        uid: userInfo.uid,
+        cookies: cookie
+      })
+      
+      if (insertResult === 1) {
+        hilog.info(DOMAIN, TAG, 'User added successfully via URL');
+        return 'æ·»åŠ æˆåŠŸ'
+      } else {
+        hilog.error(DOMAIN, TAG, 'Failed to add user: Invalid credentials or already logged in');
+        return 'é“¾æ¥çš„æ‰‹æœºå·æˆ–å¯†ç æœ‰è¯¯æˆ–å·²ç»ç™»å½•'
+      }
+    } catch (error) {
+      hilog.error(DOMAIN, TAG, `Login by URL failed: ${error.message}`);
+      return 'è¯·ä½¿ç”¨æ­£ç¡®çš„url'
+    }
+  }
+
+  /**
+   * è·å–å›¾ç‰‡æ•°æ®
+   * @param {string} url å¤´åƒurl
+   * @returns {Promise<image.PixelMap>} å¤´åƒæ•°æ®
+   * */
+  static async GetPic(url: string): Promise<image.PixelMap | null> {
+    const httpRequest = http.createHttp();
+    try {
+      const result = await httpRequest.request(url, {
+        method: http.RequestMethod.GET,
+        header: { 'User-Agent':ChaoXingApi.UA },
+        readTimeout: HTTP_TIMEOUT_MS,
+        connectTimeout: HTTP_TIMEOUT_MS
+      })
+
+      if (result.responseCode === HTTP_SUCCESS_CODE) {
+        const RawData = result.result as ArrayBuffer
+
+        // åˆ›å»ºå›¾åƒæº
+        let imageSource = image.createImageSource(RawData);
+        // åˆ›å»ºPixelMap
+        let pixelMap: image.PixelMap = await imageSource.createPixelMap();
+        return pixelMap
+      } else {
+        hilog.error(DOMAIN, TAG, `Failed to fetch image: ${result.responseCode}`);
+        return null
+      }
+    } catch (error) {
+      hilog.error(DOMAIN, TAG, `Error fetching image: ${error.message}`);
+      return null
+    }
+    finally {
+      httpRequest.destroy()
+    }
+  }
+}
+ÀÔrD™¶@ohos.multimedia.image®@ohos.net.http¯@ohos.util.json«@ohos.hilog§./utilsª./urlToolsª./DataBase«./PublicAPI¯@ohos/crypto-jsÔrE—ªassertions¨external¢id¤meta±moduleSideEffectsªresolvedByµsyntheticNamedExportsAÃÙd hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.multimedia.image.d.tsÔrF‘¯hostModulesInfo‘C¶@ohos.multimedia.image¥entryÃªoh-resolveÂEAÃÙ\ hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.net.http.d.tsAÃªoh-resolveÂEAÃÙ] hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.util.json.d.tsAÃªoh-resolveÂEAÃÙY hvigor_ignore_D:_OtherApp_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.hilog.d.tsAÃªoh-resolveÂEAÂÙQE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\utils.tsAÃªoh-resolveÂEAÂÙTE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\urlTools.tsAÃªoh-resolveÂEAÂÙUE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\DataBase.etsAÃªoh-resolveÂEAÂÙUE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\entry\src\main\ets\utils\PublicAPI.tsAÃªoh-resolveÂEAÂÙzE:\deveco\chaoxingsignfaker-for-harmony-OS-NEXT\oh_modules\.ohpm\@ohos+crypto-js@2.0.5\oh_modules\@ohos\crypto-js\index.tsAÃªoh-resolveÂ“ÔrG–§version¤fileªsourceRoot§sources¥names¨mappings¨Login.js ‘©Login.etsÜ–”    ”  	”  ”  ”*  %”+  &–”   ” ” ” ”! !”" "˜”   ” ”	 	” ” ” ”' '”( (–”   ” 	” ” ”" &”# '˜”   ” ”	 	” ” ” ”) )”* *˜”   ” ”	 	” ” ”   ”, ,”- -–”   ” 	” ” ” 3”  4–”  	 ” 	” 	” 	”! 	!”" 	!–”  
+ ” 
+” 
+” 
+”& 
+&”' 
+'–”   ” ”	 	” ” ” –”   ” ” ” ” ” ’”   ” ˜”   ” ” ” ” ” ” ”' '–”   ” ” ” ”ÌD ÌD”ÌE ÌE–”   ” ” ” ” ” ˜”   ” ” ” ”% %”& &”' '”= =’”  + ”ÌU +ÌU˜”  , ” ,” ,” ,7” ,;” ,>” ,Ì@”  ,ÌA‘”  . ‘” 1•”  2 ”	 2	” 2” 2”! 2)Ü ” 3” 3	” 3” 3” 3” 3” 3”  3”! 3”) 3'”+ 3)”, 3*”5 33”6 34”7 35”9 37”; 39”< 3:”= 3;’”  4 ” 4””  6 ” 6” 6” 6‘” 7‘” 9”” :”
+ :” :	” :–” ;” ;” ;” ;” ;” ;œ” <” <	” <
+” <” <” <” <” <”! <”: <6”; <7”< <8’” =” =‘” ?‘” ÌC˜” ÌD”
+ ÌD” ÌD	” ÌD” ÌD” ÌD” ÌD”* ÌD0œ” ÌE” ÌE	” ÌE
+” ÌE” ÌE” ÌE” ÌE” ÌE”! ÌE”3 ÌE/”4 ÌE0”5 ÌE1™” ÌF” ÌF
+” ÌF” ÌF”  ÌF”! ÌF”+ ÌF'”- ÌF)”. ÌF*˜” ÌG” ÌG
+” ÌG” ÌG” ÌG”  ÌG”) ÌG%”* ÌG&–” ÌH” ÌH
+” ÌH” ÌH”$ ÌH ”% ÌH!’” ÌI” ÌI›” ÌJ” ÌJ” ÌJ” ÌJ”! ÌJ”, ÌJ&”- ÌJ'”4 ÌJ.”5 ÌJ/”8 ÌJ2”: ÌJ4˜” ÌK” ÌK” ÌK” ÌK” ÌK”* ÌK"”+ ÌK#”/ ÌK'”” ÌL” ÌL” ÌL”# ÌL“” ÌM” ÌM” ÌM”” ÌN
+”" ÌN”$ ÌN”ÌV ÌNÌL”” ÌO
+”& ÌO”( ÌO”8 ÌO.‘” ÌP	”” ÌQ” ÌQ”  ÌQ”/ ÌQ'”” ÌR” ÌR” ÌR”, ÌR$“” ÌS” ÌS” ÌS	’” ÌT” ÌT˜” ÌU” ÌU
+” ÌU” ÌU”# ÌU”( ÌU"”9 ÌU3”; ÌU5Ü ” ÌV” ÌV”  ÌV”# ÌV”' ÌV”( ÌV ”- ÌV%”. ÌV&”4 ÌV,”5 ÌV-”; ÌV3”< ÌV4”ÌD ÌV<”ÌF ÌV>”ÌG ÌVÌI”ÌH ÌVÌJÜ ” ÌW” ÌW” ÌW” ÌW” ÌW”" ÌW”$ ÌW”' ÌW”) ÌW!”ÌC ÌW;”ÌM ÌWÌE”ÌO ÌWÌG”ÌP ÌWÌH”ÌX ÌWÌP”ÌY ÌWÌQ”Ì[ ÌWÌS”Ì\ ÌWÌT”Ì] ÌWÌUš” ÌX” ÌX” ÌX”  ÌX”! ÌX”) ÌX!”* ÌX"”/ ÌX'”3 ÌX+”5 ÌX-›” ÌY
+” ÌY”% ÌY”( ÌY(”. ÌY.”/ ÌY/”5 ÌY5”6 ÌY6”ÌB ÌYÌB”ÌC ÌYÌC”ÌD ÌYÌCœ” ÌZ
+” ÌZ” ÌZ” ÌZ” ÌZ”% ÌZ”' ÌZ”* ÌZ ”, ÌZ"”> ÌZ4”? ÌZ5”Ì@ ÌZ6’” Ì[
+” Ì[”” Ì\” Ì\” Ì\”  Ì\”” Ì]” Ì]”! Ì]”' Ì]™” Ì^” Ì^”! Ì^”. Ì^"”/ Ì^#”ÌF Ì^:”ÌG Ì^;”ÌR Ì^ÌF”ÌS Ì^ÌG’” Ì_” Ì_‘” Ì`	‘” Ì`œ” Ìa
+” Ìa” Ìa” Ìa”  Ìa”& Ìa”( Ìa”+ Ìa!”- Ìa#”ÌY ÌaÌO”ÌZ ÌaÌP”Ì[ ÌaÌQ’” Ìb
+” Ìb”” Ìc” Ìc” Ìc”! Ìc”” Ìd” Ìd”! Ìd”* Ìd’” Ìe” Ìe‘” Ìf	‘” Ìg‘” ÌgÜ ” Ìh” Ìh” Ìh” Ìh” Ìh”" Ìh”$ Ìh”' Ìh”) Ìh!”ÌI ÌhÌA”ÌO ÌhÌG”ÌP ÌhÌH”Ì\ ÌhÌT”Ì_ ÌhÌW”Ì` ÌhÌX”Ìa ÌhÌY’” Ìi” Ìi”” Ìj
+” Ìj” Ìj” Ìj˜” Ìk
+” Ìk” Ìk”% Ìk”+ Ìk!”, Ìk"”8 Ìk.”; Ìk1’” Ìl	” Ìl
+‘” Ìm‘”	 Ìn”” Ìn” Ìn” Ìn” ÌnÜ ” Ìo” Ìo” Ìo” Ìo” Ìo” Ìo”  Ìo”# Ìo”% Ìo”9 Ìo3”> Ìo8”? Ìo9”ÌF ÌoÌ@”ÌH ÌoÌB”ÌI ÌoÌC”ÌJ ÌoÌD˜” Ìp” Ìp
+” Ìp” Ìp” Ìp”" Ìp”5 Ìp/”7 Ìp1’” Ìq” Ìq”” Ìr
+” Ìr” Ìr” Ìr”” Ìs
+” Ìs” Ìs”* Ìs ’” Ìt	” Ìt
+‘” Ìu’” Ìv” Ìv”” Ìw” Ìw
+” Ìw” Ìw”” Ìx” Ìx” Ìx”% Ìx’” Ìy” Ìy‘”	 Ìz‘” Ìz’” Ì{”  Ì{–” Ì|” Ì|” Ì|” Ì|”! Ì|”" Ì|‘”	 Ì}’” Ì~” Ì~‘” Ì€‘” Ì…›” Ì†”
+ Ì†” Ì†	” Ì†” Ì†” Ì†” Ì†”$ Ì†*”& Ì†,”1 Ì†Ì@”5 Ì†ÌD’” Ì‡”ÌF Ì‡ÌB™” Ìˆ” Ìˆ
+” Ìˆ” Ìˆ”) Ìˆ%”* Ìˆ&”1 Ìˆ-”2 Ìˆ.”3 Ìˆ/’” ÌŠ”2 ÌŠ.”” Ì‹” Ì‹” Ì‹” Ì‹›” ÌŒ” ÌŒ” ÌŒ”  ÌŒ”- ÌŒ'”. ÌŒ(”1 ÌŒ+”2 ÌŒ,”: ÌŒ4”; ÌŒ5”< ÌŒ6Ü ” Ì” Ì
+” Ì” Ì”  Ì”$ Ì”% Ì”( Ì"”* Ì$”- Ì'”8 Ì2”9 Ì3”ÌB Ì<”ÌE Ì?”Ì[ ÌÌU”Ì\ ÌÌV”Ì^ ÌÌXœ” Ì” Ì” Ì” Ì” Ì”" Ì”$ Ì”' Ì”) Ì!”ÌE Ì=”ÌF Ì>”ÌG Ì?–” Ì” Ì”" Ì”# Ì”' Ì”( Ì ‘” Ì‘”	 Ì‘™” Ì“” Ì“
+” Ì“” Ì“”  Ì“”! Ì“”+ Ì“'”- Ì“)”. Ì“*˜” Ì”” Ì”
+” Ì”” Ì”” Ì””  Ì””1 Ì”-”2 Ì”-’” Ì•” Ì•›” Ì–” Ì–” Ì–” Ì–”! Ì–”, Ì–&”- Ì–'”4 Ì–.”5 Ì–/”8 Ì–2”: Ì–4˜” Ì—” Ì—” Ì—” Ì—” Ì—”* Ì—"”+ Ì—#”. Ì—&“” Ì˜” Ì˜” Ì˜”” Ì™
+” Ì™” Ì™”% Ì™‘” Ìš	“” Ì›” Ì›” Ì›” Ìœ” Ìœ
+” Ìœ” Ìœ”# Ìœ”' Ìœ!”* Ìœ$”. Ìœ(”4 Ìœ.”5 Ìœ/”ÌA Ìœ;”ÌD Ìœ>”ÌG ÌœÌA”ÌI ÌœÌCÜ ” Ì” Ì” Ì” Ì” Ì”" Ì”$ Ì”' Ì”) Ì!”ÌP ÌÌH”ÌV ÌÌN”ÌW ÌÌO”Ìc ÌÌ[”Ìf ÌÌ^”Ìg ÌÌ_”Ìh ÌÌ`’” Ì” Ì”” ÌŸ
+” ÌŸ” ÌŸ”* ÌŸ ”” Ì 
+” Ì ” Ì ” Ì ”” Ì¡
+” Ì¡” Ì¡” Ì¡”” Ì¢
+” Ì¢” Ì¢” Ì¢”” Ì£
+” Ì£” Ì£” Ì£”” Ì¤
+” Ì¤” Ì¤” Ì¤”” Ì¥
+” Ì¥”  Ì¥”" Ì¥’” Ì¦	” Ì¦	‘” Ì§‘” Ì§” Ì¨” Ì¨”  Ì¨”# Ì¨”' Ì¨”( Ì¨ ”- Ì¨%”. Ì¨&”4 Ì¨,”5 Ì¨-”; Ì¨=”< Ì¨ÌH”= Ì¨ÌIš” Ì©” Ì©” Ì©” Ì©”' Ì©+”) Ì©-”* Ì©.”/ Ì©3”0 Ì©>”1 Ì©>œ” Ìª” Ìª” Ìª” Ìª”" Ìª.”$ Ìª0”% Ìª1”+ Ìª7”, Ìª8”0 Ìª<”2 Ìª>”3 Ìª>œ” Ì«” Ì«” Ì«” Ì«”  Ì«,”" Ì«.”# Ì«/”( Ì«4”) Ì«5”- Ì«9”/ Ì«;”0 Ì«;œ” Ì¬” Ì¬” Ì¬” Ì¬”  Ì¬,”" Ì¬.”# Ì¬/”( Ì¬4”) Ì¬5”- Ì¬9”. Ì¬:”/ Ì¬:œ” Ì­” Ì­” Ì­” Ì­”  Ì­,”" Ì­.”# Ì­/”( Ì­4”) Ì­5”- Ì­9”/ Ì­;”0 Ì­;’” Ì®”ÌF Ì®>Ÿ” Ì¯” Ì¯” Ì¯” Ì¯”# Ì¯#”$ Ì¯%”( Ì¯4”* Ì¯6”+ Ì¯7”1 Ì¯=”2 Ì¯>”6 Ì¯ÌB”8 Ì¯ÌD”9 Ì¯ÌE”: Ì¯ÌEœ” Ì°” Ì°” Ì°”! Ì°"”% Ì°1”' Ì°3”( Ì°4”2 Ì°>”3 Ì°?”7 Ì°ÌC”9 Ì°ÌE”: Ì°ÌE”” Ì±” Ì±” Ì±”! Ì±#Ü ” Ì²
+” Ì²” Ì²” Ì²”! Ì²”% Ì²”( Ì²”) Ì²”* Ì² ”+ Ì²!”, Ì²"”8 Ì².”9 Ì²/”: Ì²0”; Ì²1”ÌH Ì²>”” Ì³
+” Ì³” Ì³”" Ì³”” Ì´
+” Ì´” Ì´” Ì´”” Ìµ
+” Ìµ” Ìµ” Ìµ”” Ì¶
+” Ì¶” Ì¶” Ì¶”” Ì·
+” Ì·” Ì·”  Ì·”” Ì¸
+” Ì¸”  Ì¸”( Ì¸’” Ì¹	” Ì¹	’” Ì»”? Ì»7˜” Ì¼” Ì¼” Ì¼” Ì¼”  Ì¼”% Ì¼”1 Ì¼)”3 Ì¼+—” Ì½
+”! Ì½”" Ì½”% Ì½”& Ì½”. Ì½$”0 Ì½&”” Ì¾” Ì¾” Ì¾”& Ì¾—” Ì¿”! Ì¿”# Ì¿”' Ì¿”( Ì¿”+ Ì¿”- Ì¿!“” ÌÀ” ÌÀ” ÌÀœ” ÌÁ
+” ÌÁ” ÌÁ” ÌÁ”  ÌÁ”& ÌÁ”( ÌÁ”+ ÌÁ!”- ÌÁ#”? ÌÁ5”Ì@ ÌÁ6”ÌA ÌÁ7‘” ÌÂ	”” ÌÄ” ÌÄ” ÌÄ”  ÌÄ‘” ÌÅ‘”	 ÌÆ”” ÌÆ” ÌÆ” ÌÆ” ÌÆÜ ” ÌÇ” ÌÇ” ÌÇ” ÌÇ” ÌÇ” ÌÇ”  ÌÇ”# ÌÇ”% ÌÇ”> ÌÇ8”ÌC ÌÇ=”ÌD ÌÇ>”ÌK ÌÇÌE”ÌM ÌÇÌG”ÌN ÌÇÌH”ÌO ÌÇÌI’” ÌÈ” ÌÈ”” ÌÉ” ÌÉ” ÌÉ”& ÌÉ”” ÌÊ” ÌÊ” ÌÊ” ÌÊ”” ÌË” ÌË” ÌË” ÌË”” ÌÌ” ÌÌ” ÌÌ” ÌÌ”” ÌÍ” ÌÍ” ÌÍ” ÌÍ”” ÌÎ” ÌÎ” ÌÎ” ÌÎ”” ÌÏ” ÌÏ” ÌÏ” ÌÏ’” ÌĞ” ÌĞ‘”	 ÌÑ‘” ÌÑ–” ÌÒ” ÌÒ” ÌÒ” ÌÒ”! ÌÒ”" ÌÒ‘”	 ÌÓ’” ÌÔ” ÌÔ‘” ÌÖ‘” ÌÙ˜” ÌÚ”
+ ÌÚ” ÌÚ	” ÌÚ” ÌÚ” ÌÚ” ÌÚ”% ÌÚ+’” ÌÛ” ÌÛ” ÌÜ” ÌÜ” ÌÜ	” ÌÜ” ÌÜ”# ÌÜ”$ ÌÜ ”( ÌÜ$”* ÌÜ&”+ ÌÜ'”1 ÌÜ-”6 ÌÜ2”7 ÌÜ3”9 ÌÜ5œ” Ìİ” Ìİ” Ìİ” Ìİ” Ìİ” Ìİ”  Ìİ”# Ìİ”% Ìİ”ÌE Ìİ?”ÌF ÌİÌ@”ÌG ÌİÌA”” ÌŞ” ÌŞ” ÌŞ” ÌŞ‘”	 Ìß’” Ìá” Ìá›” Ìâ” Ìâ
+” Ìâ” Ìâ”# Ìâ”$ Ìâ”2 Ìâ,”3 Ìâ-”< Ìâ6”= Ìâ7”> Ìâ7™” Ìã” Ìã
+” Ìã” Ìã”  Ìã”! Ìã”( Ìã"”) Ìã#”* Ìã#™” Ìä” Ìä
+” Ìä” Ìä” Ìä” Ìä”$ Ìä”% Ìä”& Ìä’” Ìæ” Ìæ˜” Ìç” Ìç
+” Ìç” Ìç” Ìç” Ìç” Ìç”  Ìçœ” Ìè” Ìè” Ìè” Ìè” Ìè”" Ìè”$ Ìè”' Ìè”) Ìè!”ÌW ÌèÌO”ÌX ÌèÌP”ÌY ÌèÌQ”” Ìé” Ìé”' Ìé”( Ìé‘” ÌêÜ ” Ìì” Ìì” Ìì” Ìì” Ìì” Ìì”  Ìì”# Ìì”% Ìì”ÌE Ìì?”ÌJ ÌìÌD”ÌL ÌìÌF”ÌU ÌìÌO”ÌV ÌìÌP”ÌW ÌìÌQ”ÌY ÌìÌS”ÌZ ÌìÌT”Ì[ ÌìÌU”Ì` ÌìÌZ”Ìa ÌìÌ[”Ìb ÌìÌ\›” Ìí” Ìí
+” Ìí” Ìí”( Ìí"”) Ìí#”5 Ìí/”6 Ìí0”; Ìí5”< Ìí6”= Ìí6” Ìî” Ìî
+” Ìî” Ìî”$ Ìî”% Ìî”1 Ìî+”2 Ìî,”: Ìî4”< Ìî6”? Ìî9”Ì@ Ìî:”ÌA Ìî;œ” Ìï” Ìï” Ìï”  Ìï”& Ìï ”3 Ìï-”4 Ìï.”ÌA Ìï;”ÌB Ìï<”ÌF ÌïÌ@”ÌG ÌïÌA”ÌH ÌïÌAœ” Ìñ” Ìñ
+” Ìñ” Ìñ” Ìñ” Ìñ”# Ìñ”$ Ìñ”/ Ìñ)”0 Ìñ*”7 Ìñ1”9 Ìñ3œ” Ìò” Ìò” Ìò” Ìò” Ìò”" Ìò”$ Ìò”' Ìò”) Ìò!”ÌK ÌòÌC”ÌL ÌòÌD”ÌM ÌòÌE–” Ìó” Ìó”" Ìó”# Ìó”* Ìó"”+ Ìó"‘” Ìô˜” Ìö” Ìö” Ìö” Ìö”& Ìö ”' Ìö!”. Ìö(”/ Ìö(œ” Ì÷” Ì÷
+” Ì÷” Ì÷”! Ì÷”. Ì÷(”/ Ì÷)”: Ì÷4”; Ì÷5”ÌA Ì÷;”ÌB Ì÷<”ÌC Ì÷<˜” Ìù” Ìù
+” Ìù” Ìù” Ìù”! Ìù”- Ìù'”/ Ìù)œ” Ìú” Ìú” Ìú” Ìú” Ìú”" Ìú”$ Ìú”' Ìú”) Ìú!”ÌN ÌúÌF”ÌO ÌúÌG”ÌP ÌúÌH”” Ìû” Ìû”! Ìû”" Ìû‘” Ìü™” Ìş” Ìş” Ìş” Ìş”- Ìş'”. Ìş(”9 Ìş3”; Ìş5”< Ìş5™” Ìÿ” Ìÿ” Ìÿ”! Ìÿ”' Ìÿ!”0 Ìÿ*”1 Ìÿ+”; Ìÿ5”< Ìÿ6”” Í ” Í ” Í ” Í ”” Í” Í” Í” Í–” Í” Í” Í” Í” Í”! Í”” Í” Í” Í” Í“” Í” Í” Í–” Í” Í
+” Í”! Í”" Í”$ Íœ” Í” Í” Í” Í” Í”! Í”# Í”& Í”( Í ”ÌI ÍÌA”ÌJ ÍÌB”ÌK ÍÌC”” Í” Í” Í” Í‘” Í	‘” Í	œ” Í
+” Í
+” Í
+” Í
+” Í
+”" Í
+”$ Í
+”' Í
+”) Í
+!”Ìg Í
+Ì_”Ìh Í
+Ì`”Ìi Í
+Ìa”” Í” Í”) Í!”* Í!‘” Í‘”	 Í”” Í” Í” Í” ÍÜ ” Í” Í” Í” Í” Í” Í”  Í”# Í”% Í”= Í7”ÌB Í<”ÌC Í=”ÌJ ÍÌD”ÌL ÍÌF”ÌM ÍÌG”ÌN ÍÌH”” Í” Í” Í” Í‘”	 Í’” Í” Í‘” Í‘”	 Í˜” Í”
+ Í” Í	” Í” Í” Í” Í” Í!™” Í” Í
+” Í” Í”  Í”! Í”+ Í'”- Í)”. Í*’” Í” Í›” Í” Í” Í” Í”! Í”, Í&”- Í'”4 Í.”5 Í/”8 Í2”: Í4˜” Í” Í” Í” Í” Í”* Í"”+ Í#”. Í&š” Í” Í” Í” Í”& Í”( Í”3 Í*”4 Í+”6 Í-”8 Í/”” Í” Í” Í”, Í$”” Í” Í”  Í”/ Í'“” Í ” Í ” Í ˜” Í"” Í"
+” Í"” Í"”# Í"”( Í""”9 Í"3”; Í"5˜” Í#” Í#” Í#”  Í#”& Í#”' Í#”- Í#4”. Í#4’” Í%” Í%›” Í&” Í&” Í&”" Í&”' Í&”( Í& ”9 Í&1”: Í&2”ÌA Í&9”ÌB Í&:”ÌC Í&;’” Í'” Í'š” Í(” Í(” Í(” Í('”% Í(-”0 Í(8”1 Í(9”? Í(ÌG”ÌA Í(ÌI”ÌB Í(ÌJ”” Í)” Í)” Í)”  Í)‘” Í*‘” Í*Ü ” Í+” Í+” Í+” Í+” Í+”" Í+”$ Í+”' Í+”) Í+!”ÌC Í+;”ÌI Í+ÌA”ÌJ Í+ÌB”ÌV Í+ÌN”ÌX Í+ÌP”ÌY Í+ÌQ”ÌZ Í+ÌR”” Í,” Í,” Í,” Í,‘” Í-‘”	 Í.”” Í.” Í.” Í.” Í.Ü ” Í/” Í/” Í/” Í/” Í/” Í/”  Í/”# Í/”% Í/”> Í/8”ÌC Í/=”ÌD Í/>”ÌK Í/ÌE”ÌM Í/ÌG”ÌN Í/ÌH”ÌO Í/ÌI”” Í0” Í0” Í0” Í0‘”	 Í1‘” Í2–” Í3” Í3” Í3” Í3”! Í3”" Í3‘”	 Í4’” Í5” Í5‘” Í6ÔrH–§version¤file§sources®sourcesContent¥names¨mappingsÀ‘À‘ÀÜ‘”    ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”  	 ‘”  
+ ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”    ‘”  ! ‘”  " ‘”  # ‘”  $ ‘”  % ‘”  & ‘”  ' ‘”  ( ‘”  ) ‘”  * ‘”  + ‘”  , ‘”  - ‘”  . ‘”  / ‘”  0 ‘”  1 ‘”  2 ‘”  3 ‘”  4 ‘”  5 ‘”  6 ‘”  7 ‘”  8 ‘”  9 ‘”  : ‘”  ; ‘”  < ‘”  = ‘”  > ‘”  ? ‘”  Ì@ ‘”  ÌA ‘”  ÌB ‘”  ÌC ‘”  ÌD ‘”  ÌE ‘”  ÌF ‘”  ÌG ‘”  ÌH ‘”  ÌI ‘”  ÌJ ‘”  ÌK ‘”  ÌL ‘”  ÌM ‘”  ÌN ‘”  ÌO ‘”  ÌP ‘”  ÌQ ‘”  ÌR ‘”  ÌS ‘”  ÌT ‘”  ÌU ‘”  ÌV ‘”  ÌW ‘”  ÌX ‘”  ÌY ‘”  ÌZ ‘”  Ì[ ‘”  Ì\ ‘”  Ì] ‘”  Ì^ ‘”  Ì_ ‘”  Ì` ‘”  Ìa ‘”  Ìb ‘”  Ìc ‘”  Ìd ‘”  Ìe ‘”  Ìf ‘”  Ìg ‘”  Ìh ‘”  Ìi ‘”  Ìj ‘”  Ìk ‘”  Ìl ‘”  Ìm ‘”  Ìn ‘”  Ìo ‘”  Ìp ‘”  Ìq ‘”  Ìr ‘”  Ìs ‘”  Ìt ‘”  Ìu ‘”  Ìv ‘”  Ìw ‘”  Ìx ‘”  Ìy ‘”  Ìz ‘”  Ì{ ‘”  Ì| ‘”  Ì} ‘”  Ì~ ‘”  Ì ‘”  Ì€ ‘”  Ì ‘”  Ì‚ ‘”  Ìƒ ‘”  Ì„ ‘”  Ì… ‘”  Ì† ‘”  Ì‡ ‘”  Ìˆ ‘”  Ì‰ ‘”  ÌŠ ‘”  Ì‹ ‘”  ÌŒ ‘”  Ì ‘”  Ì ‘”  Ì ‘”  Ì ‘”  Ì‘ ‘”  Ì’ ‘”  Ì“ ‘”  Ì” ‘”  Ì• ‘”  Ì– ‘”  Ì— ‘”  Ì˜ ‘”  Ì™ ‘”  Ìš ‘”  Ì› ‘”  Ìœ ‘”  Ì ‘”  Ì ‘”  ÌŸ ‘”  Ì  ‘”  Ì¡ ‘”  Ì¢ ‘”  Ì£ ‘”  Ì¤ ‘”  Ì¥ ‘”  Ì¦ ‘”  Ì§ ‘”  Ì¨ ‘”  Ì© ‘”  Ìª ‘”  Ì« ‘”  Ì¬ ‘”  Ì­ ‘”  Ì® ‘”  Ì¯ ‘”  Ì° ‘”  Ì± ‘”  Ì² ‘”  Ì³ ‘”  Ì´ ‘”  Ìµ ‘”  Ì¶ ‘”  Ì· ‘”  Ì¸ ‘”  Ì¹ ‘”  Ìº ‘”  Ì» ‘”  Ì¼ ‘”  Ì½ ‘”  Ì¾ ‘”  Ì¿ ‘”  ÌÀ ‘”  ÌÁ ‘”  ÌÂ ‘”  ÌÃ ‘”  ÌÄ ‘”  ÌÅ ‘”  ÌÆ ‘”  ÌÇ ‘”  ÌÈ ‘”  ÌÉ ‘”  ÌÊ ‘”  ÌË ‘”  ÌÌ ‘”  ÌÍ ‘”  ÌÎ ‘”  ÌÏ ‘”  ÌĞ ‘”  ÌÑ ‘”  ÌÒ ‘”  ÌÓ ‘”  ÌÔ ‘”  ÌÕ ‘”  ÌÖ ‘”  Ì× ‘”  ÌØ ‘”  ÌÙ ‘”  ÌÚ ‘”  ÌÛ ‘”  ÌÜ ‘”  Ìİ ‘”  ÌŞ ‘”  Ìß ‘”  Ìà ‘”  Ìá ‘”  Ìâ ‘”  Ìã ‘”  Ìä ‘”  Ìå ‘”  Ìæ ‘”  Ìç ‘”  Ìè ‘”  Ìé ‘”  Ìê ‘”  Ìë ‘”  Ìì ‘”  Ìí ‘”  Ìî ‘”  Ìï ‘”  Ìğ ‘”  Ìñ ‘”  Ìò ‘”  Ìó ‘”  Ìô ‘”  Ìõ ‘”  Ìö ‘”  Ì÷ ‘”  Ìø ‘”  Ìù ‘”  Ìú ‘”  Ìû ‘”  Ìü ‘”  Ìı ‘”  Ìş ‘”  Ìÿ ‘”  Í  ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í	 ‘”  Í
+ ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ÔrI’§missing¦pluginÃ¦genAbcÂÔ  ÔrJ”²dynamicImportCache¹exportAllDeclarationCache»exportNamedDeclarationCache«importCache‘ÔrK–¤type¥start£end«declarationªspecifiers¦source¶ExportNamedDeclarationÍîÍ)§ÔrL–¤type¥start£end¢idªsuperClass¤body°ClassDeclarationÍõÍ)§ÔrM”¤type¥start£end¤nameªIdentifierÍûÍ­loginFunctionÀÔrN”¤type¥start£end¤body©ClassBodyÍ	Í)§•ÔrO˜¤type¥start£end¦static¨computed£key¤kind¥value°MethodDefinitionÍDÍÆÃÂMªIdentifierÍKÍ]²clearUserInfoCache¦methodÔrP™¤type¥start£end¢idªexpression©generator¥async¦params¤body²FunctionExpressionÍ]ÍÆÀÂÂÂN®BlockStatementÍ`ÍÆ’ÔrQ”¤type¥start£endªexpression³ExpressionStatementÍkÍÔrR–¤type¥start£end¦callee©arguments¨optional®CallExpressionÍkÍ€ÔrS—¤type¥start£end¦object¨property¨computed¨optional°MemberExpressionÍkÍ~MªIdentifierÍkÍx­userInfoCacheMªIdentifierÍyÍ~¥clearÂÂÂQ³ExpressionStatementÍ‹Í¿R®CallExpressionÍ‹Í¾S°MemberExpressionÍ‹Í–MªIdentifierÍ‹Í¥hilogMªIdentifierÍ‘Í–¥debugÂÂ“MªIdentifierÍ—Í¦DOMAINMªIdentifierÍŸÍ¢£TAGÔrT•¤type¥start£end¥value£raw§LiteralÍ¤Í½·User info cache cleared¹'User info cache cleared'ÂO°MethodDefinitionÍWÍùÃÂMªIdentifierÍdÍq­LoginChaoXing¦methodP²FunctionExpressionÍqÍùÀÂÂÃ‘MªIdentifierÍrÍ}«LoginStringN®BlockStatementÍÍù•Q³ExpressionStatementÍŠÍ·R®CallExpressionÍŠÍ¶S°MemberExpressionÍŠÍ•MªIdentifierÍŠÍ¥hilogMªIdentifierÍÍ•¥debugÂÂ“MªIdentifierÍ–Íœ¦DOMAINMªIdentifierÍÍ¡£TAGT§LiteralÍ£Íµ°Attempting login²'Attempting login'ÂÔrU•¤type¥start£end¬declarations¤kind³VariableDeclarationÍÁÍç‘ÔrV•¤type¥start£end¢id¤init²VariableDeclaratorÍÇÍæMªIdentifierÍÇÍÒ«httpRequestR®CallExpressionÍÕÍæS°MemberExpressionÍÕÍäMªIdentifierÍÕÍÙ¤httpMªIdentifierÍÚÍäªcreateHttpÂÂÂ¥constU³VariableDeclarationÍñÍ‘V²VariableDeclaratorÍ÷ÍMªIdentifierÍ÷Íú£urlS°MemberExpressionÍıÍMªIdentifierÍıÍ«ChaoXingApiMªIdentifierÍ	Í©URL_LOGINÂÂ¥constU³VariableDeclarationÍÍ:‘V²VariableDeclaratorÍ#Í9MªIdentifierÍ#Í+¨PostBodyMªIdentifierÍ.Í9«LoginString¥constÔrW–¤type¥start£end¥block§handler©finalizer¬TryStatementÍDÍòN®BlockStatementÍHÍò’U³VariableDeclarationÍWÍ‘V²VariableDeclaratorÍ]ÍMªIdentifierÍ]Íc¦resultÔrX”¤type¥start£end¨argument¯AwaitExpressionÍfÍR®CallExpressionÍlÍS°MemberExpressionÍlÍMªIdentifierÍlÍw«httpRequestMªIdentifierÍxÍ§requestÂÂ’MªIdentifierÍ€Íƒ£urlÔrY”¤type¥start£endªproperties°ObjectExpressionÍ…Í•ÔrZ™¤type¥start£end¦method©shorthand¨computed£key¥value¤kind¨PropertyÍ˜Í·ÂÂÂMªIdentifierÍ˜Í¦methodS°MemberExpressionÍ Í·S°MemberExpressionÍ Í²MªIdentifierÍ Í¤¤httpMªIdentifierÍ¥Í²­RequestMethodÂÂMªIdentifierÍ³Í·¤POSTÂÂ¤initZ¨PropertyÍÊÍİÂÂÂMªIdentifierÍÊÍÓ©extraDataMªIdentifierÍÕÍİ¨PostBody¤initZ¨PropertyÍğÍŸÂÂÂMªIdentifierÍğÍö¦headerY°ObjectExpressionÍøÍŸ’Z¨PropertyÍÍQÂÂÂT§LiteralÍÍ¬Content-Type®'Content-Type'T§LiteralÍÍQÙ0application/x-www-form-urlencoded; charset=UTF-8Ù2'application/x-www-form-urlencoded; charset=UTF-8'¤initZ¨PropertyÍhÍŒÂÂÂT§LiteralÍhÍz°X-Requested-With²'X-Requested-With'T§LiteralÍ|ÍŒ®XMLHttpRequest°'XMLHttpRequest'¤init¤initZ¨PropertyÍ²ÍÑÂÂÂMªIdentifierÍ²ÍÀ®connectTimeoutMªIdentifierÍÂÍÑ¯HTTP_TIMEOUT_MS¤initZ¨PropertyÍäÍ ÂÂÂMªIdentifierÍäÍï«readTimeoutMªIdentifierÍñÍ ¯HTTP_TIMEOUT_MS¤initÂ¥constÔr[–¤type¥start£end¤testªconsequent©alternate«IfStatementÍ5ÍçÔr\–¤type¥start£end¤left¨operator¥right°BinaryExpressionÍ9ÍbS°MemberExpressionÍ9ÍLMªIdentifierÍ9Í?¦resultMªIdentifierÍ@ÍL¬responseCodeÂÂ£===MªIdentifierÍQÍb±HTTP_SUCCESS_CODEN®BlockStatementÍdÍÖ“U³VariableDeclarationÍwÍ¯‘V²VariableDeclaratorÍ}Í®MªIdentifierÍ}Í‡ªResultBodyR®CallExpressionÍŠÍ®S°MemberExpressionÍŠÍ”MªIdentifierÍŠÍ¤JSONMªIdentifierÍÍ”¥parseÂÂ‘R®CallExpressionÍ•Í­S°MemberExpressionÍ•Í«S°MemberExpressionÍ•Í¢MªIdentifierÍ•Í›¦resultMªIdentifierÍœÍ¢¦resultÂÂMªIdentifierÍ£Í«¨toStringÂÂÂÂ¥constQ³ExpressionStatementÍÁÍ	R®CallExpressionÍÁÍ	S°MemberExpressionÍÁÍÌMªIdentifierÍÁÍÆ¥hilogMªIdentifierÍÇÍÌ¥debugÂÂ“MªIdentifierÍÍÍÓ¦DOMAINMªIdentifierÍÕÍØ£TAGÔr]•¤type¥start£end«expressions¦quasis¯TemplateLiteralÍÚÍ	‘Q¯ChainExpressionÍôÍ	
+S°MemberExpressionÍôÍ	
+MªIdentifierÍôÍşªResultBodyT§LiteralÍ	Í		¦status¨'status'ÃÃ’Ôr^•¤type¥start£end¥value¤tail¯TemplateElementÍÛÍòÔr_’£raw¦cooked·Login response status: ·Login response status: Â^¯TemplateElementÍ	Í	_  ÃÂ[«IfStatementÍ	 ÍÇ\°BinaryExpressionÍ	$Í	CQ¯ChainExpressionÍ	$Í	:S°MemberExpressionÍ	$Í	:MªIdentifierÍ	$Í	.ªResultBodyT§LiteralÍ	1Í	9¦status¨'status'ÃÃ£===T§LiteralÍ	?Í	CÃ¤trueN®BlockStatementÍ	EÍ
+¹“U³VariableDeclarationÍ	\Í	Œ‘V²VariableDeclaratorÍ	bÍ	‹MªIdentifierÍ	bÍ	m«set_cookiesS°MemberExpressionÍ	pÍ	‹S°MemberExpressionÍ	pÍ	}MªIdentifierÍ	pÍ	v¦resultMªIdentifierÍ	wÍ	}¦headerÂÂT§LiteralÍ	~Í	Šªset-cookie¬'set-cookie'ÃÂ¥constQ³ExpressionStatementÍ	¢Í	ÎR®CallExpressionÍ	¢Í	ÍS°MemberExpressionÍ	¢Í	¬MªIdentifierÍ	¢Í	§¥hilogMªIdentifierÍ	¨Í	¬¤infoÂÂ“MªIdentifierÍ	­Í	³¦DOMAINMªIdentifierÍ	µÍ	¸£TAGT§LiteralÍ	ºÍ	Ì°Login successful²'Login successful'ÂX¯ReturnStatementÍ	äÍ
+¦Y°ObjectExpressionÍ	ëÍ
+¥“Z¨PropertyÍ
+Í
+ÂÂÂMªIdentifierÍ
+Í
+¢okT§LiteralÍ
+
+Í
+Ã¤true¤initZ¨PropertyÍ
+)Í
+8ÂÂÂMªIdentifierÍ
+)Í
+0§messageT§LiteralÍ
+2Í
+8¬ç™»å½•æˆåŠŸ®'ç™»å½•æˆåŠŸ'¤initZ¨PropertyÍ
+SÍ
+ÂÂÂMªIdentifierÍ
+SÍ
+Z§cookiesR®CallExpressionÍ
+\Í
+S°MemberExpressionÍ
+\Í
+MªIdentifierÍ
+\Í
+i­ChaoxingUtilsMªIdentifierÍ
+jÍ
+·processSetCookieHeadersÂÂ‘MªIdentifierÍ
+‚Í
+«set_cookiesÂ¤initN®BlockStatementÍ
+ĞÍÇ’Q³ExpressionStatementÍ
+çÍ.R®CallExpressionÍ
+çÍ-S°MemberExpressionÍ
+çÍ
+òMªIdentifierÍ
+çÍ
+ì¥hilogMªIdentifierÍ
+íÍ
+ò¥errorÂÂ“MªIdentifierÍ
+óÍ
+ù¦DOMAINMªIdentifierÍ
+ûÍ
+ş£TAGT§LiteralÍ Í,Ù*Login failed: Invalid username or passwordÙ,'Login failed: Invalid username or password'ÂX¯ReturnStatementÍDÍ´Y°ObjectExpressionÍKÍ³’Z¨PropertyÍfÍoÂÂÂMªIdentifierÍfÍh¢okT§LiteralÍjÍoÂ¥false¤initZ¨PropertyÍŠÍœÂÂÂMªIdentifierÍŠÍ‘§messageT§LiteralÍ“Íœµè´¦å·æˆ–å¯†ç é”™è¯¯·'è´¦å·æˆ–å¯†ç é”™è¯¯'¤initN®BlockStatementÍéÍç’Q³ExpressionStatementÍüÍMR®CallExpressionÍüÍLS°MemberExpressionÍüÍMªIdentifierÍüÍ¥hilogMªIdentifierÍÍ¥errorÂÂ“MªIdentifierÍÍ¦DOMAINMªIdentifierÍÍ£TAG]¯TemplateLiteralÍÍK‘S°MemberExpressionÍ5ÍHMªIdentifierÍ5Í;¦resultMªIdentifierÍ<ÍH¬responseCodeÂÂ’^¯TemplateElementÍÍ3_½Login failed: Network error (½Login failed: Network error (Â^¯TemplateElementÍIÍJ_¡)¡)ÃÂX¯ReturnStatementÍ_ÍØY°ObjectExpressionÍfÍ×’Z¨PropertyÍ}Í†ÂÂÂMªIdentifierÍ}Í¢okT§LiteralÍÍ†Â¥false¤initZ¨PropertyÍÍÄÂÂÂMªIdentifierÍÍ¤§message]¯TemplateLiteralÍ¦ÍÄ‘S°MemberExpressionÍ®ÍÁMªIdentifierÍ®Í´¦resultMªIdentifierÍµÍÁ¬responseCodeÂÂ’^¯TemplateElementÍ§Í¬_­ç½‘ç»œé”™è¯¯(­ç½‘ç»œé”™è¯¯(Â^¯TemplateElementÍÂÍÃ_¡)¡)Ã¤initÔr`•¤type¥start£end¥param¤body«CatchClauseÍüÍMªIdentifierÍÍ¥errorN®BlockStatementÍ
+Í“Q³ExpressionStatementÍÍWR®CallExpressionÍÍVS°MemberExpressionÍÍ$MªIdentifierÍÍ¥hilogMªIdentifierÍÍ$¥errorÂÂ“MªIdentifierÍ%Í+¦DOMAINMªIdentifierÍ-Í0£TAG]¯TemplateLiteralÍ2ÍU‘S°MemberExpressionÍFÍSMªIdentifierÍFÍK¥errorMªIdentifierÍLÍS§messageÂÂ’^¯TemplateElementÍ3ÍD_±Login exception: ±Login exception: Â^¯TemplateElementÍTÍT_  ÃÂ[«IfStatementÍeÍ\°BinaryExpressionÍiÍS°MemberExpressionÍiÍvMªIdentifierÍiÍn¥errorMªIdentifierÍoÍv§messageÂÂ£===MªIdentifierÍ{Í³ERROR_MAX_REDIRECTSN®BlockStatementÍÍ‘X¯ReturnStatementÍ£ÍY°ObjectExpressionÍªÍ
+’Z¨PropertyÍÁÍÊÂÂÂMªIdentifierÍÁÍÃ¢okT§LiteralÍÅÍÊÂ¥false¤initZ¨PropertyÍáÍ÷ÂÂÂMªIdentifierÍáÍè§messageT§LiteralÍêÍ÷Ù!æœåŠ¡å™¨é”™è¯¯ï¼Œè¯·ç¨åé‡è¯•Ù#'æœåŠ¡å™¨é”™è¯¯ï¼Œè¯·ç¨åé‡è¯•'¤initÀX¯ReturnStatementÍ(ÍƒY°ObjectExpressionÍ/Í‚’Z¨PropertyÍBÍKÂÂÂMªIdentifierÍBÍD¢okT§LiteralÍFÍKÂ¥false¤initZ¨PropertyÍ^ÍsÂÂÂMªIdentifierÍ^Íe§messageT§LiteralÍgÍs¾ç™»å½•å¤±è´¥ï¼Œè¯·ç¨åé‡è¯•Ù 'ç™»å½•å¤±è´¥ï¼Œè¯·ç¨åé‡è¯•'¤initN®BlockStatementÍ Íò‘Q³ExpressionStatementÍÑÍçR®CallExpressionÍÑÍæS°MemberExpressionÍÑÍäMªIdentifierÍÑÍÜ«httpRequestMªIdentifierÍİÍä§destroyÂÂÂO°MethodDefinitionÍåÍÃÂMªIdentifierÍòÍı«getUserInfo¦methodP²FunctionExpressionÍıÍÀÂÂÃ’MªIdentifierÍşÍ§cookiesÔra•¤type¥start£end¤left¥right±AssignmentPatternÍÍMªIdentifierÍÍ¨useCacheT§LiteralÍÍÃ¤trueN®BlockStatementÍÍ•U³VariableDeclarationÍkÍ–‘V²VariableDeclaratorÍqÍ•MªIdentifierÍqÍy¨cacheKeyR®CallExpressionÍ|Í•MªIdentifierÍ|ÍŒ°generateCacheKey‘MªIdentifierÍÍ”§cookiesÂ¥const[«IfStatementÍÔÍMªIdentifierÍØÍà¨useCacheN®BlockStatementÍâÍ’U³VariableDeclarationÍñÍ!‘V²VariableDeclaratorÍ÷Í MªIdentifierÍ÷Í«cachedEntryR®CallExpressionÍÍ S°MemberExpressionÍÍMªIdentifierÍÍ­userInfoCacheMªIdentifierÍÍ£getÂÂ‘MªIdentifierÍÍ¨cacheKeyÂ¥const[«IfStatementÍ/Í\±LogicalExpressionÍ3ÍMªIdentifierÍ3Í>«cachedEntry¢&&\°BinaryExpressionÍCÍ~\°BinaryExpressionÍCÍeR®CallExpressionÍCÍMS°MemberExpressionÍCÍKMªIdentifierÍCÍG¤DateMªIdentifierÍHÍK£nowÂÂÂ¡-S°MemberExpressionÍPÍeMªIdentifierÍPÍ[«cachedEntryMªIdentifierÍ\Íe©timestampÂÂ¡<MªIdentifierÍhÍ~¶USER_INFO_CACHE_TTL_MSN®BlockStatementÍÍ’Q³ExpressionStatementÍ”ÍËR®CallExpressionÍ”ÍÊS°MemberExpressionÍ”ÍŸMªIdentifierÍ”Í™¥hilogMªIdentifierÍšÍŸ¥debugÂÂ“MªIdentifierÍ Í¦¦DOMAINMªIdentifierÍ¨Í«£TAGT§LiteralÍ­ÍÉºReturning cached user info¼'Returning cached user info'ÂX¯ReturnStatementÍİÍõS°MemberExpressionÍäÍôMªIdentifierÍäÍï«cachedEntryMªIdentifierÍğÍô¤dataÂÂÀÀU³VariableDeclarationÍÍ?‘V²VariableDeclaratorÍÍ>MªIdentifierÍÍ*«httpRequestR®CallExpressionÍ-Í>S°MemberExpressionÍ-Í<MªIdentifierÍ-Í1¤httpMªIdentifierÍ2Í<ªcreateHttpÂÂÂ¥constU³VariableDeclarationÍIÍs‘V²VariableDeclaratorÍOÍrMªIdentifierÍOÍR£urlS°MemberExpressionÍUÍrMªIdentifierÍUÍ`«ChaoXingApiMªIdentifierÍaÍr±URL_GET_USER_INFOÂÂ¥constW¬TryStatementÍ}ÍıN®BlockStatementÍÍQ’U³VariableDeclarationÍÍV‘V²VariableDeclaratorÍ–ÍUMªIdentifierÍ–Íœ¦resultX¯AwaitExpressionÍŸÍUR®CallExpressionÍ¥ÍUS°MemberExpressionÍ¥Í¸MªIdentifierÍ¥Í°«httpRequestMªIdentifierÍ±Í¸§requestÂÂ’MªIdentifierÍ¹Í¼£urlY°ObjectExpressionÍ¾ÍT’Z¨PropertyÍÑÍïÂÂÂMªIdentifierÍÑÍ×¦methodS°MemberExpressionÍÙÍïS°MemberExpressionÍÙÍëMªIdentifierÍÙÍİ¤httpMªIdentifierÍŞÍë­RequestMethodÂÂMªIdentifierÍìÍï£GETÂÂ¤initZ¨PropertyÍÍEÂÂÂMªIdentifierÍÍ¦headerY°ObjectExpressionÍ
+ÍE‘Z¨PropertyÍ!Í2ÂÂÂT§LiteralÍ!Í)¦Cookie¨"Cookie"MªIdentifierÍ+Í2§cookies¤init¤initÂ¥const[«IfStatementÍdÍF\±LogicalExpressionÍhÍŸ\°BinaryExpressionÍhÍ‚S°MemberExpressionÍhÍ{MªIdentifierÍhÍn¦resultMªIdentifierÍoÍ{¬responseCodeÂÂ¢>=T§LiteralÍÍ‚Í,£300¢||\°BinaryExpressionÍ†ÍŸS°MemberExpressionÍ†Í™MªIdentifierÍ†ÍŒ¦resultMªIdentifierÍÍ™¬responseCodeÂÂ¡<T§LiteralÍœÍŸÌÈ£200N®BlockStatementÍ¡Í<’Q³ExpressionStatementÍ´ÍR®CallExpressionÍ´ÍS°MemberExpressionÍ´Í¿MªIdentifierÍ´Í¹¥hilogMªIdentifierÍºÍ¿¥errorÂÂ“MªIdentifierÍÀÍÆ¦DOMAINMªIdentifierÍÈÍË£TAG]¯TemplateLiteralÍÍÍ
+‘S°MemberExpressionÍôÍMªIdentifierÍôÍú¦resultMªIdentifierÍûÍ¬responseCodeÂÂ’^¯TemplateElementÍÎÍò_Ù$Get user info failed: Server error (Ù$Get user info failed: Server error (Â^¯TemplateElementÍÍ	_¡)¡)ÃÂX¯ReturnStatementÍÍ-Y°ObjectExpressionÍ%Í,—Z¨PropertyÍ<ÍRÂÂÂT§LiteralÍ<ÍA£msg¥'msg'T§LiteralÍCÍR­service error¯'service error'¤initZ¨PropertyÍiÍtÂÂÂT§LiteralÍiÍp¥uname§'uname'T§LiteralÍrÍt ¢''¤initZ¨PropertyÍ‹Í”ÂÂÂT§LiteralÍ‹Í£pic¥'pic'T§LiteralÍ’Í” ¢''¤initZ¨PropertyÍ«Í³ÂÂÂT§LiteralÍ«Í°£uid¥'uid'T§LiteralÍ²Í³ ¡0¤initZ¨PropertyÍÊÍÓÂÂÂT§LiteralÍÊÍÏ£fid¥'fid'T§LiteralÍÑÍÓ ¢''¤initZ¨PropertyÍêÍôÂÂÂT§LiteralÍêÍğ¤puid¦'puid'T§LiteralÍòÍô ¢''¤initZ¨PropertyÍÍÂÂÂT§LiteralÍÍ¨clientIdª'clientId'T§LiteralÍÍ ¢''¤initN®BlockStatementÍOÍF›U³VariableDeclarationÍbÍ‘V²VariableDeclaratorÍhÍMªIdentifierÍhÍrªJsonResultR®CallExpressionÍuÍS°MemberExpressionÍuÍMªIdentifierÍuÍy¤JSONMªIdentifierÍzÍ¥parseÂÂ‘S°MemberExpressionÍ€ÍMªIdentifierÍ€Í†¦resultMªIdentifierÍ‡Í¦resultÂÂÂ¥constU³VariableDeclarationÍ¡ÍÂ‘V²VariableDeclaratorÍ§ÍÁMªIdentifierÍ§Í«¤JsonQ¯ChainExpressionÍ®ÍÁS°MemberExpressionÍ®ÍÁMªIdentifierÍ®Í¸ªJsonResultT§LiteralÍ»ÍÀ£msg¥'msg'ÃÃ¥constU³VariableDeclarationÍÔÍ÷‘V²VariableDeclaratorÍÚÍöMªIdentifierÍÚÍß¥uname\±LogicalExpressionÍâÍöQ¯ChainExpressionÍâÍğS°MemberExpressionÍâÍğMªIdentifierÍâÍæ¤JsonT§LiteralÍéÍï¤name¦'name'ÃÃ¢||T§LiteralÍôÍö ¢''¥constU³VariableDeclarationÍ	Í)‘V²VariableDeclaratorÍÍ(MªIdentifierÍÍ£pic\±LogicalExpressionÍÍ(Q¯ChainExpressionÍÍ"S°MemberExpressionÍÍ"MªIdentifierÍÍ¤JsonT§LiteralÍÍ!£pic¥'pic'ÃÃ¢||T§LiteralÍ&Í( ¢''¥constU³VariableDeclarationÍ;ÍZ‘V²VariableDeclaratorÍAÍYMªIdentifierÍAÍD£uid\±LogicalExpressionÍGÍYQ¯ChainExpressionÍGÍTS°MemberExpressionÍGÍTMªIdentifierÍGÍK¤JsonT§LiteralÍNÍS£uid¥'uid'ÃÃ¢||T§LiteralÍXÍY ¡0¥constU³VariableDeclarationÍlÍŒ‘V²VariableDeclaratorÍrÍ‹MªIdentifierÍrÍu£fid\±LogicalExpressionÍxÍ‹Q¯ChainExpressionÍxÍ…S°MemberExpressionÍxÍ…MªIdentifierÍxÍ|¤JsonT§LiteralÍÍ„£fid¥'fid'ÃÃ¢||T§LiteralÍ‰Í‹ ¢''¥constU³VariableDeclarationÍæÍ‘V²VariableDeclaratorÍìÍMªIdentifierÍìÍğ¤puidR®CallExpressionÍóÍMªIdentifierÍóÍù¦String‘\±LogicalExpressionÍúÍQ¯ChainExpressionÍúÍS°MemberExpressionÍúÍMªIdentifierÍúÍş¤JsonT§LiteralÍÍ¤puid¦'puid'ÃÃ¢||T§LiteralÍÍ ¢''Â¥constU³VariableDeclarationÍ"ÍL‘V²VariableDeclaratorÍ(ÍKMªIdentifierÍ(Í0¨clientId\±LogicalExpressionÍ3ÍKQ¯ChainExpressionÍ3ÍES°MemberExpressionÍ3ÍEMªIdentifierÍ3Í7¤JsonT§LiteralÍ:ÍD¨clientIdª'clientId'ÃÃ¢||T§LiteralÍIÍK ¢''¥constU³VariableDeclarationÍ^Í¤‘V²VariableDeclaratorÍdÍ£MªIdentifierÍdÍl¨userInfoY°ObjectExpressionÍoÍ£—Z¨PropertyÍ†ÍºÂÂÂT§LiteralÍ†Í‹£msg¥'msg'[µConditionalExpressionÍÍº\±LogicalExpressionÍÍšMªIdentifierÍÍ“¥uname¢&&MªIdentifierÍ—Íš£picT§LiteralÍÍªªsuccessful¬'successful'T§LiteralÍ­Íº«fetch error­'fetch error'¤initZ¨PropertyÍÑÍßÂÂÂT§LiteralÍÑÍØ¥uname§'uname'MªIdentifierÍÚÍß¥uname¤initZ¨PropertyÍöÍ ÂÂÂT§LiteralÍöÍû£pic¥'pic'MªIdentifierÍıÍ £pic¤initZ¨PropertyÍÍ!ÂÂÂT§LiteralÍÍ£uid¥'uid'MªIdentifierÍÍ!£uid¤initZ¨PropertyÍ8ÍBÂÂÂT§LiteralÍ8Í=£fid¥'fid'MªIdentifierÍ?ÍB£fid¤initZ¨PropertyÍYÍeÂÂÂT§LiteralÍYÍ_¤puid¦'puid'MªIdentifierÍaÍe¤puid¤initZ¨PropertyÍ|ÍÂÂÂT§LiteralÍ|Í†¨clientIdª'clientId'MªIdentifierÍˆÍ¨clientId¤init¥const[«IfStatementÍ÷Í\°BinaryExpressionÍûÍS°MemberExpressionÍûÍMªIdentifierÍûÍ¨userInfoMªIdentifierÍÍ£msgÂÂ£===T§LiteralÍÍªsuccessful¬'successful'N®BlockStatementÍÍ’Q³ExpressionStatementÍ1Í¿R®CallExpressionÍ1Í¾S°MemberExpressionÍ1ÍBMªIdentifierÍ1Í>­userInfoCacheMªIdentifierÍ?ÍB£setÂÂ’MªIdentifierÍCÍK¨cacheKeyY°ObjectExpressionÍMÍ½’Z¨PropertyÍhÍvÂÂÂMªIdentifierÍhÍl¤dataMªIdentifierÍnÍv¨userInfo¤initZ¨PropertyÍ‘Í¦ÂÂÂMªIdentifierÍ‘Íš©timestampR®CallExpressionÍœÍ¦S°MemberExpressionÍœÍ¤MªIdentifierÍœÍ ¤DateMªIdentifierÍ¡Í¤£nowÂÂÂ¤initÂQ³ExpressionStatementÍÕÍR®CallExpressionÍÕÍS°MemberExpressionÍÕÍàMªIdentifierÍÕÍÚ¥hilogMªIdentifierÍÛÍà¥debugÂÂ“MªIdentifierÍáÍç¦DOMAINMªIdentifierÍéÍì£TAGT§LiteralÍîÍ °User info cached²'User info cached'ÂÀX¯ReturnStatementÍ'Í7MªIdentifierÍ.Í6¨userInfo`«CatchClauseÍ[Í»MªIdentifierÍbÍg¥errorN®BlockStatementÍiÍ»’Q³ExpressionStatementÍxÍ»R®CallExpressionÍxÍºS°MemberExpressionÍxÍƒMªIdentifierÍxÍ}¥hilogMªIdentifierÍ~Íƒ¥errorÂÂ“MªIdentifierÍ„ÍŠ¦DOMAINMªIdentifierÍŒÍ£TAG]¯TemplateLiteralÍ‘Í¹‘S°MemberExpressionÍªÍ·MªIdentifierÍªÍ¯¥errorMªIdentifierÍ°Í·§messageÂÂ’^¯TemplateElementÍ’Í¨_¶Get user info failed: ¶Get user info failed: Â^¯TemplateElementÍ¸Í¸_  ÃÂX¯ReturnStatementÍÉÍ°Y°ObjectExpressionÍĞÍ¯—Z¨PropertyÍãÍùÂÂÂT§LiteralÍãÍè£msg¥'msg'T§LiteralÍêÍù­service error¯'service error'¤initZ¨PropertyÍÍÂÂÂT§LiteralÍÍ¥uname§'uname'T§LiteralÍÍ ¢''¤initZ¨PropertyÍ*Í3ÂÂÂT§LiteralÍ*Í/£pic¥'pic'T§LiteralÍ1Í3 ¢''¤initZ¨PropertyÍFÍLÂÂÂMªIdentifierÍFÍI£uidT§LiteralÍKÍL ¡0¤initZ¨PropertyÍ_ÍfÂÂÂMªIdentifierÍ_Íb£fidT§LiteralÍdÍf ¢''¤initZ¨PropertyÍyÍÂÂÂMªIdentifierÍyÍ}¤puidT§LiteralÍÍ ¢''¤initZ¨PropertyÍ”Í ÂÂÂMªIdentifierÍ”Íœ¨clientIdT§LiteralÍÍ  ¢''¤initN®BlockStatementÍÍÍı‘Q³ExpressionStatementÍÜÍòR®CallExpressionÍÜÍñS°MemberExpressionÍÜÍïMªIdentifierÍÜÍç«httpRequestMªIdentifierÍèÍï§destroyÂÂÂO°MethodDefinitionÍIÍ$ÕÃÂMªIdentifierÍVÍ`ªLoginByURL¦methodP²FunctionExpressionÍ`Í$ÕÀÂÂÃ‘MªIdentifierÍaÍj©stringURLN®BlockStatementÍlÍ$Õ’[«IfStatementÍˆÍ/\±LogicalExpressionÍŒÍ·Ôrb–¤type¥start£end¨operator¦prefix¨argument¯UnaryExpressionÍŒÍ–¡!ÃMªIdentifierÍÍ–©stringURL¢||\°BinaryExpressionÍšÍ·S°MemberExpressionÍšÍ±R®CallExpressionÍšÍªS°MemberExpressionÍšÍ¨MªIdentifierÍšÍ£©stringURLMªIdentifierÍ¤Í¨¤trimÂÂÂMªIdentifierÍ«Í±¦lengthÂÂ£===T§LiteralÍ¶Í· ¡0N®BlockStatementÍ¹Í/’Q³ExpressionStatementÍÈÍR®CallExpressionÍÈÍS°MemberExpressionÍÈÍÓMªIdentifierÍÈÍÍ¥hilogMªIdentifierÍÎÍÓ¥errorÂÂ“MªIdentifierÍÔÍÚ¦DOMAINMªIdentifierÍÜÍß£TAGT§LiteralÍáÍ¾LoginByURL: Empty URL providedÙ 'LoginByURL: Empty URL provided'ÂX¯ReturnStatementÍÍ$T§LiteralÍÍ#µè¯·æä¾›æœ‰æ•ˆçš„URL·'è¯·æä¾›æœ‰æ•ˆçš„URL'ÀW¬TryStatementÍ9Í$ÎN®BlockStatementÍ=Í$9ŸU³VariableDeclarationÍLÍ~‘V²VariableDeclaratorÍPÍ}MªIdentifierÍPÍX¨urlParseR®CallExpressionÍ[Í}S°MemberExpressionÍ[ÍrMªIdentifierÍ[Íc¨urlToolsMªIdentifierÍdÍr®parseUrlParamsÂÂ‘MªIdentifierÍsÍ|©stringURLÂ£letU³VariableDeclarationÍŒÍª‘V²VariableDeclaratorÍÍ©MªIdentifierÍÍ•¥phoneS°MemberExpressionÍ˜Í©MªIdentifierÍ˜Í ¨urlParseT§LiteralÍ¡Í¨¥phone§'phone'ÃÂ£letU³VariableDeclarationÍ¸ÍÒ‘V²VariableDeclaratorÍ¼ÍÑMªIdentifierÍ¼Í¿£pwdS°MemberExpressionÍÂÍÑMªIdentifierÍÂÍÊ¨urlParseT§LiteralÍËÍĞ£pwd¥'pwd'ÃÂ£let[«IfStatementÍ÷Í \±LogicalExpressionÍûÍ	b¯UnaryExpressionÍûÍ¡!ÃMªIdentifierÍüÍ¥phone¢||b¯UnaryExpressionÍÍ	¡!ÃMªIdentifierÍÍ	£pwdN®BlockStatementÍÍ ’Q³ExpressionStatementÍÍgR®CallExpressionÍÍfS°MemberExpressionÍÍ)MªIdentifierÍÍ#¥hilogMªIdentifierÍ$Í)¥errorÂÂ“MªIdentifierÍ*Í0¦DOMAINMªIdentifierÍ2Í5£TAGT§LiteralÍ7ÍeÙ,LoginByURL: Missing phone or password in URLÙ.'LoginByURL: Missing phone or password in URL'ÂX¯ReturnStatementÍyÍ‘T§LiteralÍ€ÍÙ$URLæ ¼å¼é”™è¯¯ï¼šç¼ºå°‘å¿…éœ€å‚æ•°Ù&'URLæ ¼å¼é”™è¯¯ï¼šç¼ºå°‘å¿…éœ€å‚æ•°'ÀQ³ExpressionStatementÍ®ÍR®CallExpressionÍ®ÍS°MemberExpressionÍ®Í¹MªIdentifierÍ®Í³¥hilogMªIdentifierÍ´Í¹¥debugÂÂ“MªIdentifierÍºÍÀ¦DOMAINMªIdentifierÍÂÍÅ£TAG]¯TemplateLiteralÍÇÍ‘Q¯ChainExpressionÍçÍıR®CallExpressionÍçÍıS°MemberExpressionÍçÍ÷MªIdentifierÍçÍì¥phoneMªIdentifierÍîÍ÷©substringÂÃ’T§LiteralÍøÍù ¡0T§LiteralÍûÍü¡3Â’^¯TemplateElementÍÈÍå_½Parsing login URL for phone: ½Parsing login URL for phone: Â^¯TemplateElementÍşÍ_£***£***ÃÂU³VariableDeclarationÍÍC‘V²VariableDeclaratorÍÍBMªIdentifierÍÍ¨AESPhoneR®CallExpressionÍ!ÍBS°MemberExpressionÍ!Í;MªIdentifierÍ!Í.­ChaoxingUtilsMªIdentifierÍ/Í;¬encryptByAESÂÂ‘MªIdentifierÍ<ÍA¥phoneÂ£letU³VariableDeclarationÍQÍ†‘V²VariableDeclaratorÍUÍ…MªIdentifierÍUÍY¤bodyR®CallExpressionÍ\Í…S°MemberExpressionÍ\ÍvMªIdentifierÍ\Íi­ChaoxingUtilsMªIdentifierÍjÍv¬getLoginBodyÂÂ’MªIdentifierÍwÍ¨AESPhoneMªIdentifierÍÍ„£pwdÂ£letU³VariableDeclarationÍ”ÍĞ‘V²VariableDeclaratorÍšÍÏMªIdentifierÍšÍ¥«loginResultX¯AwaitExpressionÍ¨ÍÏR®CallExpressionÍ®ÍÏS°MemberExpressionÍ®ÍÉMªIdentifierÍ®Í»­loginFunctionMªIdentifierÍ¼ÍÉ­LoginChaoXingÂÂ‘MªIdentifierÍÊÍÎ¤bodyÂ¥const[«IfStatementÍŞÍ —\±LogicalExpressionÍâÍ 	b¯UnaryExpressionÍâÍñ¡!ÃS°MemberExpressionÍãÍñMªIdentifierÍãÍî«loginResultMªIdentifierÍïÍñ¢okÂÂ¢||b¯UnaryExpressionÍõÍ 	¡!ÃS°MemberExpressionÍöÍ 	MªIdentifierÍöÍ «loginResultMªIdentifierÍ Í 	§cookiesÂÂN®BlockStatementÍ Í —’Q³ExpressionStatementÍ Í [R®CallExpressionÍ Í ZS°MemberExpressionÍ Í )MªIdentifierÍ Í #¥hilogMªIdentifierÍ $Í )¥errorÂÂ“MªIdentifierÍ *Í 0¦DOMAINMªIdentifierÍ 2Í 5£TAGT§LiteralÍ 7Í YÙ LoginByURL: Failed to get cookieÙ"'LoginByURL: Failed to get cookie'ÂX¯ReturnStatementÍ mÍ ˆS°MemberExpressionÍ tÍ ‡MªIdentifierÍ tÍ «loginResultMªIdentifierÍ €Í ‡§messageÂÂÀU³VariableDeclarationÍ ¥Í È‘V²VariableDeclaratorÍ «Í ÇMªIdentifierÍ «Í ±¦cookieS°MemberExpressionÍ ´Í ÇMªIdentifierÍ ´Í ¿«loginResultMªIdentifierÍ ÀÍ Ç§cookiesÂÂ¥constU³VariableDeclarationÍ ÖÍ!‘V²VariableDeclaratorÍ ÚÍ!MªIdentifierÍ ÚÍ â¨userInfoX¯AwaitExpressionÍ åÍ!R®CallExpressionÍ ëÍ!S°MemberExpressionÍ ëÍ!MªIdentifierÍ ëÍ ø­loginFunctionMªIdentifierÍ ùÍ!«getUserInfoÂÂ‘MªIdentifierÍ!Í!¦cookieÂ£let[«IfStatementÍ!Í!Ä\°BinaryExpressionÍ!Í!<S°MemberExpressionÍ!Í!+MªIdentifierÍ!Í!'¨userInfoMªIdentifierÍ!(Í!+£msgÂÂ£!==T§LiteralÍ!0Í!<ªsuccessful¬'successful'N®BlockStatementÍ!>Í!Ä’Q³ExpressionStatementÍ!QÍ!‘R®CallExpressionÍ!QÍ!S°MemberExpressionÍ!QÍ!\MªIdentifierÍ!QÍ!V¥hilogMªIdentifierÍ!WÍ!\¥errorÂÂ“MªIdentifierÍ!]Í!c¦DOMAINMªIdentifierÍ!eÍ!h£TAGT§LiteralÍ!jÍ!Ù#LoginByURL: Failed to get user infoÙ%'LoginByURL: Failed to get user info'ÂX¯ReturnStatementÍ!£Í!µT§LiteralÍ!ªÍ!´¸è·å–ç”¨æˆ·ä¿¡æ¯å¤±è´¥º'è·å–ç”¨æˆ·ä¿¡æ¯å¤±è´¥'ÀU³VariableDeclarationÍ!ÒÍ"‘V²VariableDeclaratorÍ!ØÍ"MªIdentifierÍ!ØÍ!á©dbManagerR®CallExpressionÍ!äÍ"S°MemberExpressionÍ!äÍ!ÿMªIdentifierÍ!äÍ!ó¯DatabaseManagerMªIdentifierÍ!ôÍ!ÿ«getInstanceÂÂÂ¥constU³VariableDeclarationÍ"Í"Ñ‘V²VariableDeclaratorÍ"Í"ĞMªIdentifierÍ"Í""¬insertResultX¯AwaitExpressionÍ"%Í"ĞR®CallExpressionÍ"+Í"ĞS°MemberExpressionÍ"+Í"?MªIdentifierÍ"+Í"4©dbManagerMªIdentifierÍ"5Í"?ªinsertUserÂÂ‘Y°ObjectExpressionÍ"@Í"Ï”Z¨PropertyÍ"SÍ"_ÂÂÂMªIdentifierÍ"SÍ"X¥phoneMªIdentifierÍ"ZÍ"_¥phone¤initZ¨PropertyÍ"rÍ"zÂÂÂMªIdentifierÍ"rÍ"u£pwdMªIdentifierÍ"wÍ"z£pwd¤initZ¨PropertyÍ"Í"ÂÂÂMªIdentifierÍ"Í"£uidS°MemberExpressionÍ"’Í"MªIdentifierÍ"’Í"š¨userInfoMªIdentifierÍ"›Í"£uidÂÂ¤initZ¨PropertyÍ"±Í"ÀÂÂÂMªIdentifierÍ"±Í"¸§cookiesMªIdentifierÍ"ºÍ"À¦cookie¤initÂ¥const[«IfStatementÍ"ßÍ$.\°BinaryExpressionÍ"ãÍ"õMªIdentifierÍ"ãÍ"ï¬insertResult£===T§LiteralÍ"ôÍ"õ¡1N®BlockStatementÍ"÷Í#t’Q³ExpressionStatementÍ#
+Í#ER®CallExpressionÍ#
+Í#DS°MemberExpressionÍ#
+Í#MªIdentifierÍ#
+Í#¥hilogMªIdentifierÍ#Í#¤infoÂÂ“MªIdentifierÍ#Í#¦DOMAINMªIdentifierÍ#Í# £TAGT§LiteralÍ#"Í#C¿User added successfully via URLÙ!'User added successfully via URL'ÂX¯ReturnStatementÍ#WÍ#eT§LiteralÍ#^Í#d¬æ·»åŠ æˆåŠŸ®'æ·»åŠ æˆåŠŸ'N®BlockStatementÍ#‡Í$.’Q³ExpressionStatementÍ#šÍ#óR®CallExpressionÍ#šÍ#òS°MemberExpressionÍ#šÍ#¥MªIdentifierÍ#šÍ#Ÿ¥hilogMªIdentifierÍ# Í#¥¥errorÂÂ“MªIdentifierÍ#¦Í#¬¦DOMAINMªIdentifierÍ#®Í#±£TAGT§LiteralÍ#³Í#ñÙ<Failed to add user: Invalid credentials or already logged inÙ>'Failed to add user: Invalid credentials or already logged in'ÂX¯ReturnStatementÍ$Í$T§LiteralÍ$Í$Ù0é“¾æ¥çš„æ‰‹æœºå·æˆ–å¯†ç æœ‰è¯¯æˆ–å·²ç»ç™»å½•Ù2'é“¾æ¥çš„æ‰‹æœºå·æˆ–å¯†ç æœ‰è¯¯æˆ–å·²ç»ç™»å½•'`«CatchClauseÍ$CÍ$ÎMªIdentifierÍ$JÍ$O¥errorN®BlockStatementÍ$QÍ$Î’Q³ExpressionStatementÍ$`Í$¢R®CallExpressionÍ$`Í$¡S°MemberExpressionÍ$`Í$kMªIdentifierÍ$`Í$e¥hilogMªIdentifierÍ$fÍ$k¥errorÂÂ“MªIdentifierÍ$lÍ$r¦DOMAINMªIdentifierÍ$tÍ$w£TAG]¯TemplateLiteralÍ$yÍ$ ‘S°MemberExpressionÍ$‘Í$MªIdentifierÍ$‘Í$–¥errorMªIdentifierÍ$—Í$§messageÂÂ’^¯TemplateElementÍ$zÍ$_µLogin by URL failed: µLogin by URL failed: Â^¯TemplateElementÍ$ŸÍ$Ÿ_  ÃÂX¯ReturnStatementÍ$°Í$ÃT§LiteralÍ$·Í$Âµè¯·ä½¿ç”¨æ­£ç¡®çš„url·'è¯·ä½¿ç”¨æ­£ç¡®çš„url'ÀO°MethodDefinitionÍ%PÍ)¤ÃÂMªIdentifierÍ%]Í%c¦GetPic¦methodP²FunctionExpressionÍ%cÍ)¤ÀÂÂÃ‘MªIdentifierÍ%dÍ%g£urlN®BlockStatementÍ%iÍ)¤’U³VariableDeclarationÍ%tÍ%š‘V²VariableDeclaratorÍ%zÍ%™MªIdentifierÍ%zÍ%…«httpRequestR®CallExpressionÍ%ˆÍ%™S°MemberExpressionÍ%ˆÍ%—MªIdentifierÍ%ˆÍ%Œ¤httpMªIdentifierÍ%Í%—ªcreateHttpÂÂÂ¥constW¬TryStatementÍ%¤Í)N®BlockStatementÍ%¨Í(Ì’U³VariableDeclarationÍ%·Í&Ã‘V²VariableDeclaratorÍ%½Í&ÂMªIdentifierÍ%½Í%Ã¦resultX¯AwaitExpressionÍ%ÆÍ&ÂR®CallExpressionÍ%ÌÍ&ÂS°MemberExpressionÍ%ÌÍ%ßMªIdentifierÍ%ÌÍ%×«httpRequestMªIdentifierÍ%ØÍ%ß§requestÂÂ’MªIdentifierÍ%àÍ%ã£urlY°ObjectExpressionÍ%åÍ&Á”Z¨PropertyÍ%øÍ&ÂÂÂMªIdentifierÍ%øÍ%ş¦methodS°MemberExpressionÍ& Í&S°MemberExpressionÍ& Í&MªIdentifierÍ& Í&¤httpMªIdentifierÍ&Í&­RequestMethodÂÂMªIdentifierÍ&Í&£GETÂÂ¤initZ¨PropertyÍ&)Í&QÂÂÂMªIdentifierÍ&)Í&/¦headerY°ObjectExpressionÍ&1Í&Q‘Z¨PropertyÍ&3Í&OÂÂÂT§LiteralÍ&3Í&?ªUser-Agent¬'User-Agent'S°MemberExpressionÍ&AÍ&OMªIdentifierÍ&AÍ&L«ChaoXingApiMªIdentifierÍ&MÍ&O¢UAÂÂ¤init¤initZ¨PropertyÍ&dÍ&€ÂÂÂMªIdentifierÍ&dÍ&o«readTimeoutMªIdentifierÍ&qÍ&€¯HTTP_TIMEOUT_MS¤initZ¨PropertyÍ&“Í&²ÂÂÂMªIdentifierÍ&“Í&¡®connectTimeoutMªIdentifierÍ&£Í&²¯HTTP_TIMEOUT_MS¤initÂ¥const[«IfStatementÍ&ÑÍ(Á\°BinaryExpressionÍ&ÕÍ&şS°MemberExpressionÍ&ÕÍ&èMªIdentifierÍ&ÕÍ&Û¦resultMªIdentifierÍ&ÜÍ&è¬responseCodeÂÂ£===MªIdentifierÍ&íÍ&ş±HTTP_SUCCESS_CODEN®BlockStatementÍ' Í($”U³VariableDeclarationÍ'Í'1‘V²VariableDeclaratorÍ'Í'0MªIdentifierÍ'Í' §RawDataS°MemberExpressionÍ'#Í'0MªIdentifierÍ'#Í')¦resultMªIdentifierÍ'*Í'0¦resultÂÂ¥constU³VariableDeclarationÍ']Í'‘V²VariableDeclaratorÍ'aÍ'MªIdentifierÍ'aÍ'l«imageSourceR®CallExpressionÍ'oÍ'S°MemberExpressionÍ'oÍ'†MªIdentifierÍ'oÍ't¥imageMªIdentifierÍ'uÍ'†±createImageSourceÂÂ‘MªIdentifierÍ'‡Í'§RawDataÂ£letU³VariableDeclarationÍ'ÁÍ'ó‘V²VariableDeclaratorÍ'ÅÍ'òMªIdentifierÍ'ÅÍ'Í¨pixelMapX¯AwaitExpressionÍ'ĞÍ'òR®CallExpressionÍ'ÖÍ'òS°MemberExpressionÍ'ÖÍ'ğMªIdentifierÍ'ÖÍ'á«imageSourceMªIdentifierÍ'âÍ'ğ®createPixelMapÂÂÂ£letX¯ReturnStatementÍ(Í(MªIdentifierÍ(Í(¨pixelMapN®BlockStatementÍ(7Í(Á’Q³ExpressionStatementÍ(JÍ(”R®CallExpressionÍ(JÍ(“S°MemberExpressionÍ(JÍ(UMªIdentifierÍ(JÍ(O¥hilogMªIdentifierÍ(PÍ(U¥errorÂÂ“MªIdentifierÍ(VÍ(\¦DOMAINMªIdentifierÍ(^Í(a£TAG]¯TemplateLiteralÍ(cÍ(’‘S°MemberExpressionÍ(}Í(MªIdentifierÍ(}Í(ƒ¦resultMªIdentifierÍ(„Í(¬responseCodeÂÂ’^¯TemplateElementÍ(dÍ({_·Failed to fetch image: ·Failed to fetch image: Â^¯TemplateElementÍ(‘Í(‘_  ÃÂX¯ReturnStatementÍ(¦Í(²T§LiteralÍ(­Í(±À¤null`«CatchClauseÍ(ÖÍ)[MªIdentifierÍ(İÍ(â¥errorN®BlockStatementÍ(äÍ)[’Q³ExpressionStatementÍ(óÍ)6R®CallExpressionÍ(óÍ)5S°MemberExpressionÍ(óÍ(şMªIdentifierÍ(óÍ(ø¥hilogMªIdentifierÍ(ùÍ(ş¥errorÂÂ“MªIdentifierÍ(ÿÍ)¦DOMAINMªIdentifierÍ)Í)
+£TAG]¯TemplateLiteralÍ)Í)4‘S°MemberExpressionÍ)%Í)2MªIdentifierÍ)%Í)*¥errorMªIdentifierÍ)+Í)2§messageÂÂ’^¯TemplateElementÍ)Í)#_¶Error fetching image: ¶Error fetching image: Â^¯TemplateElementÍ)3Í)3_  ÃÂX¯ReturnStatementÍ)DÍ)PT§LiteralÍ)KÍ)OÀ¤nullN®BlockStatementÍ)mÍ)‘Q³ExpressionStatementÍ)|Í)’R®CallExpressionÍ)|Í)‘S°MemberExpressionÍ)|Í)MªIdentifierÍ)|Í)‡«httpRequestMªIdentifierÍ)ˆÍ)§destroyÂÂÂÀ™Ôrc•¤type¥start£endªspecifiers¦source±ImportDeclaration +‘Ôrd”¤type¥start£end¥local¶ImportDefaultSpecifierMªIdentifier¥imageT§Literal*¶@ohos.multimedia.image¸"@ohos.multimedia.image"c±ImportDeclaration-ÌO‘d¶ImportDefaultSpecifier48MªIdentifier48¤httpT§Literal>ÌN®@ohos.net.http°'@ohos.net.http'c±ImportDeclarationÌQÌy‘Ôre•¤type¥start£end¨imported¥local¯ImportSpecifierÌZÌgMªIdentifierÌZÌg­ChaoxingUtilsMªIdentifierÌZÌg­ChaoxingUtilsT§LiteralÌoÌx§./utils©'./utils'c±ImportDeclarationÌ{Ì‘d¶ImportDefaultSpecifierÌ‚Ì†MªIdentifierÌ‚Ì†¤JSONT§LiteralÌŒÌ¯@ohos.util.json±"@ohos.util.json"c±ImportDeclarationÌ ÌÊ‘e¯ImportSpecifierÌ©Ì´MªIdentifierÌ©Ì´«ChaoXingApiMªIdentifierÌ©Ì´«ChaoXingApiT§LiteralÌ¼ÌÉ«./PublicAPI­'./PublicAPI'c±ImportDeclarationÌÌÌù‘e¯ImportSpecifierÌÕÌäMªIdentifierÌÕÌä¯DatabaseManagerMªIdentifierÌÕÌä¯DatabaseManagerT§LiteralÌìÌøª./DataBase¬'./DataBase'c±ImportDeclarationÌûÍ‘d¶ImportDefaultSpecifierÍÍMªIdentifierÍÍ¥hilogT§LiteralÍÍ«@ohos.hilog­"@ohos.hilog"c±ImportDeclarationÍÍ?‘d¶ImportDefaultSpecifierÍ$Í,MªIdentifierÍ$Í,¨urlToolsT§LiteralÍ2Í>ª./urlTools¬'./urlTools'c±ImportDeclarationÍAÍh‘d¶ImportDefaultSpecifierÍHÍPMªIdentifierÍHÍP¨CryptoJST§LiteralÍVÍg¯@ohos/crypto-js±'@ohos/crypto-js'
