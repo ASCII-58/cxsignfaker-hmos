@@ -21,6 +21,9 @@ import { geoLocationManager } from '@kit.LocationKit';
 import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
 import { CaptchaComponent, CaptchaUserParam } from '../Component/Captcha';
 import { LeaderboardReporter } from '../utils/LeaderboardReporter';
+import { preferences } from '@kit.ArkData';
+import { CustomScanPanel } from '../Component/CustomScanPanel';
+import { PREF_CUSTOM_SCAN_ENABLED, SETTINGS_PREF_NAME } from '../utils/settingsKeys';
 
 const TAG = 'SignerPage';
 const DOMAIN = 0x0008;
@@ -74,6 +77,14 @@ export struct SignPage {
   private captchaResolver: ((validate: string | null) => void) | null = null
   // 手势/签到码组件校验通过后回传的码
   @State pendingSignCode: string = ''
+  /** 新版扫码器开关：true = 自定义界面连续扫码，false（默认）= 系统扫码页逐人扫码 */
+  @State useCustomScanner: boolean = false
+  /** 新版扫码面板（bindContentCover 全屏覆盖）显示状态 */
+  @State customScanShow: boolean = false
+  /** 本轮需要收集的码值数量 */
+  @State scanExpected: number = 0
+  private collectedEncs: string[] = []
+  private scanEncResolver: ((encs: string[]) => void) | null = null
 
   @Builder
   otherUserMenu() {
@@ -505,6 +516,23 @@ export struct SignPage {
     .width('100%')
   }
 
+  /** 新版扫码面板：全屏覆盖，连续收集 enc，面板关闭时统一回传 */
+  @Builder
+  CustomScanBuilder() {
+    CustomScanPanel({
+      expectedCount: this.scanExpected,
+      onEnc: (enc: string) => {
+        this.collectedEncs.push(enc)
+      },
+      onComplete: () => {
+        this.customScanShow = false
+      },
+      onCancel: () => {
+        this.customScanShow = false
+      }
+    })
+  }
+
   @Builder
   CaptchaSheetBuilder() {
     if (this.captchaUser) {
@@ -653,6 +681,15 @@ export struct SignPage {
             dismissAction.dismiss()
           }
         })
+        .bindContentCover($$this.customScanShow, this.CustomScanBuilder, {
+          modalTransition: ModalTransition.DEFAULT,
+          onDisappear: () => {
+            // 面板关闭（收满或用户退出）时统一回传已收集的码值，避免 collectEncs 的 Promise 永不结束
+            const encs = this.collectedEncs.slice()
+            this.scanEncResolver?.(encs)
+            this.scanEncResolver = null
+          }
+        })
       } else {
         Column() {
           Text('参数加载失败').fontColor($r('sys.color.ohos_id_color_text_tertiary'))
@@ -671,6 +708,8 @@ export struct SignPage {
   // ---------------- 初始化 ----------------
 
   private async initPageData() {
+    // 扫码器版本偏好先就绪，点击签到时才能走对分支
+    await this.loadScanModePref()
     const dbManager = DatabaseManager.getInstance()
     // 获取当前用户信息
     const currentUser = await dbManager.getUserByPosition(1, true) as UserDataAndId;
@@ -939,29 +978,46 @@ export struct SignPage {
     // 快照勾选列表，避免签到过程中修改勾选导致错位
     const targetIds = this.signIdArray.slice()
     const isQrScan = this.activityInfo?.signType === SignType.QRCODE
+    // 新版扫码器：先连续收满全部 enc（面板内 rescan），再逐人签到；
+    // 旧版：在循环内为每位用户单独拉起系统扫码页
+    let collectedEncs: string[] = []
+    if (isQrScan && this.useCustomScanner) {
+      collectedEncs = await this.collectEncs(targetIds.length)
+      hilog.info(DOMAIN, TAG, `Custom scan collected ${collectedEncs.length}/${targetIds.length} enc`)
+    }
 
     for (let i = 0; i < targetIds.length; i++) {
       let encForUser = enc
       if (isQrScan) {
         const label = targetIds[i] === 0 ? '主用户' : `用户${targetIds[i]}`
-        const menu = this.otherUser.find(u => u.id === targetIds[i])
-        const scan = await this.scanQrEnc(menu ? menu.uname : label)
-        if (scan.status === 'cancel') {
-          // 用户取消或扫码器不可用：为当前及剩余用户补记结果后中断，避免结果对话框静默缺人
-          for (let j = i; j < targetIds.length; j++) {
-            const restLabel = targetIds[j] === 0 ? '主用户' : `用户${targetIds[j]}`
+        if (this.useCustomScanner) {
+          // 新版扫码器：按收集顺序与勾选顺序一一绑定，缺码的用户记为未处理
+          encForUser = collectedEncs[i] || ''
+          if (!encForUser) {
             this.recordOutcome(hashTable,
-              { kind: 'skipped', message: '已取消扫码，未签到', needCaptcha: false }, restLabel, 'sign')
+              { kind: 'skipped', message: '未收集到该用户的签到码', needCaptcha: false }, label, 'sign')
+            continue
           }
-          break
+        } else {
+          const menu = this.otherUser.find(u => u.id === targetIds[i])
+          const scan = await this.scanQrEnc(menu ? menu.uname : label)
+          if (scan.status === 'cancel') {
+            // 用户取消或扫码器不可用：为当前及剩余用户补记结果后中断，避免结果对话框静默缺人
+            for (let j = i; j < targetIds.length; j++) {
+              const restLabel = targetIds[j] === 0 ? '主用户' : `用户${targetIds[j]}`
+              this.recordOutcome(hashTable,
+                { kind: 'skipped', message: '已取消扫码，未签到', needCaptcha: false }, restLabel, 'sign')
+            }
+            break
+          }
+          if (scan.status === 'format') {
+            promptAction.showToast({ message: '二维码内容缺少 enc，已跳过该用户', duration: 2000 })
+            this.recordOutcome(hashTable,
+              { kind: 'error', message: '二维码内容缺少 enc', needCaptcha: false }, label, 'sign')
+            continue
+          }
+          encForUser = scan.enc
         }
-        if (scan.status === 'format') {
-          promptAction.showToast({ message: '二维码内容缺少 enc，已跳过该用户', duration: 2000 })
-          this.recordOutcome(hashTable,
-            { kind: 'error', message: '二维码内容缺少 enc', needCaptcha: false }, label, 'sign')
-          continue
-        }
-        encForUser = scan.enc
       }
       try {
         const userInfo = await this.requireUser(targetIds[i])
@@ -1033,6 +1089,31 @@ export struct SignPage {
         hilog.error(DOMAIN, TAG, `Failed to start the scanning service: ${(error as Error).message}`);
         resolve(fail)
       }
+    })
+  }
+
+  /** 读取扫码器版本偏好：读取失败或未设置时回落到旧版（系统扫码页） */
+  private async loadScanModePref() {
+    try {
+      const context = this.getUIContext().getHostContext() as common.UIAbilityContext
+      const pref = await preferences.getPreferences(context, SETTINGS_PREF_NAME)
+      this.useCustomScanner = await pref.get(PREF_CUSTOM_SCAN_ENABLED, false) as boolean
+    } catch (e) {
+      this.useCustomScanner = false
+      hilog.error(DOMAIN, TAG, `Load scan mode pref failed: ${(e as Error).message}`)
+    }
+  }
+
+  /**
+   * 新版扫码器：打开全屏连续扫码面板，收集 expectedCount 个 enc
+   * 用户提前退出时返回已收集到的部分结果（长度可能小于 expectedCount）
+   */
+  private collectEncs(expected: number): Promise<string[]> {
+    this.collectedEncs = []
+    this.scanExpected = expected
+    this.customScanShow = true
+    return new Promise<string[]>((resolve) => {
+      this.scanEncResolver = resolve
     })
   }
 
