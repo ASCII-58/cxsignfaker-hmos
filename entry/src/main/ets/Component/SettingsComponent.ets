@@ -7,6 +7,7 @@ import { util } from '@kit.ArkTS';
 import { systemShare } from '@kit.ShareKit';
 import { DatabaseManager } from '../utils/DataBase';
 import { MsCaptchaDetector } from '../utils/detector/MsCaptchaDetector';
+import { PREF_CUSTOM_SCAN_ENABLED, SETTINGS_PREF_NAME } from '../utils/settingsKeys';
 
 const PREF_COLOR_MODE_KEY = 'app_color_mode';
 const PREF_MODEL_CAPTCHA_KEY = 'model_captcha_enabled';
@@ -169,6 +170,8 @@ export struct SettingsComponent {
   @State modelTestState: number = MODEL_TEST_IDLE;
   @State hdsMaterialLevel: number = HDS_LEVEL_GENTLE;
   @State cloudSyncEnabled: boolean = true;
+  /** 新版扫码器：默认关闭（旧版 = 系统扫码页逐人扫码） */
+  @State customScanEnabled: boolean = false;
   // 沉浸光感为 6.1(23) 特性：低版本系统无该材质，设置项随之隐藏
   private readonly supportFloatingBar: boolean = deviceInfo.sdkApiVersion >= 23;
   onImportDone: () => void = () => {};
@@ -183,6 +186,7 @@ export struct SettingsComponent {
     await this.loadModelCaptcha();
     await this.loadHdsMaterialLevel();
     await this.loadCloudSync();
+    await this.loadCustomScan();
   }
 
   async getVersion() {
@@ -266,6 +270,27 @@ export struct SettingsComponent {
       await pref.flush();
     } catch (e) {
       console.error('Failed to save cloud sync switch', e);
+    }
+  }
+
+  /** 新版扫码器开关：偏好持久化，SignerPage 在页面出现时读取（默认 false = 旧版） */
+  async loadCustomScan() {
+    try {
+      let pref = await preferences.getPreferences(this.context, SETTINGS_PREF_NAME);
+      this.customScanEnabled = await pref.get(PREF_CUSTOM_SCAN_ENABLED, false) as boolean;
+    } catch (e) {
+      this.customScanEnabled = false;
+    }
+  }
+
+  async saveCustomScan(enabled: boolean) {
+    this.customScanEnabled = enabled;
+    try {
+      let pref = await preferences.getPreferences(this.context, SETTINGS_PREF_NAME);
+      await pref.put(PREF_CUSTOM_SCAN_ENABLED, enabled);
+      await pref.flush();
+    } catch (e) {
+      console.error('Failed to save custom scan switch', e);
     }
   }
 
@@ -817,6 +842,31 @@ export struct SettingsComponent {
               .backgroundColor($r('app.color.card_background'))
               .borderRadius(16)
             }
+          }
+        }
+
+        // 签到：扫码器版本切换（默认旧版 = 系统扫码页）
+        ListItem() {
+          Column() {
+            this.SectionHeader('签到')
+            Column() {
+              Row() {
+                this.SettingTexts('新版扫码器', '应用内相机连续扫码，一次扫完全部用户的码；关闭则沿用系统扫码页逐人扫码')
+                Toggle({ type: ToggleType.Switch, isOn: this.customScanEnabled })
+                  .selectedColor($r('app.color.selected'))
+                  .onChange((value: boolean) => {
+                    // sheet 每次打开都会重建本组件，程序化回填同样触发 onChange；
+                    // 回填值必然与当前状态一致，用户真实拨动才会相异
+                    if (value === this.customScanEnabled) {
+                      return;
+                    }
+                    this.saveCustomScan(value)
+                  })
+              }
+              .width('100%').padding({ left: 16, right: 16, top: 13, bottom: 13 })
+            }
+            .backgroundColor($r('app.color.card_background'))
+            .borderRadius(16)
           }
         }
 
