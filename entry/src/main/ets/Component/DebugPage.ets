@@ -14,9 +14,12 @@ import { writeBufferToFile } from '../utils/httpClient';
 import { FaceApi, FaceResultParam, randomizeFaceImage } from '../utils/faceApi';
 import { randomizeImageInPlace } from '../utils/upload';
 import { sendTestCrashReport } from '../utils/CrashReporter';
+import { CustomScanPanel } from './CustomScanPanel';
+import { PREF_CUSTOM_SCAN_ENABLED, SETTINGS_PREF_NAME } from '../utils/settingsKeys';
 
 const ONNX_TEST_TAG = 'OnnxTest';
 
+const PREF_MODEL_CAPTCHA_ENABLED = 'model_captcha_enabled';
 const SIGN_TIME = 'sign_time';
 const VERSION = 'version';
 const SIGN_EXPIRY_MS = 12 * 30 * 24 * 60 * 60 * 1000;
@@ -75,9 +78,78 @@ export struct DebugPage {
   // 崩溃邮件发送链路测试（不崩溃，直接 POST 测试负载到 Worker）
   @State crashSending: boolean = false;
   @State crashSendLog: string = '尚未发送';
+  // ---- 实验性功能开关（从设置页迁入，仅调试面板可见）----
+  /** 新版扫码器：应用内相机连续扫码，关闭则沿用系统扫码页 */
+  @State customScanEnabled: boolean = false;
+  /** 模型自动完成滑块验证（Beta） */
+  @State modelCaptchaEnabled: boolean = false;
+  /** 扫码面板演示所需收集的码数（调试用，固定 1） */
+  @State scanDemoShow: boolean = false;
+  @State scanDemoLog: string = '尚未启动扫码演示';
 
   async aboutToAppear() {
     await this.loadInfo();
+    await this.loadExperimentalPrefs();
+  }
+
+  /** 读取实验性功能开关（与正式运行共用同一 preferences 键，改这里等于改真实行为） */
+  private async loadExperimentalPrefs() {
+    try {
+      const pref = await preferences.getPreferences(this.context, SETTINGS_PREF_NAME);
+      this.customScanEnabled = await pref.get(PREF_CUSTOM_SCAN_ENABLED, false) as boolean;
+      this.modelCaptchaEnabled = await pref.get(PREF_MODEL_CAPTCHA_ENABLED, false) as boolean;
+    } catch (e) {
+      hilog.warn(0x0000, 'DebugPage', 'load experimental prefs failed: %{public}s', (e as Error).message);
+    }
+  }
+
+  private async setCustomScanEnabled(enabled: boolean) {
+    this.customScanEnabled = enabled;
+    try {
+      const pref = await preferences.getPreferences(this.context, SETTINGS_PREF_NAME);
+      await pref.put(PREF_CUSTOM_SCAN_ENABLED, enabled);
+      await pref.flush();
+      promptAction.showToast({ message: enabled ? '已启用新版扫码器' : '已恢复系统扫码页' });
+    } catch (e) {
+      promptAction.showToast({ message: '保存失败' });
+    }
+  }
+
+  private async setModelCaptchaEnabled(enabled: boolean) {
+    this.modelCaptchaEnabled = enabled;
+    try {
+      const pref = await preferences.getPreferences(this.context, SETTINGS_PREF_NAME);
+      await pref.put(PREF_MODEL_CAPTCHA_ENABLED, enabled);
+      await pref.flush();
+    } catch (e) {
+      promptAction.showToast({ message: '保存失败' });
+    }
+  }
+
+  /** 开启模型自动验证前统一给 Beta 风险确认，与设置页原来的拦截逻辑一致 */
+  private confirmModelCaptcha(enabled: boolean) {
+    if (!enabled) {
+      this.setModelCaptchaEnabled(false);
+      return;
+    }
+    AlertDialog.show({
+      title: '开启模型自动验证？',
+      message: '该功能处于 Beta 阶段：遇到验证码时将调用本地模型自动完成滑块验证，可能失败或存在误判风险；' +
+        '失败时会退回手动拖动验证。确定开启吗？',
+      primaryButton: {
+        value: '取消',
+        action: () => {
+          this.modelCaptchaEnabled = false;
+        }
+      },
+      secondaryButton: {
+        value: '开启',
+        fontColor: $r('app.color.selected'),
+        action: () => {
+          this.setModelCaptchaEnabled(true);
+        }
+      }
+    });
   }
 
   aboutToDisappear() {
@@ -290,6 +362,23 @@ export struct DebugPage {
         .padding({ left: 16, right: 16 })
     }
     .width('100%')
+  }
+
+  /** 新版扫码面板演示：真实调用 customScan（会打开相机），用于验证重绘后的界面与识别链路 */
+  @Builder
+  ScanDemoBuilder() {
+    CustomScanPanel({
+      expectedCount: 1,
+      onEnc: (enc: string) => {
+        this.scanDemoLog = `已识别 enc（前12位）: ${enc.substring(0, 12)}…`;
+      },
+      onComplete: () => {
+        this.scanDemoShow = false;
+      },
+      onCancel: () => {
+        this.scanDemoShow = false;
+      }
+    })
   }
 
   private logLine(line: string) {
@@ -559,6 +648,10 @@ export struct DebugPage {
   /** 签到验证本地校验按钮见 build() 中「签到验证（本地校验）」卡片 */
 
   build() {
+    // 外层 Stack：扫码面板作为页面内覆盖层，不用 bindContentCover。
+    // 模态层（bindContentCover）挂载 XComponent 后约 8ms 就会被拆掉，
+    // 相机来不及 customScan.init，表现为面板一闪而过、报 scan is not initialized。
+    Stack() {
     Column() {
       Text('Debug 调试面板')
         .fontSize(24).fontWeight(FontWeight.Bold)
@@ -766,6 +859,112 @@ export struct DebugPage {
                   .fontColor($r('sys.color.ohos_id_color_text_secondary'))
                   .width('100%').padding({ left: 12, right: 12, bottom: 12 })
               }
+            }
+            .backgroundColor($r('sys.color.ohos_id_color_list_card_bg'))
+            .borderRadius(16)
+          }
+        }
+
+        // 实验性功能：从设置页迁入，普通用户不可见，调试期统一在此控制
+        ListItem() {
+          Column() {
+            Text('实验性功能')
+              .fontSize(14)
+              .fontColor($r('sys.color.ohos_id_color_text_secondary'))
+              .width('100%')
+              .margin({ bottom: 8, left: 4 })
+
+            Column() {
+              Row() {
+                Column({ space: 3 }) {
+                  Text('新版扫码器')
+                    .fontSize(16)
+                    .fontColor($r('sys.color.ohos_id_color_text_primary'))
+                  Text('应用内相机连续扫码，一次扫完全部用户的码；关闭则沿用系统扫码页')
+                    .fontSize(11)
+                    .fontColor($r('sys.color.ohos_id_color_text_secondary'))
+                    .maxLines(2)
+                }
+                .alignItems(HorizontalAlign.Start)
+                .layoutWeight(1)
+
+                Toggle({ type: ToggleType.Switch, isOn: this.customScanEnabled })
+                  .selectedColor($r('app.color.selected'))
+                  .onChange((value: boolean) => {
+                    // 程序化回填与当前状态一致时忽略，只有用户真实拨动才写偏好
+                    if (value === this.customScanEnabled) {
+                      return;
+                    }
+                    this.setCustomScanEnabled(value);
+                  })
+              }
+              .width('100%').padding(12)
+
+              Divider()
+                .color($r('sys.color.ohos_id_color_list_separator'))
+                .margin({ left: 12, right: 12 })
+
+              Row() {
+                Column({ space: 3 }) {
+                  Row({ space: 6 }) {
+                    Text('模型自动验证')
+                      .fontSize(16)
+                      .fontColor($r('sys.color.ohos_id_color_text_primary'))
+                    Text('Beta')
+                      .fontSize(10)
+                      .fontColor(Color.White)
+                      .padding({ left: 5, right: 5, top: 1, bottom: 1 })
+                      .borderRadius(5)
+                      .backgroundColor($r('app.color.beta_badge'))
+                  }
+                  Text('使用本地模型自动完成滑块验证码')
+                    .fontSize(11)
+                    .fontColor($r('sys.color.ohos_id_color_text_secondary'))
+                }
+                .alignItems(HorizontalAlign.Start)
+                .layoutWeight(1)
+
+                Toggle({ type: ToggleType.Switch, isOn: this.modelCaptchaEnabled })
+                  .selectedColor($r('app.color.selected'))
+                  .onChange((value: boolean) => {
+                    if (value === this.modelCaptchaEnabled) {
+                      return;
+                    }
+                    this.confirmModelCaptcha(value);
+                  })
+              }
+              .width('100%').padding(12)
+
+              Divider()
+                .color($r('sys.color.ohos_id_color_list_separator'))
+                .margin({ left: 12, right: 12 })
+
+              Row() {
+                Column({ space: 3 }) {
+                  Text('扫码面板预览')
+                    .fontSize(16)
+                    .fontColor($r('sys.color.ohos_id_color_text_primary'))
+                  Text('真实调用相机，验证界面与识别（不需要选择用户）')
+                    .fontSize(11)
+                    .fontColor($r('sys.color.ohos_id_color_text_secondary'))
+                }
+                .alignItems(HorizontalAlign.Start)
+                .layoutWeight(1)
+
+                Button('打开')
+                  .fontSize(13)
+                  .height(32)
+                  .onClick(() => {
+                    this.scanDemoShow = true;
+                  })
+              }
+              .width('100%').padding(12)
+
+              Text(this.scanDemoLog)
+                .fontSize(11)
+                .fontColor($r('sys.color.ohos_id_color_text_tertiary'))
+                .width('100%')
+                .padding({ left: 12, right: 12, bottom: 12 })
             }
             .backgroundColor($r('sys.color.ohos_id_color_list_card_bg'))
             .borderRadius(16)
@@ -1063,5 +1262,12 @@ export struct DebugPage {
       backgroundColor: $r('sys.color.ohos_id_color_dialog_bg'),
       detents: [SheetSize.MEDIUM, SheetSize.LARGE]
     })
+
+      if (this.scanDemoShow) {
+        this.ScanDemoBuilder()
+      }
+    }
+    .width('100%')
+    .height('100%')
   }
 }

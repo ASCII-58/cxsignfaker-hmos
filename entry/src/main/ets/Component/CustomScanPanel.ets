@@ -51,8 +51,44 @@ export struct CustomScanPanel {
   /** 待执行的自动恢复定时器句柄，-1 表示无 */
   private resumeTimer: number = -1;
 
+  aboutToAppear() {
+    hilog.info(DOMAIN, TAG, 'Custom scan panel appeared');
+  }
+
   aboutToDisappear() {
     this.teardown();
+  }
+
+  /**
+   * 底部单图标动作：无边框、无底色，仅图标 + 半透明点击热区
+   * 相机是全屏取景，任何容器底色都会形成遮挡块，因此只用裸图标
+   */
+  @Builder
+  IconAction(icon: Resource, color: Resource, enabled: boolean, action: () => void) {
+    Button() {
+      SymbolGlyph(icon)
+        .fontSize(26)
+        .fontColor([color])
+        .renderingStrategy(SymbolRenderingStrategy.SINGLE)
+    }
+    .width(56)
+    .height(56)
+    .borderRadius(28)
+    .backgroundColor(Color.Transparent)
+    .enabled(enabled)
+    .opacity(enabled ? 1 : 0.3)
+    .onClick(() => {
+      action();
+    })
+  }
+
+  /** 进度分段：前 scannedCount 位为已收，其余待收 */
+  private progressCells(): boolean[] {
+    const cells: boolean[] = [];
+    for (let i = 0; i < this.expectedCount; i++) {
+      cells.push(i < this.scannedCount);
+    }
+    return cells;
   }
 
   private async ensureCameraPermission(): Promise<boolean> {
@@ -247,66 +283,122 @@ export struct CustomScanPanel {
           this.teardown();
         })
 
-      // 扫描取景框
-      Column()
-        .width(240)
-        .height(240)
-        .borderRadius(16)
-        .border({ width: 2, color: $r('app.color.selected') })
-
-      // 顶部进度与状态
-      Column({ space: 8 }) {
-        Text(`连续扫码 ${this.scannedCount}/${this.expectedCount}`)
-          .fontSize(20)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.text_on_primary'))
-        Text(this.statusText)
-          .fontSize(14)
-          .fontColor($r('app.color.text_on_primary'))
-          .opacity(0.86)
-          .textAlign(TextAlign.Center)
-          .padding({ left: 24, right: 24 })
-          .maxLines(3)
-        Button(this.flashlightOn ? '关闭补光' : '开启补光')
-          .fontSize(13)
-          .fontColor($r('app.color.text_on_primary'))
-          .backgroundColor($r('app.color.class_button'))
-          .height(34)
-          .padding({ left: 14, right: 14 })
-          .enabled(!this.fatalError)
-          .onClick(() => {
-            this.toggleFlashlight();
-          })
-      }
-      .alignItems(HorizontalAlign.Center)
-      .offset({ y: -220 })
-
-      // 底部操作区
-      Row({ space: 16 }) {
-        Button('继续扫描')
-          .fontSize(15)
-          .fontColor($r('app.color.text_on_primary'))
-          .backgroundColor($r('app.color.class_button'))
-          .height(44)
-          .layoutWeight(1)
-          .enabled(this.scannedCount < this.expectedCount && !this.fatalError)
-          .onClick(() => {
-            this.resumeNow();
-          })
-        Button('完成 / 退出')
-          .fontSize(15)
-          .fontColor($r('app.color.text_on_primary'))
-          .backgroundColor($r('app.color.unsignable'))
-          .height(44)
-          .layoutWeight(1)
-          .onClick(() => {
-            this.teardown();
-            this.onCancel?.();
-          })
+      // 取景层：四角描边紧贴屏幕边缘，取景内容占满全屏（不再收成中间小方框）
+      Stack() {
+        // 左上
+        Column()
+          .width(42).height(42)
+          .border({ width: { top: 3, left: 3 }, color: $r('app.color.text_on_primary') })
+          .borderRadius({ topLeft: 14 })
+          .position({ x: 0, y: 0 })
+        // 右上
+        Column()
+          .width(42).height(42)
+          .border({ width: { top: 3, right: 3 }, color: $r('app.color.text_on_primary') })
+          .borderRadius({ topRight: 14 })
+          .position({ x: '100%', y: 0 })
+          .translate({ x: '-100%' })
+        // 左下
+        Column()
+          .width(42).height(42)
+          .border({ width: { bottom: 3, left: 3 }, color: $r('app.color.text_on_primary') })
+          .borderRadius({ bottomLeft: 14 })
+          .position({ x: 0, y: '100%' })
+          .translate({ y: '-100%' })
+        // 右下
+        Column()
+          .width(42).height(42)
+          .border({ width: { bottom: 3, right: 3 }, color: $r('app.color.text_on_primary') })
+          .borderRadius({ bottomRight: 14 })
+          .position({ x: '100%', y: '100%' })
+          .translate({ x: '-100%', y: '-100%' })
       }
       .width('100%')
-      .padding({ left: 24, right: 24 })
-      .offset({ y: 260 })
+      .height('100%')
+      .padding(3)
+      .opacity(this.fatalError ? 0.3 : 1)
+
+      // 顶/底两层用 Column 撑满高度分配，避免 position/translate 依赖父尺寸计算
+      Column() {
+        // 顶部状态层：进度 + 文案
+        Column({ space: 10 }) {
+        Row({ space: 8 }) {
+          Text('连续扫码')
+            .fontSize(13)
+            .fontColor($r('app.color.text_on_primary'))
+            .opacity(0.7)
+          Text(`${this.scannedCount}/${this.expectedCount}`)
+            .fontSize(13)
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('app.color.text_on_primary'))
+        }
+        .alignItems(VerticalAlign.Center)
+
+        Text(this.statusText)
+          .fontSize(15)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_on_primary'))
+          .textAlign(TextAlign.Center)
+          .maxLines(3)
+          .padding({ left: 20, right: 20 })
+
+        // 进度分段条：每个待收码一位，已收亮、未收暗
+        Row({ space: 6 }) {
+          ForEach(this.progressCells(), (done: boolean, index: number) => {
+            Column()
+              .width(28)
+              .height(4)
+              .borderRadius(2)
+              .backgroundColor(done ? $r('app.color.text_on_primary') : $r('app.color.text_on_primary'))
+              .opacity(done ? 1 : 0.28)
+          }, (_done: boolean, index: number) => `cell${index}`)
+        }
+      }
+      .alignItems(HorizontalAlign.Center)
+      .width('100%')
+      .padding({ top: 58, left: 24, right: 24 })
+
+      Blank()
+
+      // 底部操作区：纯图标、无边框、无底色承载，相机画面不做任何遮挡
+      Row() {
+        // 补光
+        this.IconAction(
+          this.flashlightOn ? $r('sys.symbol.lightbulb_fill') : $r('sys.symbol.lightbulb'),
+          this.flashlightOn ? $r('app.color.beta_badge') : $r('app.color.text_on_primary'),
+          !this.fatalError,
+          (): void => { this.toggleFlashlight(); }
+        )
+
+        Blank()
+
+        // 继续扫描：仅在还有待收码时可用
+        this.IconAction(
+          $r('sys.symbol.arrow_clockwise'),
+          $r('app.color.text_on_primary'),
+          this.scannedCount < this.expectedCount && !this.fatalError,
+          (): void => { this.resumeNow(); }
+        )
+
+        Blank()
+
+        // 退出
+        this.IconAction(
+          $r('sys.symbol.xmark'),
+          $r('app.color.text_on_primary'),
+          true,
+          (): void => {
+            this.teardown();
+            this.onCancel?.();
+          }
+        )
+      }
+      .width('100%')
+      .padding({ left: 44, right: 44, top: 18, bottom: 42 })
+      }
+      .width('100%')
+      .height('100%')
+      .justifyContent(FlexAlign.SpaceBetween)
     }
     .width('100%')
     .height('100%')

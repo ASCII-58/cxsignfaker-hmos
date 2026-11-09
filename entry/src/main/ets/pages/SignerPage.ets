@@ -28,6 +28,13 @@ import { PREF_CUSTOM_SCAN_ENABLED, SETTINGS_PREF_NAME } from '../utils/settingsK
 const TAG = 'SignerPage';
 const DOMAIN = 0x0008;
 
+/**
+ * 打开扫码面板前等待的时长
+ * 「确认签到」AlertDialog 关闭动画期间挂载扫码面板会被遮罩收尾连带拆掉，
+ * 必须等对话框彻底关闭（实测动画约 100~300ms）后再打开
+ */
+const CUSTOM_SCAN_AFTER_DIALOG_MS = 400;
+
 /** 导航入口 Builder */
 @Builder
 export function initSignInfo(name: string, activityInfo: ActivityInfo) {
@@ -79,7 +86,7 @@ export struct SignPage {
   @State pendingSignCode: string = ''
   /** 新版扫码器开关：true = 自定义界面连续扫码，false（默认）= 系统扫码页逐人扫码 */
   @State useCustomScanner: boolean = false
-  /** 新版扫码面板（bindContentCover 全屏覆盖）显示状态 */
+  /** 新版扫码面板（页面内 Stack 覆盖层）显示状态 */
   @State customScanShow: boolean = false
   /** 本轮需要收集的码值数量 */
   @State scanExpected: number = 0
@@ -516,7 +523,12 @@ export struct SignPage {
     .width('100%')
   }
 
-  /** 新版扫码面板：全屏覆盖，连续收集 enc，面板关闭时统一回传 */
+  /**
+   * 新版扫码面板：页面内 Stack 覆盖层（不走 bindContentCover）
+   * 必须避开模态栈：扫码面板若与「确认签到」AlertDialog 的关闭动画同时挂载，
+   * 会被对话框收尾时连同遮罩一起拆掉（实测挂载到销毁仅 7ms，相机来不及 init），
+   * 表现为「未收集到该用户的签到码」。改为普通覆盖层后只受页面生命周期影响。
+   */
   @Builder
   CustomScanBuilder() {
     CustomScanPanel({
@@ -525,10 +537,10 @@ export struct SignPage {
         this.collectedEncs.push(enc)
       },
       onComplete: () => {
-        this.customScanShow = false
+        this.finishCustomScan()
       },
       onCancel: () => {
-        this.customScanShow = false
+        this.finishCustomScan()
       }
     })
   }
@@ -555,6 +567,9 @@ export struct SignPage {
   build() {
     NavDestination() {
       if (this.activityInfo) {
+        // 外层 Stack：新版扫码面板作为页面内覆盖层叠在内容之上，
+        // 不占用模态栈（模态栈会与「确认签到」AlertDialog 的关闭动画打架）
+        Stack() {
         Column() {
           Column() {
             Row() {
@@ -681,15 +696,13 @@ export struct SignPage {
             dismissAction.dismiss()
           }
         })
-        .bindContentCover($$this.customScanShow, this.CustomScanBuilder, {
-          modalTransition: ModalTransition.DEFAULT,
-          onDisappear: () => {
-            // 面板关闭（收满或用户退出）时统一回传已收集的码值，避免 collectEncs 的 Promise 永不结束
-            const encs = this.collectedEncs.slice()
-            this.scanEncResolver?.(encs)
-            this.scanEncResolver = null
-          }
-        })
+
+        if (this.customScanShow) {
+          this.CustomScanBuilder()
+        }
+        }
+        .width('100%')
+        .height('100%')
       } else {
         Column() {
           Text('参数加载失败').fontColor($r('sys.color.ohos_id_color_text_tertiary'))
@@ -982,7 +995,7 @@ export struct SignPage {
     // 旧版：在循环内为每位用户单独拉起系统扫码页
     let collectedEncs: string[] = []
     if (isQrScan && this.useCustomScanner) {
-      collectedEncs = await this.collectEncs(targetIds.length)
+      collectedEncs = await this.openCustomScan(targetIds.length)
       hilog.info(DOMAIN, TAG, `Custom scan collected ${collectedEncs.length}/${targetIds.length} enc`)
     }
 
@@ -1111,10 +1124,31 @@ export struct SignPage {
   private collectEncs(expected: number): Promise<string[]> {
     this.collectedEncs = []
     this.scanExpected = expected
-    this.customScanShow = true
+    this.scanEncResolver = null
     return new Promise<string[]>((resolve) => {
       this.scanEncResolver = resolve
     })
+  }
+
+  /**
+   * 打开扫码覆盖层
+   * 调用方在「确认签到」对话框回调里触发，此时对话框正在关闭：
+   * 必须等它彻底关闭后再挂载扫码面板，否则面板会被对话框的遮罩收尾连带拆掉。
+   */
+  private async openCustomScan(expected: number): Promise<string[]> {
+    // 等两帧 + 一段余量，确保 AlertDialog 关闭动画（约 100~300ms）完全结束
+    await new Promise<void>((resolve) => setTimeout(resolve, CUSTOM_SCAN_AFTER_DIALOG_MS))
+    const pending = this.collectEncs(expected)
+    this.customScanShow = true
+    return pending
+  }
+
+  /** 面板收满或用户退出：关闭覆盖层并回传已收集的码值 */
+  private finishCustomScan() {
+    this.customScanShow = false
+    const encs = this.collectedEncs.slice()
+    this.scanEncResolver?.(encs)
+    this.scanEncResolver = null
   }
 
   /**
