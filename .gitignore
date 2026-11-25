@@ -51,3 +51,21 @@ hvigorw.bat.test/
 
 # local harness session logs (contain transient API keys)
 session-*.md
+
+# Worker sources live in an independent workspace
+/cloudflare-worker/
+
+# AI / agent tool directories
+/.opencode/
+/.workbuddy/
+/.zcode/
+/.rules/
+/.playwright-mcp/
+/.appanalyzer/
+/.serena/
+/.claude/
+/.codex/
+/.cursor/
+/.aider*
+/.test/
+/_temp/
