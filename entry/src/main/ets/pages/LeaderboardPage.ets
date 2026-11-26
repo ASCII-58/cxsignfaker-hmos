@@ -1,11 +1,14 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { LengthMetrics, promptAction } from '@kit.ArkUI';
+import { common } from '@kit.AbilityKit';
+import { preferences } from '@kit.ArkData';
 import { deviceInfo } from '@kit.BasicServicesKit';
 import { HdsNavDestination, ScrollEffectType } from '@kit.UIDesignKit';
 // hdsMaterial 是 6.1(23) API：API<23 系统无该导出，静态 import 值会启动即崩（SignStatsPage 同款处理），
 // 这里只做类型导入，枚举值用常量
 import type { hdsMaterial } from '@kit.UIDesignKit';
 import { LeaderboardEntry, LeaderboardReporter } from '../utils/LeaderboardReporter';
+import { SETTINGS_PREF_NAME, PREF_LB_UUID } from '../utils/settingsKeys';
 
 const TAG = 'LeaderboardPage';
 const DOMAIN = 0x0009;
@@ -28,13 +31,70 @@ function rankColor(rank: number): Resource {
   return $r('app.color.secondary_text')
 }
 
+function displaySchool(value: string): string {
+  const school = (value ?? '').trim();
+  if (school.endsWith('HIDE')) {
+    return '已隐藏学校信息';
+  }
+  return school === '' ? '未知学校' : school;
+}
+
+/** 榜单详情弹窗：对齐上游的逐类型次数明细 */
+@CustomDialog
+struct RankDetailDialog {
+  controller?: CustomDialogController
+  entry?: LeaderboardEntry
+
+  @Builder
+  DetailLine(label: string, value: string) {
+    Row() {
+      Text(label).fontSize(13).fontColor($r('app.color.secondary_text'))
+      Blank()
+      Text(value).fontSize(13).fontColor($r('app.color.primary_text'))
+    }
+    .width('100%')
+    .margin({ top: 8 })
+  }
+
+  build() {
+    Column() {
+      Text(this.entry?.name ?? '')
+        .fontSize(20).fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.primary_text')).width('100%')
+      Scroll() {
+        Column() {
+          this.DetailLine('学校', displaySchool(this.entry?.school_name ?? ''))
+          this.DetailLine('拍照签到次数', `${this.entry?.photo_sign ?? 0}`)
+          this.DetailLine('手势签到次数', `${this.entry?.gesture_sign ?? 0}`)
+          this.DetailLine('点击签到次数', `${this.entry?.click_sign ?? 0}`)
+          this.DetailLine('位置签到次数', `${this.entry?.location_sign ?? 0}`)
+          this.DetailLine('二维码签到次数', `${this.entry?.qrcode_sign ?? 0}`)
+          this.DetailLine('签到码签到次数', `${this.entry?.password_sign ?? 0}`)
+          this.DetailLine('代签次数', `${this.entry?.other_sign ?? 0}`)
+          this.DetailLine('总签到次数', `${this.entry?.total_sign_count ?? 0}`)
+          this.DetailLine('最新更新时间', this.entry?.latest_date ?? '')
+        }
+        .width('100%')
+      }
+      .width('100%').constraintSize({ maxHeight: '55%' }).scrollBar(BarState.Off)
+      Button('关闭')
+        .width('100%').height(44).borderRadius(22).margin({ top: 16 })
+        .backgroundColor($r('app.color.class_button'))
+        .fontColor($r('app.color.text_on_primary'))
+        .onClick(() => { this.controller?.close() })
+    }
+    .width('86%').padding(20).backgroundColor($r('app.color.dialog')).borderRadius(24)
+    .alignItems(HorizontalAlign.Start)
+  }
+}
+
 @Builder
 export function initLeaderboard(name: string) {
   LeaderboardPage()
 }
 
 /**
- * 签到排行榜页：展示全平台用户按「当前连续天数」排序的云端榜单
+ * 签到排行榜页：按累计签到次数展示全平台匿名榜单
  * （数据来自 Cloudflare Worker + D1 公开只读接口 /leaderboard，由 LeaderboardReporter 拉取）
  */
 @Component
@@ -42,14 +102,28 @@ struct LeaderboardPage {
   @State entries: LeaderboardEntry[] = [];
   @State isLoading: boolean = true;
   @State isRefreshing: boolean = false;
+  @State selfUuid: string = '';
   @StorageProp('statusBarHeight') statusBarHeight: number = 0; // EntryAbility 实测的状态栏高度
   private pathInfos: NavPathStack = new NavPathStack();
   private listScroller: Scroller = new Scroller(); // 标题栏渐变模糊的滚动绑定源
   // 6.1(23) 起支持沉浸光感材质，低版本系统走默认样式（首页同款）
   private readonly supportFloatingBar: boolean = deviceInfo.sdkApiVersion >= 23
+  private detailController: CustomDialogController | undefined = undefined
+
+  /** 每次点击重新构建控制器，把当前行注入弹窗（controller 在构造时捕获 builder 参数） */
+  private showDetail(entry: LeaderboardEntry) {
+    this.detailController = new CustomDialogController({
+      builder: RankDetailDialog({ entry: entry }),
+      autoCancel: true
+    })
+    this.detailController.open()
+  }
 
   private async loadData() {
     try {
+      const context = this.getUIContext().getHostContext() as common.UIAbilityContext
+      const pref = await preferences.getPreferences(context, SETTINGS_PREF_NAME)
+      this.selfUuid = await pref.get(PREF_LB_UUID, '') as string
       this.entries = await LeaderboardReporter.fetchLeaderboard(LEADERBOARD_LIMIT)
     } catch (e) {
       hilog.error(DOMAIN, TAG, `Failed to load leaderboard: ${(e as Error).message}`)
@@ -64,10 +138,10 @@ struct LeaderboardPage {
   @Builder
   SummaryCard() {
     Column() {
-      Text('排行榜')
+      Text('签到次数排行榜')
         .fontSize(16).fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.primary_text')).width('100%')
-      Text(`共 ${this.entries.length} 人上榜 · 按「当前连续天数」排序，同天比累计次数`)
+      Text(`统计人数 ${this.entries.length} · 按累计签到次数排序`)
         .fontSize(12).fontColor($r('app.color.secondary_text'))
         .width('100%').margin({ top: 6 })
     }
@@ -77,41 +151,54 @@ struct LeaderboardPage {
     .borderRadius(14)
   }
 
+  /** 行内就是列定义（与上游一致）：左名次/展示名/学校，右总签到次数/代签次数 */
   @Builder
-  RankItem(entry: LeaderboardEntry, rank: number) {
+  RankItem(entry: LeaderboardEntry, rankText: string, isSelf: boolean) {
     Row() {
-      Text(`${rank}`)
-        .fontSize(16).fontWeight(FontWeight.Bold)
-        .fontColor(rankColor(rank))
-        .width(32).textAlign(TextAlign.Center)
+      Text(`${rankText}`)
+        .fontSize(18).fontWeight(FontWeight.Bold)
+        .fontColor(rankColor(Number(rankText.replace('.', '')) || 0))
+        .width(36)
+        .maxLines(1)
       Column() {
-        Text(entry.display_name)
-          .fontSize(15).fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.primary_text'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-        Text(`累计 ${entry.total_signs} 次（${entry.total_days} 天） · 本周 ${entry.week_signs} 次 · 最长连续 ${entry.longest_streak} 天`)
-          .fontSize(12).fontColor($r('app.color.secondary_text'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .margin({ top: 3 })
+        Row() {
+          Text(entry.name)
+            .fontSize(14)
+            .fontColor($r('app.color.primary_text'))
+            .fontWeight(isSelf ? FontWeight.Bold : FontWeight.Normal)
+            .maxLines(2)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+          if (isSelf) {
+            Text(' (你)')
+              .fontSize(14).fontWeight(FontWeight.Bold)
+              .fontColor($r('app.color.primary_text'))
+          }
+        }
+        Text(displaySchool(entry.school_name))
+          .fontSize(10).fontColor($r('app.color.secondary_text'))
+          .maxLines(1).margin({ top: 2 })
       }
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
       .margin({ left: 8 })
 
       Column() {
-        Text(`${entry.streak_days}`)
-          .fontSize(18).fontWeight(FontWeight.Bold)
-          .fontColor($r('app.color.primary_text'))
-        Text('连续天数')
-          .fontSize(10).fontColor($r('app.color.secondary_text'))
-          .margin({ top: 2 })
+        Row() {
+          Text('总签到次数: ').fontSize(11).fontColor($r('app.color.secondary_text'))
+          Text(`${entry.total_sign_count}`)
+            .fontSize(17).fontWeight(FontWeight.Bold)
+            .fontColor($r('app.color.primary_text'))
+        }
+        Text(`代签次数: ${entry.other_sign}`)
+          .fontSize(10).fontColor($r('app.color.secondary_text')).margin({ top: 2 })
       }
       .alignItems(HorizontalAlign.End)
     }
     .width('100%')
     .padding({ top: 10, bottom: 10 })
+    .onClick(() => {
+      this.showDetail(entry)
+    })
   }
 
   build() {
@@ -129,7 +216,7 @@ struct LeaderboardPage {
         Column() {
           Text('暂无上榜记录')
             .fontSize(16).fontColor($r('app.color.primary_text'))
-          Text('完成一次云端签到后，这里将展示全平台排行榜')
+          Text('完成一次签到并上传后，这里将展示全平台排行榜')
             .fontSize(13).fontColor($r('app.color.secondary_text'))
             .margin({ top: 8 })
         }
@@ -153,15 +240,20 @@ struct LeaderboardPage {
                       Divider()
                         .color($r('app.color.class_icon_border'))
                     }
-                    this.RankItem(entry, index + 1)
+                    this.RankItem(entry, `${index + 1}.`, entry.uuid === this.selfUuid)
                   }
                   .width('100%')
-                }, (entry: LeaderboardEntry) => entry.uid.toString())
+                }, (entry: LeaderboardEntry) => entry.uuid)
               }
               .padding(14).width('100%')
               .backgroundColor($r('app.color.card_background'))
               .borderRadius(14)
             }.width('100%').padding({ left: 16, right: 16 }).margin({ top: 10 })
+            ListItem() {
+              Text(`共计签到次数 ${this.entries.reduce((sum: number, e: LeaderboardEntry) => sum + e.total_sign_count, 0)}`)
+                .fontSize(12).fontColor($r('app.color.secondary_text'))
+                .width('100%').textAlign(TextAlign.Center).margin({ top: 14 })
+            }.width('100%').padding({ left: 16, right: 16 })
             ListItem() {
               Column().height(24)
             }.width('100%')

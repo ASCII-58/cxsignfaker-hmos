@@ -7,7 +7,8 @@ import { util } from '@kit.ArkTS';
 import { systemShare } from '@kit.ShareKit';
 import { DatabaseManager } from '../utils/DataBase';
 import { MsCaptchaDetector } from '../utils/detector/MsCaptchaDetector';
-import { PREF_CUSTOM_SCAN_ENABLED, SETTINGS_PREF_NAME } from '../utils/settingsKeys';
+import { PREF_CUSTOM_SCAN_ENABLED, SETTINGS_PREF_NAME, PREF_LB_SYNC_ENABLED, PREF_LB_DISPLAY_NAME,
+  PREF_LB_HIDE_SCHOOL } from '../utils/settingsKeys';
 
 const PREF_COLOR_MODE_KEY = 'app_color_mode';
 const PREF_MODEL_CAPTCHA_KEY = 'model_captcha_enabled';
@@ -22,7 +23,6 @@ const HDS_LEVEL_EXQUISITE = 0;
 const HDS_LEVEL_GENTLE = 1;
 const HDS_LEVEL_SMOOTH = 2;
 const PREF_HDS_LEVEL_KEY = 'hds_material_level';
-const PREF_LB_SYNC_KEY = 'lb_sync_enabled';
 
 interface MaterialLevelOption {
   level: number;
@@ -150,6 +150,58 @@ struct ChangelogDialog {
   }
 }
 
+/** 排行榜展示名弹窗：只存用户自定义昵称，绝不上传真实姓名 */
+@CustomDialog
+struct LbDisplayNameDialog {
+  controller?: CustomDialogController
+  value: string = ''
+  onSave: (name: string) => void = () => {}
+
+  @State draft: string = ''
+
+  aboutToAppear() {
+    this.draft = this.value
+  }
+
+  build() {
+    Column() {
+      Text('修改展示名称')
+        .fontSize(20).fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.primary_text')).width('100%')
+      Text('排行榜展示名称指在榜单中展示的昵称，留空则使用「****手机号后两位 用户」。修改次日生效，不影响学习通昵称。')
+        .fontSize(12).fontColor($r('app.color.secondary_text'))
+        .width('100%').lineHeight(18).margin({ top: 10 })
+      TextInput({ text: this.draft, placeholder: '****XX 用户' })
+        .fontSize(15)
+        .fontColor($r('app.color.primary_text'))
+        .placeholderColor($r('app.color.text_placeholder'))
+        .backgroundColor($r('app.color.text_field_bg'))
+        .borderRadius(10)
+        .width('100%')
+        .margin({ top: 16 })
+        .onChange((v: string) => { this.draft = v })
+      Row({ space: 12 }) {
+        Button('取消')
+          .layoutWeight(1).height(44).borderRadius(22)
+          .backgroundColor($r('app.color.text_field_bg'))
+          .fontColor($r('app.color.primary_text'))
+          .onClick(() => { this.controller?.close() })
+        Button('保存')
+          .layoutWeight(1).height(44).borderRadius(22)
+          .backgroundColor($r('app.color.class_button'))
+          .fontColor($r('app.color.text_on_primary'))
+          .onClick(() => {
+            this.onSave(this.draft.trim().slice(0, 32))
+            this.controller?.close()
+          })
+      }
+      .width('100%').margin({ top: 20 })
+    }
+    .width('88%').padding(20).backgroundColor($r('app.color.dialog')).borderRadius(24)
+    .alignItems(HorizontalAlign.Start)
+  }
+}
+
 @Component
 export struct SettingsComponent {
   @State version: string = '';
@@ -166,12 +218,16 @@ export struct SettingsComponent {
   private pressAreas: Map<number, number[]> = new Map();
   @State hdsMaterialLevel: number = HDS_LEVEL_GENTLE;
   @State cloudSyncEnabled: boolean = true;
+  @State lbDisplayName: string = '';
+  @State lbHideSchool: boolean = false;
   // 沉浸光感为 6.1(23) 特性：低版本系统无该材质，设置项随之隐藏
   private readonly supportFloatingBar: boolean = deviceInfo.sdkApiVersion >= 23;
   onImportDone: () => void = () => {};
   private context = getContext(this) as common.UIAbilityContext;
   // 更新日志弹窗控制器：showChangelog 里按需重建（builder 参数在创建时捕获）
   private changelogDialog: CustomDialogController | undefined = undefined;
+  // 排行榜展示名弹窗：打开时用当前值重建，保存回调写回偏好
+  private lbNameDialog: CustomDialogController | undefined = undefined;
 
   async aboutToAppear() {
     this.getVersion();
@@ -179,6 +235,7 @@ export struct SettingsComponent {
     this.syncThumb();
     await this.loadHdsMaterialLevel();
     await this.loadCloudSync();
+    await this.loadLeaderboardPrefs();
   }
 
   async getVersion() {
@@ -236,8 +293,8 @@ export struct SettingsComponent {
   /** 云端排行榜同步开关：偏好持久化 + 经 AppStorage 下发给 LeaderboardReporter（默认开启） */
   async loadCloudSync() {
     try {
-      let pref = await preferences.getPreferences(this.context, 'settings');
-      this.cloudSyncEnabled = await pref.get(PREF_LB_SYNC_KEY, true) as boolean;
+      let pref = await preferences.getPreferences(this.context, SETTINGS_PREF_NAME);
+      this.cloudSyncEnabled = await pref.get(PREF_LB_SYNC_ENABLED, true) as boolean;
     } catch (e) {
       this.cloudSyncEnabled = true;
     }
@@ -248,11 +305,45 @@ export struct SettingsComponent {
     this.cloudSyncEnabled = enabled;
     AppStorage.setOrCreate('lbSyncEnabled', enabled);
     try {
-      let pref = await preferences.getPreferences(this.context, 'settings');
-      await pref.put(PREF_LB_SYNC_KEY, enabled);
+      let pref = await preferences.getPreferences(this.context, SETTINGS_PREF_NAME);
+      await pref.put(PREF_LB_SYNC_ENABLED, enabled);
       await pref.flush();
     } catch (e) {
       console.error('Failed to save cloud sync switch', e);
+    }
+  }
+
+  /** 排行榜展示名 / 隐藏学校：与 LeaderboardReporter 共用同一份偏好键 */
+  async loadLeaderboardPrefs() {
+    try {
+      let pref = await preferences.getPreferences(this.context, SETTINGS_PREF_NAME);
+      this.lbDisplayName = await pref.get(PREF_LB_DISPLAY_NAME, '') as string;
+      this.lbHideSchool = await pref.get(PREF_LB_HIDE_SCHOOL, false) as boolean;
+    } catch (e) {
+      console.error('Failed to load leaderboard prefs', e);
+    }
+  }
+
+  async saveDisplayName(name: string) {
+    const trimmed = name.trim().slice(0, 32);
+    this.lbDisplayName = trimmed;
+    try {
+      let pref = await preferences.getPreferences(this.context, SETTINGS_PREF_NAME);
+      await pref.put(PREF_LB_DISPLAY_NAME, trimmed);
+      await pref.flush();
+    } catch (e) {
+      console.error('Failed to save display name', e);
+    }
+  }
+
+  async saveHideSchool(hide: boolean) {
+    this.lbHideSchool = hide;
+    try {
+      let pref = await preferences.getPreferences(this.context, SETTINGS_PREF_NAME);
+      await pref.put(PREF_LB_HIDE_SCHOOL, hide);
+      await pref.flush();
+    } catch (e) {
+      console.error('Failed to save hide school', e);
     }
   }
 
@@ -488,6 +579,18 @@ export struct SettingsComponent {
         confirm: { value: '知道了', action: () => {} }
       });
     }
+  }
+
+  private showDisplayNameDialog() {
+    this.lbNameDialog = new CustomDialogController({
+      builder: LbDisplayNameDialog({
+        value: this.lbDisplayName,
+        onSave: (name: string) => { this.saveDisplayName(name) }
+      }),
+      autoCancel: true,
+      customStyle: true
+    });
+    this.lbNameDialog.open();
   }
 
   @Builder
@@ -775,13 +878,13 @@ export struct SettingsComponent {
           }
         }
 
-        // 排行榜：签到记录云端同步开关（实时上报 + 启动自动补录）
+        // 排行榜：每日匿名聚合上报（仅主用户）+ 展示名 / 隐藏学校
         ListItem() {
           Column() {
             this.SectionHeader('排行榜')
             Column() {
               Row() {
-                this.SettingTexts('云端同步', '签到记录自动同步到排行榜，历史记录启动时自动补录')
+                this.SettingTexts('云端同步', '每日聚合上传主用户签到次数，不上传姓名与课程信息')
                 Toggle({ type: ToggleType.Switch, isOn: this.cloudSyncEnabled })
                   .selectedColor($r('app.color.selected'))
                   .onChange((value: boolean) => {
@@ -791,6 +894,27 @@ export struct SettingsComponent {
                       return;
                     }
                     this.saveCloudSync(value)
+                  })
+              }
+              .width('100%').padding({ left: 16, right: 16, top: 13, bottom: 13 })
+              this.SettingsDivider()
+              Row() {
+                this.SettingTexts('展示名称', this.lbDisplayName || '****手机号后两位 用户')
+                Text('修改')
+                  .fontSize(14).fontColor($r('app.color.selected'))
+              }
+              .width('100%').padding({ left: 16, right: 16, top: 13, bottom: 13 })
+              .onClick(() => { this.showDisplayNameDialog() })
+              this.SettingsDivider()
+              Row() {
+                this.SettingTexts('隐藏学校信息', '榜单只显示「已隐藏学校信息」')
+                Toggle({ type: ToggleType.Switch, isOn: this.lbHideSchool })
+                  .selectedColor($r('app.color.selected'))
+                  .onChange((value: boolean) => {
+                    if (value === this.lbHideSchool) {
+                      return;
+                    }
+                    this.saveHideSchool(value)
                   })
               }
               .width('100%').padding({ left: 16, right: 16, top: 13, bottom: 13 })

@@ -20,7 +20,6 @@ import UrlTools from '../utils/urlTools';
 import { geoLocationManager } from '@kit.LocationKit';
 import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
 import { CaptchaComponent, CaptchaUserParam } from '../Component/Captcha';
-import { LeaderboardReporter } from '../utils/LeaderboardReporter';
 import { preferences } from '@kit.ArkData';
 import { CustomScanPanel } from '../Component/CustomScanPanel';
 import { PREF_CUSTOM_SCAN_ENABLED, SETTINGS_PREF_NAME } from '../utils/settingsKeys';
@@ -1296,7 +1295,7 @@ export struct SignPage {
   }
 
   /**
-   * 签到统计落库 + 云端排行榜上报（均 fire-and-forget：失败不影响签到流程，仅记日志）
+   * 签到统计只落本地库（详细记录不上传；排行榜由启动时/手动的每日聚合上报负责）
    */
   private logSignRecord(outcome: SignOutcome, uname: string, action: string, uid: string = '') {
     const record: SignRecordData = {
@@ -1311,7 +1310,6 @@ export struct SignPage {
     DatabaseManager.getInstance().insertSignRecord(record).catch((e: Error) => {
       hilog.error(DOMAIN, TAG, `Failed to log sign record: ${e.message}`)
     })
-    LeaderboardReporter.report(record, uid)
   }
 
   /**

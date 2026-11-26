@@ -708,27 +708,30 @@ export default struct HomePage {
         Column() {
           this.SectionHeader('其他用户', this.otherUserList.length, 0, true)
           if (this.expandedSection === 0 && this.otherUserList.length > 0) {
-            Column() {
-              List({ space: 0 }) {
-                ForEach(this.otherUserList, (item: UserDataAndId, index) => {
-                  ListItem() {
-                    OtherUserItem({
-                      userData: item, otherUserList: this.otherUserList, index: index,
-                      onCloneLogin: () => { this.enterCloneSession() }
-                    })
-                  }.width('100%')
-                }, (item: UserDataAndId) => item.id.toString())
-              }
-              .divider({ strokeWidth: 0.5, color: $r('sys.color.comp_divider'), startMargin: 72, endMargin: 16 })
-              .scrollBar(BarState.Off)
-              .constraintSize({ maxHeight: 360 })
+            List({ space: 0 }) {
+              ForEach(this.otherUserList, (item: UserDataAndId, index) => {
+                ListItem() {
+                  OtherUserItem({
+                    userData: item, otherUserList: this.otherUserList, index: index,
+                    onCloneLogin: () => { this.enterCloneSession() }
+                  })
+                }.width('100%')
+              }, (item: UserDataAndId) => item.id.toString())
             }
+            .divider({ strokeWidth: 0.5, color: $r('sys.color.comp_divider'), startMargin: 72, endMargin: 16 })
+            .scrollBar(BarState.Auto)
+            .width('100%').height(240)
+            .position({ x: 0, y: 52 })
+            .backgroundColor($r('app.color.card_background'))
+            .zIndex(10)
             .transition(TransitionEffect.OPACITY
               .combine(TransitionEffect.translate({ y: -10 }))
               .animation({ duration: 400, curve: curves.interpolatingSpring(0, 1, 280, 26) }))
           }
         }
         .backgroundColor($r('app.color.card_background'))
+        .zIndex(10)
+        .clip(false)
 
         Row().height(10).width('100%').backgroundColor($r('app.color.page_background'))
         Column() {

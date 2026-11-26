@@ -2,6 +2,7 @@ import { DatabaseManager, SignRecord, SignStats, SignTypeCount } from '../utils/
 import { LeaderboardReporter } from '../utils/LeaderboardReporter';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { LengthMetrics, promptAction } from '@kit.ArkUI';
+import { common } from '@kit.AbilityKit';
 import { deviceInfo } from '@kit.BasicServicesKit';
 import { HdsNavDestination, ScrollEffectType } from '@kit.UIDesignKit';
 // hdsMaterial 是 6.1(23) API：API<23 系统无该导出，静态 import 值会启动即崩（见 Index.ets 同款处理），
@@ -131,14 +132,15 @@ struct SignStatsPage {
     })
   }
 
-  /** 本地记录补录到云端排行榜：按原始落库时间上报，计分由 Worker 唯一索引去重 */
+  /** 手动重算并覆盖主用户的每日匿名聚合榜单画像 */
   private async syncToCloud() {
     if (this.isSyncing) {
       return
     }
     this.isSyncing = true
     try {
-      const outcome = await LeaderboardReporter.syncHistoryToCloud()
+      const context = this.getUIContext().getHostContext() as common.UIAbilityContext
+      const outcome = await LeaderboardReporter.syncHistoryToCloud(context)
       promptAction.showToast({
         message: `云同步完成：成功 ${outcome.synced} 条，跳过 ${outcome.skipped} 条，失败 ${outcome.failed} 条`,
         duration: 3000
@@ -335,27 +337,6 @@ struct SignStatsPage {
             ListItem() {
               this.HistoryCard()
             }.width('100%').padding({ left: 16, right: 16 }).margin({ top: 10 })
-            ListItem() {
-              Button(this.isSyncing ? '同步中...' : '同步记录到云端')
-                .width('100%').height(46).borderRadius(23)
-                .fontSize(16)
-                .backgroundColor($r('app.color.card_background'))
-                .fontColor($r('app.color.selected'))
-                .enabled(!this.isSyncing)
-                .onClick(() => {
-                  this.syncToCloud()
-                })
-            }.width('100%').padding({ left: 16, right: 16 }).margin({ top: 16 })
-            ListItem() {
-              Button('清空统计记录')
-                .width('100%').height(46).borderRadius(23)
-                .fontSize(16)
-                .backgroundColor($r('app.color.card_background'))
-                .fontColor($r('app.color.unsignable'))
-                .onClick(() => {
-                  this.confirmClearRecords()
-                })
-            }.width('100%').padding({ left: 16, right: 16 }).margin({ top: 10 })
           }
           ListItem() {
             Column().height(24)
@@ -371,16 +352,27 @@ struct SignStatsPage {
     .titleBar({
       content: {
         title: { mainTitle: '签到统计' },
-        menu: { // 右上角清空入口（官方示例同款标题栏菜单）
-          value: [{
-            content: {
-              icon: $r('app.media.ic_public_delete'),
-              label: '清空签到统计',
-              action: () => {
-                this.confirmClearRecords();
+        menu: {
+          value: [
+            {
+              content: {
+                icon: $r('app.media.ic_refresh'),
+                label: this.isSyncing ? '同步中...' : '同步记录到云端',
+                action: () => {
+                  this.syncToCloud();
+                }
+              }
+            },
+            {
+              content: {
+                icon: $r('app.media.ic_public_delete'),
+                label: '清空统计记录',
+                action: () => {
+                  this.confirmClearRecords();
+                }
               }
             }
-          }]
+          ]
         }
       },
       style: {

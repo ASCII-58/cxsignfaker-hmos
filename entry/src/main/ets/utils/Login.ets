@@ -26,7 +26,9 @@ export interface UserInfo {
   uid: number,
   fid: string,
   puid:string,
-  clientId: string
+  clientId: string,
+  /** 学校名候选（来自 msg.schoolname 与 msg.unitConfigInfos），用于排行榜上报 */
+  schoolNames: string[]
 }
 
 export interface LoginResult {
@@ -163,7 +165,8 @@ export class loginFunction {
           'uid': 0,
           'fid': '',
           'puid':'',
-          'clientId': ''
+          'clientId': '',
+          'schoolNames': []
         }
       } else {
         const JsonResult = JSON.parse(result.result as string) as object;
@@ -175,6 +178,26 @@ export class loginFunction {
         // 接口实际返回数值型 puid，request 上传 data[].value 要求字符串，必须显式转换
         const puid: string = String((Json as object)?.['puid'] || '')
         const clientId: string = (Json as object)?.['clientId'] || ''
+        // 对齐上游 parseFidList：fid→schoolname + unitConfigInfos[].schoolname
+        const schoolNames: string[] = []
+        const addSchool = (name: string): void => {
+          const trimmed = (name || '').trim() || '未知学校'
+          if (schoolNames.indexOf(trimmed) < 0) {
+            schoolNames.push(trimmed)
+          }
+        }
+        const schoolname: string = (Json as object)?.['schoolname'] || ''
+        if (fid) {
+          addSchool(schoolname)
+        }
+        const unitInfo = (Json as object)?.['unitConfigInfos'] as object[]
+        if (unitInfo instanceof Array) {
+          for (const entry of unitInfo) {
+            if (entry && entry['schoolname']) {
+              addSchool(String(entry['schoolname']))
+            }
+          }
+        }
         const userInfo: UserInfo = {
           'msg': (uname && pic) ? 'successful' : 'fetch error',
           'uname': uname,
@@ -182,7 +205,8 @@ export class loginFunction {
           'uid': uid,
           'fid': fid,
           'puid':puid,
-          'clientId': clientId
+          'clientId': clientId,
+          'schoolNames': schoolNames
         }
 
         // Cache the successful result using hashed key
@@ -205,7 +229,8 @@ export class loginFunction {
         uid: 0,
         fid: '',
         puid:'',
-        clientId: ''
+        clientId: '',
+        schoolNames: []
       }
     } finally {
       httpRequest.destroy()
