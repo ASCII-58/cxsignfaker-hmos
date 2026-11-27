@@ -37,6 +37,14 @@
             "actions": [
               "action.system.home"
             ]
+          },
+          {
+            "uris": [
+              {
+                "scheme": "cxsignhmos",
+                "host": "import"
+              }
+            ]
           }
         ]
       }

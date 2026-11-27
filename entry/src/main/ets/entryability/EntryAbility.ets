@@ -10,6 +10,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 
 const DOMAIN = 0x0000;
 const TAG = 'DB_INIT';
+const IMPORT_URI_PREFIX = 'cxsignhmos://import';
 
 export default class EntryAbility extends UIAbility {
   // 数据库初始化状态
@@ -24,11 +25,36 @@ export default class EntryAbility extends UIAbility {
     this.context.getApplicationContext().setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onCreate');
 
+    AppStorage.setOrCreate('importResultMessage', '');
+    // 冷启动：数据库尚未就绪，先暂存深链 URI，待 onWindowStageCreate 中初始化完成后再导入
+    if (want.uri?.startsWith(IMPORT_URI_PREFIX)) {
+      AppStorage.setOrCreate('pendingImportUri', want.uri);
+    }
+
     // 启动数据库初始化（不阻塞UIAbility创建）
     this.initializeDatabase();
 
     // 注册崩溃事件订阅（APP_CRASH：JsError/NativeCrash，下次启动时回调并上报邮件）
     CrashReporter.init();
+  }
+
+  onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    // 热启动：应用已在运行，数据库已就绪，直接执行导入
+    if (want.uri?.startsWith(IMPORT_URI_PREFIX)) {
+      this.handleImportUri(want.uri);
+    }
+  }
+
+  /**
+   * 承接 cxsignhmos://import 深链：复用 LoginByURL 解析 phone/pwd 并导入副用户
+   */
+  private async handleImportUri(uri: string): Promise<void> {
+    try {
+      const message = await loginFunction.LoginByURL(uri);
+      AppStorage.setOrCreate('importResultMessage', message);
+    } catch (error) {
+      AppStorage.setOrCreate('importResultMessage', '导入失败：' + (error as Error).message);
+    }
   }
 
   onDestroy(): void {
@@ -42,6 +68,13 @@ export default class EntryAbility extends UIAbility {
       await this.waitForDatabaseInit();
 
       const dbManager = DatabaseManager.getInstance()
+
+      // 冷启动深链：数据库就绪后执行导入（不阻塞首页加载，结果由页面 @Watch 消费）
+      const pendingImportUri = AppStorage.get<string>('pendingImportUri')
+      if (pendingImportUri) {
+        AppStorage.setOrCreate('pendingImportUri', '')
+        this.handleImportUri(pendingImportUri)
+      }
 
       const user = await dbManager.getUserByPosition(1, true)
       const username = user?.phone

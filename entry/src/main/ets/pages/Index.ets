@@ -365,6 +365,7 @@ export default struct HomePage {
   @StorageLink('userQRValue') userQRValue: string = ''
   @StorageLink('cloneSessionCookies') cloneSessionCookies: string = ''
   @StorageLink('cloneSessionName') cloneSessionName: string = ''
+  @StorageLink('importResultMessage') @Watch('onImportResultChanged') importResultMessage: string = ''
   private pageInfos: NavPathStack = new NavPathStack();
   private classListLoading: boolean = false;
   private controller: HdsTabsController = new HdsTabsController();
@@ -920,6 +921,16 @@ export default struct HomePage {
 
   private async getHostUser(): Promise<UserDataAndId> {
     return await DatabaseManager.getInstance().getUserByPosition(1, true) as UserDataAndId
+  }
+
+  onImportResultChanged(): void {
+    if (this.importResultMessage) {
+      this.refreshImportedUsers()
+    }
+  }
+
+  private async refreshImportedUsers(): Promise<void> {
+    this.otherUserList = await DatabaseManager.getInstance().getAllUsers()
   }
 
   private startScan(): void {

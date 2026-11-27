@@ -7,6 +7,7 @@ import { GITHUB_RUST_API } from '../utils/PublicAPI';
 import { checkForUpdate, openDownloadLink, shouldOpenDownloadLink } from '../utils/updateChecker';
 import { ChaoxingUtils } from '../utils/utils';
 import { UpdateDialog } from '../Component/UpdateDialog';
+import promptAction from '@ohos.promptAction';
 
 const TAG = 'InitPage';
 const DOMAIN = 0x0001;
@@ -32,10 +33,22 @@ const HTTP_SUCCESS_CODE = 200;
 @Component
 struct UI {
   @Provide('pathInfos') pathInfos: NavPathStack = new NavPathStack();
+  @StorageLink('importResultMessage') @Watch('onImportResultChanged') importResultMessage: string = ''
   private updateDialog: CustomDialogController | undefined = undefined;
 
   async aboutToAppear() {
     await this.applyColorMode()
+  }
+
+  onImportResultChanged() {
+    this.showImportResultToast()
+  }
+
+  showImportResultToast() {
+    if (this.importResultMessage) {
+      promptAction.showToast({ message: this.importResultMessage, duration: 2500 })
+      this.importResultMessage = ''
+    }
   }
 
   build() {
@@ -49,6 +62,7 @@ struct UI {
     .height('100%')
     .width('100%')
     .onAppear(async () => {
+      this.showImportResultToast()
       await this.checkAppStatus();
       this.checkUpdate();
       const dbManager = DatabaseManager.getInstance()
