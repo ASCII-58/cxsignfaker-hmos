@@ -2,8 +2,8 @@
   "app": {
     "bundleName": "com.xhub.chaoxingsignfaker",
     "vendor": "example",
-    "versionCode": 1020001,
-    "versionName": "1.20.1",
+    "versionCode": 2000000,
+    "versionName": "2.0.0-alpha",
     "icon": "$media:layered_image",
     "label": "$string:app_name"
   }

@@ -1,6 +1,18 @@
 {
   "releases": [
     {
+      "version": "2.0.0-alpha",
+      "date": "2026-11-27",
+      "sections": [
+        {
+          "title": "新增功能",
+          "items": [
+            "支持通过 cxsignhmos://import 深链一键导入分享用户"
+          ]
+        }
+      ]
+    },
+    {
       "version": "1.20.1",
       "date": "2026-11-26",
       "sections": [
