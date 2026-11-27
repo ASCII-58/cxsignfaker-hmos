@@ -4,6 +4,9 @@ import { bundleManager, common, ConfigurationConstant } from '@kit.AbilityKit';
 import { JSON } from '@kit.ArkTS';
 import { http } from '@kit.NetworkKit';
 import { GITHUB_RUST_API } from '../utils/PublicAPI';
+import { checkForUpdate, openDownloadLink, shouldOpenDownloadLink } from '../utils/updateChecker';
+import { ChaoxingUtils } from '../utils/utils';
+import { UpdateDialog } from '../Component/UpdateDialog';
 
 const TAG = 'InitPage';
 const DOMAIN = 0x0001;
@@ -29,6 +32,7 @@ const HTTP_SUCCESS_CODE = 200;
 @Component
 struct UI {
   @Provide('pathInfos') pathInfos: NavPathStack = new NavPathStack();
+  private updateDialog: CustomDialogController | undefined = undefined;
 
   async aboutToAppear() {
     await this.applyColorMode()
@@ -46,6 +50,7 @@ struct UI {
     .width('100%')
     .onAppear(async () => {
       await this.checkAppStatus();
+      this.checkUpdate();
       const dbManager = DatabaseManager.getInstance()
       const isHostLogin: boolean = !(await dbManager.isHostUserTableEmpty())
       if (isHostLogin) {
@@ -119,5 +124,31 @@ struct UI {
       let bundleInfo = await bundleManager.getBundleInfoForSelf(bundleManager.BundleFlag.GET_BUNDLE_INFO_WITH_APPLICATION);
       await this.getUpdateTime(pref, bundleInfo.versionName)
     }
+  }
+
+  /** 每次启动检查一次更新（不可关闭）：仅在发现新版本时弹窗 */
+  async checkUpdate() {
+    const release = await checkForUpdate();
+    if (release === null) {
+      return;
+    }
+    const context = getContext(this) as common.UIAbilityContext;
+    const openLink = await shouldOpenDownloadLink(context);
+    this.updateDialog = new CustomDialogController({
+      builder: UpdateDialog({
+        release: release,
+        openLink: openLink,
+        onAction: () => {
+          if (openLink) {
+            openDownloadLink(context, release.download);
+          } else {
+            ChaoxingUtils.copyText(release.download);
+          }
+        }
+      }),
+      autoCancel: true,
+      customStyle: true
+    });
+    this.updateDialog.open();
   }
 }

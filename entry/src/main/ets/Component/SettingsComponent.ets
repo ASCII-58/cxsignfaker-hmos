@@ -9,6 +9,9 @@ import { DatabaseManager } from '../utils/DataBase';
 import { MsCaptchaDetector } from '../utils/detector/MsCaptchaDetector';
 import { PREF_CUSTOM_SCAN_ENABLED, SETTINGS_PREF_NAME, PREF_LB_SYNC_ENABLED, PREF_LB_DISPLAY_NAME,
   PREF_LB_HIDE_SCHOOL } from '../utils/settingsKeys';
+import { checkForUpdate, openDownloadLink, saveOpenDownloadLink, shouldOpenDownloadLink } from '../utils/updateChecker';
+import { ChaoxingUtils } from '../utils/utils';
+import { UpdateDialog } from './UpdateDialog';
 
 const PREF_COLOR_MODE_KEY = 'app_color_mode';
 const PREF_MODEL_CAPTCHA_KEY = 'model_captcha_enabled';
@@ -220,6 +223,8 @@ export struct SettingsComponent {
   @State cloudSyncEnabled: boolean = true;
   @State lbDisplayName: string = '';
   @State lbHideSchool: boolean = false;
+  @State updateOpenLink: boolean = false;
+  @State isCheckingUpdate: boolean = false;
   // 沉浸光感为 6.1(23) 特性：低版本系统无该材质，设置项随之隐藏
   private readonly supportFloatingBar: boolean = deviceInfo.sdkApiVersion >= 23;
   onImportDone: () => void = () => {};
@@ -228,6 +233,7 @@ export struct SettingsComponent {
   private changelogDialog: CustomDialogController | undefined = undefined;
   // 排行榜展示名弹窗：打开时用当前值重建，保存回调写回偏好
   private lbNameDialog: CustomDialogController | undefined = undefined;
+  private updateDialog: CustomDialogController | undefined = undefined;
 
   async aboutToAppear() {
     this.getVersion();
@@ -236,6 +242,7 @@ export struct SettingsComponent {
     await this.loadHdsMaterialLevel();
     await this.loadCloudSync();
     await this.loadLeaderboardPrefs();
+    this.updateOpenLink = await shouldOpenDownloadLink(this.context);
   }
 
   async getVersion() {
@@ -246,6 +253,45 @@ export struct SettingsComponent {
       console.error('Failed to get bundle info', error);
       this.version = 'Unknown';
     }
+  }
+
+  /** 手动检查更新：仅发现新版本时弹窗；无更新/失败静默 */
+  async checkUpdate() {
+    if (this.isCheckingUpdate) {
+      return;
+    }
+    this.isCheckingUpdate = true;
+    try {
+      const release = await checkForUpdate();
+      if (release === null) {
+        promptAction.showToast({ message: '已是最新版本' });
+        return;
+      }
+      const openLink = this.updateOpenLink;
+      this.updateDialog = new CustomDialogController({
+        builder: UpdateDialog({
+          release: release,
+          openLink: openLink,
+          onAction: () => {
+            if (openLink) {
+              openDownloadLink(this.context, release.download);
+            } else {
+              ChaoxingUtils.copyText(release.download);
+            }
+          }
+        }),
+        autoCancel: true,
+        customStyle: true
+      });
+      this.updateDialog.open();
+    } finally {
+      this.isCheckingUpdate = false;
+    }
+  }
+
+  async saveUpdateOpenLink(open: boolean) {
+    this.updateOpenLink = open;
+    await saveOpenDownloadLink(this.context, open);
   }
 
   async loadColorMode() {
@@ -934,6 +980,31 @@ export struct SettingsComponent {
                 Text(this.version)
                   .fontSize(14)
                   .fontColor($r('app.color.secondary_text'))
+              }
+              .width('100%').padding({ left: 16, right: 16, top: 13, bottom: 13 })
+
+              this.SettingsDivider()
+
+              Row() {
+                this.SettingTexts('检查更新', '检查是否有新版本')
+                Text(this.isCheckingUpdate ? '检查中…' : '检查')
+                  .fontSize(14).fontColor($r('app.color.selected'))
+              }
+              .width('100%').padding({ left: 16, right: 16, top: 13, bottom: 13 })
+              .onClick(() => { this.checkUpdate() })
+
+              this.SettingsDivider()
+
+              Row() {
+                this.SettingTexts('直接打开下载链接', '关闭时更新弹窗提供复制下载链接按钮')
+                Toggle({ type: ToggleType.Switch, isOn: this.updateOpenLink })
+                  .selectedColor($r('app.color.selected'))
+                  .onChange((value: boolean) => {
+                    if (value === this.updateOpenLink) {
+                      return;
+                    }
+                    this.saveUpdateOpenLink(value)
+                  })
               }
               .width('100%').padding({ left: 16, right: 16, top: 13, bottom: 13 })
 

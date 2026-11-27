@@ -46,6 +46,8 @@ declare global {
 
 // 3. 定义 API 常量
 export const GITHUB_RUST_API = 'https://api.github.com/repos/ASCII-58/chaoxingsignfaker-for-harmony-OS-NEXT/releases/tags/v'
+/** cxdist 最新版信息接口 */
+export const UPDATE_CHECK_API = 'https://cx.ascii58.dpdns.org/api/latest'
 /**
  * 超星通用接口
  */

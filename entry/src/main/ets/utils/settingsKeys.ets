@@ -23,3 +23,5 @@ export const PREF_LB_UUID = 'lb_uuid';
 export const PREF_LB_LAST_UPLOAD_DATE = 'lb_last_upload_date';
 /** 排行榜：上次成功上传的时间戳（展示用） */
 export const PREF_LB_LAST_UPLOAD_MS = 'lb_last_upload_ms';
+/** 更新弹窗：下载按钮改为直接打开链接（默认复制） */
+export const PREF_UPDATE_OPEN_LINK = 'update_open_link';

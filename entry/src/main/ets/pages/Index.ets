@@ -723,6 +723,9 @@ export default struct HomePage {
             .width('100%').height(240)
             .position({ x: 0, y: 52 })
             .backgroundColor($r('app.color.card_background'))
+            .border({ width: 1, color: $r('app.color.input_padding') })
+            .borderRadius(12)
+            .clip(true)
             .zIndex(10)
             .transition(TransitionEffect.OPACITY
               .combine(TransitionEffect.translate({ y: -10 }))
